@@ -1,0 +1,16 @@
+# Python & Environnement
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Données locales & Cache
+data/documents/
+data/cache_crops/
+data/db.sqlite*
+*.DS_Store
+
+# IDE & Editeurs
+.vscode/
+.idea/
