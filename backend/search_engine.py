@@ -40,7 +40,7 @@ def search_titles(query: str, folder_id: Optional[int] = None) -> Dict[str, Any]
 
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, filename, title, folder_id, total_pages, created_at FROM documents")
+    cursor.execute("SELECT id, filename, title, folder_id, total_pages, created_at, COALESCE(updated_at, created_at) AS updated_at FROM documents")
     rows = cursor.fetchall()
     conn.close()
 
@@ -65,6 +65,7 @@ def search_titles(query: str, folder_id: Optional[int] = None) -> Dict[str, Any]
             "folder_id": r["folder_id"],
             "total_pages": r["total_pages"],
             "created_at": r["created_at"],
+            "updated_at": r["updated_at"],
             "cover_url": f"/api/cover/{r['id']}",
             "vignettes": [],
             "occurrences_by_page": [],
@@ -114,6 +115,7 @@ def search_documents(query: str, titles_only: bool = False, folder_id: Optional[
         d.folder_id,
         d.total_pages,
         d.created_at,
+        COALESCE(d.updated_at, d.created_at) as updated_at,
         bm25(pages_fts) as bm25_score
     FROM pages_fts
     JOIN pages p ON p.doc_id = pages_fts.doc_id AND p.page_number = pages_fts.page_number
@@ -156,6 +158,7 @@ def search_documents(query: str, titles_only: bool = False, folder_id: Optional[
                 "folder_id": r["folder_id"],
                 "total_pages": r["total_pages"],
                 "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
                 "cover_url": f"/api/cover/{doc_id}",
                 "pages_data": [],
                 "best_bm25": r["bm25_score"],

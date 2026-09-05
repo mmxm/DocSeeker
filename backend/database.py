@@ -49,11 +49,12 @@ def init_db():
         total_pages INTEGER DEFAULT 0,
         file_size INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(folder_id) REFERENCES folders(id) ON DELETE SET NULL
     );
     """)
 
-    # Migration si colonne file_hash ou folder_id manquante
+    # Migration si colonne file_hash, folder_id ou updated_at manquante
     cursor.execute("PRAGMA table_info(documents);")
     columns = [col["name"] for col in cursor.fetchall()]
     if "file_hash" not in columns:
@@ -62,6 +63,9 @@ def init_db():
     if "folder_id" not in columns:
         cursor.execute("ALTER TABLE documents ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL;")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_folder_id ON documents(folder_id);")
+    if "updated_at" not in columns:
+        cursor.execute("ALTER TABLE documents ADD COLUMN updated_at DATETIME;")
+        cursor.execute("UPDATE documents SET updated_at = created_at WHERE updated_at IS NULL;")
 
     # Table des pages
     cursor.execute("""

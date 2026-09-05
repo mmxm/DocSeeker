@@ -107,5 +107,24 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(len(annots_data["annotations"]), 2)
         self.assertEqual(annots_data["annotations"][0]["annotationType"], 9)
 
+    def test_documents_and_search_sorting_fields(self):
+        # Vérifier que GET /api/documents renvoie bien created_at et updated_at
+        res = self.client.get("/api/documents")
+        self.assertEqual(res.status_code, 200)
+        docs = res.json().get("documents", [])
+        self.assertGreater(len(docs), 0)
+        for d in docs:
+            self.assertIn("created_at", d)
+            self.assertIn("updated_at", d)
+
+        # Vérifier que GET /api/search renvoie bien created_at et updated_at
+        search_res = self.client.get("/api/search?q=grossesse")
+        self.assertEqual(search_res.status_code, 200)
+        results = search_res.json().get("results", [])
+        self.assertGreater(len(results), 0)
+        for r in results:
+            self.assertIn("created_at", r)
+            self.assertIn("updated_at", r)
+
 if __name__ == "__main__":
     unittest.main()

@@ -230,7 +230,7 @@ def rename_document(doc_id: int, payload: DocumentUpdate):
     new_title = unicodedata.normalize("NFC", payload.title.strip())
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE documents SET title = ? WHERE id = ?", (new_title, doc_id))
+    cursor.execute("UPDATE documents SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (new_title, doc_id))
     if cursor.rowcount == 0:
         conn.close()
         raise HTTPException(status_code=404, detail="Document introuvable.")
@@ -328,6 +328,7 @@ def save_annotations(doc_id: int, payload: AnnotationsPayload):
             annotations_json = excluded.annotations_json,
             updated_at = CURRENT_TIMESTAMP;
     """, (doc_id, raw_json))
+    cursor.execute("UPDATE documents SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (doc_id,))
     conn.commit()
     conn.close()
 
@@ -385,21 +386,21 @@ def list_documents(folder_id: Optional[str] = Query(None)):
 
     if folder_id == "root":
         cursor.execute("""
-            SELECT id, filename, title, folder_id, total_pages, file_size, created_at 
+            SELECT id, filename, title, folder_id, total_pages, file_size, created_at, COALESCE(updated_at, created_at) AS updated_at 
             FROM documents 
             WHERE folder_id IS NULL
             ORDER BY id DESC
         """)
     elif folder_id is not None and folder_id.isdigit():
         cursor.execute("""
-            SELECT id, filename, title, folder_id, total_pages, file_size, created_at 
+            SELECT id, filename, title, folder_id, total_pages, file_size, created_at, COALESCE(updated_at, created_at) AS updated_at 
             FROM documents 
             WHERE folder_id = ?
             ORDER BY id DESC
         """, (int(folder_id),))
     else:
         cursor.execute("""
-            SELECT id, filename, title, folder_id, total_pages, file_size, created_at 
+            SELECT id, filename, title, folder_id, total_pages, file_size, created_at, COALESCE(updated_at, created_at) AS updated_at 
             FROM documents 
             ORDER BY id DESC
         """)

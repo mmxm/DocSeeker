@@ -118,7 +118,14 @@ document.addEventListener("DOMContentLoaded", () => {
   let folderBreadcrumbs = [{ id: null, name: "Documents" }];
   let allFolders = [];
   let currentLoadedDocs = [];
+  let rawLoadedDocs = [];
+  let lastSearchResultsData = null;
   let selectedFolderColor = "#3b82f6"; // Uniforme bleu par défaut
+
+  // Tri des documents et résultats
+  const sortSelect = document.getElementById("sortSelect");
+  let currentSortMode = "name_asc";
+  let userManuallyChangedSort = false;
 
   // Observateur pour lazy-loading horizontal des extraits cropés
   const cropObserver = new IntersectionObserver((entries, observer) => {
@@ -362,8 +369,23 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   if (saveAnnotationsBtn) {
-    saveAnnotationsBtn.addEventListener("click", () => {
+    saveAnnotationsBtn.addEventListener("click", (e) => {
+      e.preventDefault();
       saveAnnotationsToServer(true);
+    });
+  }
+
+  // Changement du critère de tri
+  if (sortSelect) {
+    sortSelect.addEventListener("change", (e) => {
+      currentSortMode = e.target.value;
+      userManuallyChangedSort = true;
+      if (currentSearchQuery && lastSearchResultsData) {
+        renderSearchResults(lastSearchResultsData);
+      } else {
+        renderFolders(allFolders);
+        renderDocumentLibrary(rawLoadedDocs);
+      }
     });
   }
 
@@ -601,7 +623,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
     foldersSection.style.display = "block";
 
-    folders.forEach(folder => {
+    // Trier les dossiers selon le mode de tri si applicable
+    let sortedFolders = [...folders];
+    if (currentSortMode === "name_asc") {
+      sortedFolders.sort((a, b) => (a.name || "").localeCompare(b.name || "", "fr", { numeric: true, sensitivity: "base" }));
+    } else if (currentSortMode === "name_desc") {
+      sortedFolders.sort((a, b) => (b.name || "").localeCompare(a.name || "", "fr", { numeric: true, sensitivity: "base" }));
+    } else if (currentSortMode === "date_add_desc" || currentSortMode === "date_mod_desc") {
+      sortedFolders.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    } else if (currentSortMode === "date_add_asc" || currentSortMode === "date_mod_asc") {
+      sortedFolders.sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+    }
+
+    sortedFolders.forEach(folder => {
       const card = document.createElement("div");
       card.className = "folder-card";
       card.setAttribute("data-folder-id", folder.id);
@@ -681,13 +715,72 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
+  // Fonctions de Tri
+  // =========================================================================
+  function sortDocumentsList(docs, sortMode) {
+    if (!docs || docs.length === 0) return [];
+    const copy = [...docs];
+
+    switch (sortMode) {
+      case "name_asc":
+        copy.sort((a, b) => (a.title || a.filename || "").localeCompare(b.title || b.filename || "", "fr", { numeric: true, sensitivity: "base" }));
+        break;
+      case "name_desc":
+        copy.sort((a, b) => (b.title || b.filename || "").localeCompare(a.title || a.filename || "", "fr", { numeric: true, sensitivity: "base" }));
+        break;
+      case "date_mod_desc":
+        copy.sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0));
+        break;
+      case "date_mod_asc":
+        copy.sort((a, b) => new Date(a.updated_at || a.created_at || 0) - new Date(b.updated_at || b.created_at || 0));
+        break;
+      case "date_add_desc":
+        copy.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+        break;
+      case "date_add_asc":
+        copy.sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+        break;
+      case "relevance":
+        copy.sort((a, b) => (b.total_occurrences || 0) - (a.total_occurrences || 0));
+        break;
+      default:
+        break;
+    }
+    return copy;
+  }
+
+  function updateSortOptionsForSearch(isSearch) {
+    if (!sortSelect) return;
+    let relOpt = sortSelect.querySelector("option[value='relevance']");
+    if (isSearch) {
+      if (!relOpt) {
+        relOpt = document.createElement("option");
+        relOpt.value = "relevance";
+        relOpt.textContent = "Pertinence (Occurrences)";
+        sortSelect.insertBefore(relOpt, sortSelect.firstChild);
+      }
+    } else {
+      if (relOpt) {
+        if (sortSelect.value === "relevance") {
+          sortSelect.value = "name_asc";
+          currentSortMode = "name_asc";
+        }
+        relOpt.remove();
+      }
+    }
+  }
+
+  // =========================================================================
   // Affichage des Documents (Bibliothèque & Résultats)
   // =========================================================================
   function renderDocumentLibrary(docs) {
     resultsContainer.innerHTML = "";
-    currentLoadedDocs = docs || [];
+    rawLoadedDocs = docs || [];
+
+    updateSortOptionsForSearch(false);
 
     if (!docs || docs.length === 0) {
+      currentLoadedDocs = [];
       if (foldersContainer.children.length === 0) {
         emptyState.style.display = "flex";
         emptyMessage.textContent = currentFolderId ? "Ce dossier est vide. Glissez-y des documents ou importez un PDF." : "Aucun document indexé. Cliquez sur 'Importer PDF' ou 'Scanner' pour commencer.";
@@ -699,7 +792,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     emptyState.style.display = "none";
 
-    docs.forEach(doc => {
+    const sortedDocs = sortDocumentsList(rawLoadedDocs, currentSortMode);
+    currentLoadedDocs = sortedDocs;
+
+    sortedDocs.forEach(doc => {
       const card = createDocCardElement(doc, false);
       resultsContainer.appendChild(card);
     });
@@ -999,7 +1095,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const res = await fetch(url);
       const data = await res.json();
-      currentLoadedDocs = data.results || [];
+      lastSearchResultsData = data;
+
+      // Par défaut, mettre le tri sur "Pertinence" lors d'une nouvelle recherche
+      updateSortOptionsForSearch(true);
+      if (!userManuallyChangedSort) {
+        currentSortMode = "relevance";
+        if (sortSelect) sortSelect.value = "relevance";
+      }
+
       renderSearchResults(data);
     } catch (err) {
       console.error("Erreur recherche:", err);
@@ -1008,8 +1112,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function renderSearchResults(data) {
+    lastSearchResultsData = data;
     resultsContainer.innerHTML = "";
-    const results = data.results || [];
+    const rawResults = data.results || [];
 
     if (filterTitlesOnly.checked) {
       searchStats.textContent = `${data.total_documents} document${data.total_documents > 1 ? 's' : ''} correspondant${data.total_documents > 1 ? 's' : ''}`;
@@ -1017,7 +1122,8 @@ document.addEventListener("DOMContentLoaded", () => {
       searchStats.textContent = `${data.total_occurrences} occurrence${data.total_occurrences > 1 ? 's' : ''} dans ${data.total_documents} document${data.total_documents > 1 ? 's' : ''}`;
     }
 
-    if (results.length === 0) {
+    if (rawResults.length === 0) {
+      currentLoadedDocs = [];
       emptyState.style.display = "flex";
       emptyMessage.textContent = `Aucun résultat correspondant à "${data.query}".`;
       return;
@@ -1025,7 +1131,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     emptyState.style.display = "none";
 
-    results.forEach(doc => {
+    updateSortOptionsForSearch(true);
+
+    const sortedResults = sortDocumentsList(rawResults, currentSortMode);
+    currentLoadedDocs = sortedResults;
+
+    sortedResults.forEach(doc => {
       const card = createDocCardElement(doc, true);
       resultsContainer.appendChild(card);
     });
@@ -1518,44 +1629,99 @@ document.addEventListener("DOMContentLoaded", () => {
   // Sauvegarde Légère des Annotations & Surlignages (Économe en bande passante)
   // =========================================================================
   async function saveAnnotationsToServer(showFeedback = true) {
-    if (!currentActiveDocId) return;
+    if (!currentActiveDocId) {
+      if (showFeedback) showToast("Aucun document ouvert dans le visualiseur.", "info");
+      return;
+    }
+
+    const btn = saveAnnotationsBtn;
+    const span = btn ? btn.querySelector("span") : null;
+    const origText = span ? span.textContent : "Sauvegarder";
 
     try {
-      const win = pdfFrame.contentWindow;
-      if (!win || !win.PDFViewerApplication) {
-        if (showFeedback) showToast("Le visualiseur PDF n'est pas encore prêt.", "warning");
+      if (btn) {
+        btn.disabled = true;
+        if (span) span.textContent = "Sauvegarde...";
+      }
+
+      const win = pdfFrame ? pdfFrame.contentWindow : null;
+      if (!win) {
+        if (showFeedback) showToast("Le visualiseur PDF n'est pas accessible.", "warning");
         return;
       }
 
       const app = win.PDFViewerApplication;
+      if (!app) {
+        if (showFeedback) showToast("Le lecteur PDF n'est pas encore prêt.", "warning");
+        return;
+      }
+
+      // 1. Déclencher le hook willSave pour forcer les éditeurs en cours à commiter
+      try {
+        if (app.pdfScriptingManager && typeof app.pdfScriptingManager.dispatchWillSave === "function") {
+          await app.pdfScriptingManager.dispatchWillSave();
+        }
+      } catch (e) {
+        console.warn("[Annotations] dispatchWillSave warning:", e);
+      }
+
       const doc = app.pdfDocument;
-      if (!doc || !doc.annotationStorage) {
-        if (showFeedback) showToast("Aucun document chargé dans le visualiseur.", "info");
+      if (!doc) {
+        if (showFeedback) showToast("Le document PDF n'est pas encore complètement chargé.", "warning");
         return;
       }
 
       const storage = doc.annotationStorage;
       let annots = [];
 
-      // Dans PDF.js annotationStorage.serializable renvoie { map: Map | Object, transfer: [...] }
-      if (storage.serializable && storage.serializable.map) {
-        const rawMap = storage.serializable.map;
-        if (rawMap instanceof Map) {
-          annots = Array.from(rawMap.values());
-        } else if (typeof rawMap === "object") {
-          annots = Object.values(rawMap);
+      // 2. Extraction résiliente des annotations (support cross-realm iframe / parent)
+      if (storage) {
+        // A. Via serializable
+        try {
+          const ser = storage.serializable;
+          if (ser && ser.map) {
+            const m = ser.map;
+            if (typeof m.values === "function") {
+              for (const val of m.values()) {
+                if (val && !val.deleted) annots.push(val);
+              }
+            } else if (typeof m.forEach === "function") {
+              m.forEach(val => {
+                if (val && !val.deleted) annots.push(val);
+              });
+            } else if (typeof m === "object") {
+              for (const k in m) {
+                if (m[k] && !m[k].deleted) annots.push(m[k]);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("[Annotations] Erreur serializable:", e);
         }
-      } else if (storage._storage) {
-        const raw = storage._storage;
-        if (raw instanceof Map) {
-          annots = Array.from(raw.values());
-        } else if (typeof raw === "object") {
-          annots = Object.values(raw);
+
+        // B. Si vide ou incomplet, essayer via getAll()
+        if (annots.length === 0 && typeof storage.getAll === "function") {
+          try {
+            const allObj = storage.getAll();
+            if (allObj && typeof allObj === "object") {
+              for (const k in allObj) {
+                const item = allObj[k];
+                if (!item) continue;
+                if (typeof item.serialize === "function") {
+                  const s = item.serialize(false);
+                  if (s && !s.deleted) annots.push(s);
+                } else if (!item.deleted) {
+                  annots.push(item);
+                }
+              }
+            }
+          } catch (e) {
+            console.warn("[Annotations] Erreur getAll():", e);
+          }
         }
       }
 
-      // Filtrer les entrées supprimées
-      annots = annots.filter(a => a && !a.deleted);
+      console.log(`[Annotations] Annotations trouvées (${annots.length}):`, annots);
 
       if (annots.length === 0) {
         if (showFeedback) {
@@ -1564,12 +1730,7 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-      if (saveAnnotationsBtn) {
-        saveAnnotationsBtn.disabled = true;
-        const span = saveAnnotationsBtn.querySelector("span");
-        if (span) span.textContent = "Sauvegarde...";
-      }
-
+      // Envoi du JSON ultra-léger (~1-2 Ko) au serveur
       const response = await fetch(`/api/documents/${currentActiveDocId}/annotations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1578,23 +1739,39 @@ document.addEventListener("DOMContentLoaded", () => {
 
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
-        throw new Error(err.detail || "Erreur lors de la sauvegarde.");
+        throw new Error(err.detail || `Erreur serveur HTTP ${response.status}`);
       }
 
       const resData = await response.json();
-      if (showFeedback) {
-        showToast(`${resData.count || annots.length} annotation(s) enregistrée(s) sur le serveur !`, "success");
+      const count = resData.count !== undefined ? resData.count : annots.length;
+
+      // Mettre à jour updated_at localement
+      const docItem = currentLoadedDocs.find(d => d.id === currentActiveDocId);
+      if (docItem) {
+        docItem.updated_at = new Date().toISOString();
       }
-    } catch (err) {
-      console.error("Erreur saveAnnotationsToServer:", err);
+
       if (showFeedback) {
-        showToast("Erreur lors de l'enregistrement des annotations : " + err.message, "error");
+        showToast(`${count} annotation(s) enregistrée(s) avec succès sur le serveur !`, "success");
+      }
+
+      // Feedback visuel sur le bouton
+      if (span) span.textContent = "Enregistré ✓";
+      setTimeout(() => {
+        if (span) span.textContent = origText;
+      }, 2200);
+
+    } catch (err) {
+      console.error("[Annotations] Erreur saveAnnotationsToServer:", err);
+      if (showFeedback) {
+        showToast("Erreur lors de l'enregistrement : " + err.message, "error");
       }
     } finally {
-      if (saveAnnotationsBtn) {
-        saveAnnotationsBtn.disabled = false;
-        const span = saveAnnotationsBtn.querySelector("span");
-        if (span) span.textContent = "Sauvegarder";
+      if (btn) {
+        btn.disabled = false;
+        if (span && span.textContent === "Sauvegarde...") {
+          span.textContent = origText;
+        }
       }
     }
   }

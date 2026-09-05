@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css?v=3.1">
+  <link rel="stylesheet" href="/style.css?v=3.2">
 </head>
 <body class="light-theme">
   <div id="app" class="app-layout">
@@ -177,7 +177,22 @@
 
           <div class="section-bar">
             <h2 id="sectionTitle" class="section-title">Documents</h2>
-            <div class="view-toggles" id="viewStats"></div>
+            <div class="sort-wrapper">
+              <label for="sortSelect" class="sort-label">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <path d="M3 6h18M6 12h12M10 18h4"></path>
+                </svg>
+                <span>Trier :</span>
+              </label>
+              <select id="sortSelect" class="sort-select">
+                <option value="name_asc">Nom (A → Z)</option>
+                <option value="name_desc">Nom (Z → A)</option>
+                <option value="date_mod_desc">Modifié (Plus récent)</option>
+                <option value="date_mod_asc">Modifié (Plus ancien)</option>
+                <option value="date_add_desc">Ajouté (Plus récent)</option>
+                <option value="date_add_asc">Ajouté (Plus ancien)</option>
+              </select>
+            </div>
           </div>
           <div id="resultsContainer" class="results-list"></div>
         </div>
@@ -401,6 +416,6 @@
 
   </div>
 
-  <script src="/app.js?v=3.1"></script>
+  <script src="/app.js?v=3.2"></script>
 </body>
 </html>
