@@ -1,17 +1,24 @@
 document.addEventListener("DOMContentLoaded", () => {
-  // Éléments du DOM
+  // Éléments DOM
   const searchInput = document.getElementById("searchInput");
   const clearSearchBtn = document.getElementById("clearSearchBtn");
   const searchStats = document.getElementById("searchStats");
   const workspace = document.getElementById("workspace");
+  const generalView = document.getElementById("generalView");
+  const docDetailView = document.getElementById("docDetailView");
   const resultsContainer = document.getElementById("resultsContainer");
   const sectionTitle = document.getElementById("sectionTitle");
   const emptyState = document.getElementById("emptyState");
   const emptyMessage = document.getElementById("emptyMessage");
   const brandBtn = document.getElementById("brandBtn");
 
+  // Vues Déroulé Vertical Document
+  const backToResultsBtn = document.getElementById("backToResultsBtn");
+  const docDetailTitle = document.getElementById("docDetailTitle");
+  const docDetailCount = document.getElementById("docDetailCount");
+  const docOccurrencesList = document.getElementById("docOccurrencesList");
+
   // Visualiseur
-  const viewerPane = document.getElementById("viewerPane");
   const viewerDocTitle = document.getElementById("viewerDocTitle");
   const viewerPageBadge = document.getElementById("viewerPageBadge");
   const pdfFrame = document.getElementById("pdfFrame");
@@ -28,14 +35,24 @@ document.addEventListener("DOMContentLoaded", () => {
   const uploadProgressBar = document.getElementById("uploadProgressBar");
   const uploadStatusText = document.getElementById("uploadStatusText");
 
+  // Duplicate Modal
+  const duplicateModal = document.getElementById("duplicateModal");
+  const closeDuplicateModalBtn = document.getElementById("closeDuplicateModalBtn");
+  const duplicateTitle = document.getElementById("duplicateTitle");
+  const duplicateFilename = document.getElementById("duplicateFilename");
+  const duplicateDate = document.getElementById("duplicateDate");
+  const confirmDuplicateOkBtn = document.getElementById("confirmDuplicateOkBtn");
+
   let debounceTimer = null;
   let currentSearchQuery = "";
+  let currentResultsData = null;
   let currentActiveDocId = null;
+  let currentActivePage = 1;
 
   // Charger la liste initiale
   loadRecentDocuments();
 
-  // Événements de recherche
+  // Recherche
   searchInput.addEventListener("input", (e) => {
     const val = e.target.value.trim();
     clearSearchBtn.style.display = val ? "flex" : "none";
@@ -66,6 +83,11 @@ document.addEventListener("DOMContentLoaded", () => {
     loadRecentDocuments();
   });
 
+  // Bouton retour aux résultats généraux
+  backToResultsBtn.addEventListener("click", () => {
+    showGeneralResultsView();
+  });
+
   // Fermeture du lecteur latéral
   closeViewerBtn.addEventListener("click", () => {
     closeSplitViewer();
@@ -74,6 +96,13 @@ document.addEventListener("DOMContentLoaded", () => {
   function closeSplitViewer() {
     workspace.classList.remove("split-active");
     pdfFrame.src = "about:blank";
+    currentActiveDocId = null;
+    showGeneralResultsView();
+  }
+
+  function showGeneralResultsView() {
+    docDetailView.style.display = "none";
+    generalView.style.display = "block";
     document.querySelectorAll(".vignette-item.active").forEach(el => el.classList.remove("active"));
   }
 
@@ -82,8 +111,10 @@ document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
   async function loadRecentDocuments() {
     currentSearchQuery = "";
-    sectionTitle.textContent = "Bibliothèque de documents";
+    currentResultsData = null;
+    sectionTitle.textContent = "Documents disponibles";
     searchStats.textContent = "";
+    showGeneralResultsView();
 
     try {
       const res = await fetch("/api/documents");
@@ -129,20 +160,18 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
         <div class="doc-card-vignettes">
           <div style="display:flex; align-items:center; height:100%; color:var(--text-dim); font-size:13px;">
-            Tapez un mot-clé dans la barre de recherche pour voir les extraits cropés sur ce document.
+            Tapez un mot-clé ci-dessus pour rechercher et voir les extraits cropés avec surbrillance.
           </div>
         </div>
       `;
 
-      // Clic sur la couverture -> ouvrir le document à la page 1
       card.querySelector(".doc-cover-wrapper").addEventListener("click", () => {
-        openDocumentInViewer(doc.id, doc.title, 1);
+        openDocumentInSplitView(doc.id, doc.title, 1, []);
       });
       card.querySelector(".doc-title").addEventListener("click", () => {
-        openDocumentInViewer(doc.id, doc.title, 1);
+        openDocumentInSplitView(doc.id, doc.title, 1, []);
       });
 
-      // Bouton supprimer
       card.querySelector(".btn-delete-doc").addEventListener("click", (e) => {
         e.stopPropagation();
         confirmDeleteDocument(doc.id, doc.title);
@@ -164,10 +193,12 @@ document.addEventListener("DOMContentLoaded", () => {
     currentSearchQuery = query;
     sectionTitle.textContent = `Résultats pour "${query}"`;
     resultsContainer.innerHTML = `<div style="padding: 20px; color: var(--text-muted);">Recherche en cours...</div>`;
+    showGeneralResultsView();
 
     try {
       const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
       const data = await res.json();
+      currentResultsData = data;
       renderSearchResults(data);
     } catch (err) {
       console.error("Erreur recherche:", err);
@@ -183,7 +214,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (results.length === 0) {
       emptyState.style.display = "flex";
-      emptyMessage.textContent = `Aucun résultat correspondant à "${data.query}". Vérifiez l'orthographe ou essayez d'autres mots.`;
+      emptyMessage.textContent = `Aucun résultat correspondant à "${data.query}". Vérifiez l'orthographe ou essayez d'autres termes.`;
       return;
     }
 
@@ -191,27 +222,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
     results.forEach(doc => {
       const card = document.createElement("div");
-      card.className = `doc-card ${doc.is_top_match ? 'top-match' : ''}`;
+      card.className = "doc-card";
 
-      const topBadgeHtml = doc.is_top_match ? `<div class="top-badge">★ Le plus pertinent</div>` : '';
-
-      // Génération du ruban de vignettes
+      // Ruban horizontal : vignettes ordonnées avec les plus pertinentes à gauche
       let vignettesHtml = '';
       if (doc.vignettes && doc.vignettes.length > 0) {
         doc.vignettes.forEach(v => {
           vignettesHtml += `
-            <div class="vignette-item" data-doc-id="${doc.id}" data-doc-title="${encodeURIComponent(doc.title)}" data-page="${v.page_number}" title="Page ${v.page_number} - Cliquer pour ouvrir">
-              <img src="${v.crop_url}" class="vignette-crop-img" alt="Extrait page ${v.page_number}" loading="lazy" />
+            <div class="vignette-item" data-doc-id="${doc.id}" data-page="${v.page_number}" data-occ="${v.occ_id}" title="Page ${v.page_number} - Cliquer pour ouvrir">
+              <img src="${v.crop_url}" class="vignette-crop-img" alt="Extrait p. ${v.page_number}" loading="lazy" />
               <span class="vignette-page-badge">p. ${v.page_number}</span>
             </div>
           `;
         });
       } else {
-        vignettesHtml = `<div style="color:var(--text-dim); font-size:13px; align-self:center;">Aucun extrait visuel disponible.</div>`;
+        vignettesHtml = `<div style="color:var(--text-dim); font-size:13px; align-self:center;">Aucun extrait visuel.</div>`;
       }
 
       card.innerHTML = `
-        ${topBadgeHtml}
         <div class="doc-card-info">
           <div class="doc-cover-wrapper" title="Ouvrir le document">
             <img src="${doc.cover_url}" class="doc-cover-img" alt="Couverture" loading="lazy" onerror="this.src='/placeholder-cover.png'" />
@@ -237,22 +265,24 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
       `;
 
-      // Clics sur les vignettes
+      // Clics sur les vignettes du ruban horizontal
       card.querySelectorAll(".vignette-item").forEach(vEl => {
         vEl.addEventListener("click", () => {
-          document.querySelectorAll(".vignette-item.active").forEach(el => el.classList.remove("active"));
-          vEl.classList.add("active");
-          const dId = vEl.getAttribute("data-doc-id");
-          const dTitle = decodeURIComponent(vEl.getAttribute("data-doc-title"));
           const dPage = parseInt(vEl.getAttribute("data-page"), 10);
-          openDocumentInViewer(dId, dTitle, dPage);
+          openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || []);
         });
       });
 
       // Clic sur la couverture
       card.querySelector(".doc-cover-wrapper").addEventListener("click", () => {
-        const firstPage = (doc.vignettes && doc.vignettes.length > 0) ? doc.vignettes[0].page_number : 1;
-        openDocumentInViewer(doc.id, doc.title, firstPage);
+        const firstPage = (doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0].page_number : 1;
+        openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || []);
+      });
+
+      // Clic sur le titre
+      card.querySelector(".doc-title").addEventListener("click", () => {
+        const firstPage = (doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0].page_number : 1;
+        openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || []);
       });
 
       // Bouton supprimer
@@ -266,27 +296,109 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
-  // Visualiseur PDF Latéral Streamé (Split View)
+  // Split View & Navigation Verticale par Document
   // =========================================================================
-  function openDocumentInViewer(docId, docTitle, pageNumber) {
+  function openDocumentInSplitView(docId, docTitle, targetPage, occurrences) {
+    const isSameDoc = (currentActiveDocId === docId);
     currentActiveDocId = docId;
-    viewerDocTitle.textContent = docTitle;
-    viewerPageBadge.textContent = `Page ${pageNumber}`;
+    currentActivePage = targetPage;
 
-    // Active la vue scindée
+    // 1. Activer le layout Split View
     workspace.classList.add("split-active");
 
-    // L'URL pointe sur le viewer officiel PDF.js avec le fichier streamé par HTTP 206 Range requests
-    // Et le paramètre #page=X pour sauter à la page exacte
-    const pdfStreamUrl = `/api/pdf/${docId}`;
-    let viewerUrl = `/pdfjs/web/viewer.html?file=${encodeURIComponent(pdfStreamUrl)}#page=${pageNumber}`;
-    
-    // Si une recherche est en cours, injecter search= pour que PDF.js surligne aussi dans la page
-    if (currentSearchQuery) {
-      viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
+    // 2. Basculer la colonne gauche sur la vue verticale des occurrences du document
+    generalView.style.display = "none";
+    docDetailView.style.display = "block";
+    docDetailTitle.textContent = docTitle;
+    docDetailCount.textContent = `${occurrences.length} occurrence${occurrences.length > 1 ? 's' : ''} dans ce document`;
+
+    renderVerticalOccurrences(docId, docTitle, occurrences, targetPage);
+
+    // 3. Piloter le lecteur PDF
+    viewerDocTitle.textContent = docTitle;
+    viewerPageBadge.textContent = `Page ${targetPage}`;
+
+    if (isSameDoc && pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
+      // MÊME DOCUMENT : Aucun rechargement d'iframe ! Changement de page instantané
+      goToPageWithoutReload(targetPage);
+    } else {
+      // NOUVEAU DOCUMENT : Chargement initial de l'iframe
+      const pdfStreamUrl = `/api/pdf/${docId}`;
+      let viewerUrl = `/pdfjs/web/viewer.html?file=${encodeURIComponent(pdfStreamUrl)}#page=${targetPage}`;
+      if (currentSearchQuery) {
+        viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
+      }
+      pdfFrame.src = viewerUrl;
+    }
+  }
+
+  function renderVerticalOccurrences(docId, docTitle, occurrences, activePage) {
+    docOccurrencesList.innerHTML = "";
+
+    if (!occurrences || occurrences.length === 0) {
+      docOccurrencesList.innerHTML = `<div style="color:var(--text-muted); font-size:13px; padding:12px;">Document ouvert (aucune occurrence de recherche spécifique).</div>`;
+      return;
     }
 
-    pdfFrame.src = viewerUrl;
+    occurrences.forEach((occ, idx) => {
+      const card = document.createElement("div");
+      const isActive = (occ.page_number === activePage);
+      card.className = `vertical-occ-card ${isActive ? 'active' : ''}`;
+      card.setAttribute("data-page", occ.page_number);
+      card.setAttribute("data-occ-id", occ.occ_id);
+
+      card.innerHTML = `
+        <div class="vertical-occ-img-wrapper">
+          <img src="${occ.crop_url}" class="vertical-occ-img" alt="Extrait p. ${occ.page_number}" loading="lazy" />
+        </div>
+        <div class="vertical-occ-footer">
+          <span class="vertical-occ-page">Page ${occ.page_number}</span>
+          <span class="vertical-occ-snippet" title="${occ.text_snippet}">${occ.text_snippet || ''}</span>
+        </div>
+      `;
+
+      card.addEventListener("click", () => {
+        document.querySelectorAll(".vertical-occ-card.active").forEach(el => el.classList.remove("active"));
+        card.classList.add("active");
+        viewerPageBadge.textContent = `Page ${occ.page_number}`;
+        currentActivePage = occ.page_number;
+        goToPageWithoutReload(occ.page_number);
+      });
+
+      docOccurrencesList.appendChild(card);
+    });
+  }
+
+  // Saut de page ultra-fluide sans rechargement de l'iframe
+  function goToPageWithoutReload(pageNumber) {
+    try {
+      if (pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
+        const app = pdfFrame.contentWindow.PDFViewerApplication;
+        if (app.pdfViewer) {
+          app.page = pageNumber;
+          // Synchroniser aussi la recherche si disponible
+          if (currentSearchQuery && app.eventBus) {
+            app.eventBus.dispatch('find', {
+              type: '',
+              query: currentSearchQuery,
+              phraseSearch: true,
+              caseSensitive: false,
+              entireWord: false,
+              highlightAll: true,
+              findPrevious: false
+            });
+          }
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("Accès PDFViewerApplication en direct:", e);
+    }
+
+    // Si l'application PDF.js n'était pas encore initialisée
+    if (pdfFrame.contentWindow) {
+      pdfFrame.contentWindow.location.hash = `#page=${pageNumber}`;
+    }
   }
 
   // =========================================================================
@@ -318,7 +430,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
-  // Modale & Upload Glisser-Déposer
+  // Upload, Dropzone & Détection de Doublons Stricts
   // =========================================================================
   openUploadBtn.addEventListener("click", () => {
     uploadModal.style.display = "flex";
@@ -335,6 +447,19 @@ document.addEventListener("DOMContentLoaded", () => {
   uploadModal.addEventListener("click", (e) => {
     if (e.target === uploadModal) {
       uploadModal.style.display = "none";
+    }
+  });
+
+  // Doublon Modal
+  closeDuplicateModalBtn.addEventListener("click", () => {
+    duplicateModal.style.display = "none";
+  });
+  confirmDuplicateOkBtn.addEventListener("click", () => {
+    duplicateModal.style.display = "none";
+  });
+  duplicateModal.addEventListener("click", (e) => {
+    if (e.target === duplicateModal) {
+      duplicateModal.style.display = "none";
     }
   });
 
@@ -371,7 +496,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     uploadProgressContainer.style.display = "block";
     uploadProgressBar.style.width = "30%";
-    uploadStatusText.textContent = "Téléversement du fichier en cours...";
+    uploadStatusText.textContent = "Téléversement et calcul d'empreinte SHA-256...";
 
     const formData = new FormData();
     formData.append("file", file);
@@ -381,13 +506,27 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     try {
-      uploadProgressBar.style.width = "70%";
-      uploadStatusText.textContent = "Extraction du texte et calcul des coordonnées...";
+      uploadProgressBar.style.width = "60%";
+      uploadStatusText.textContent = "Extraction du texte et indexation des mots...";
 
       const res = await fetch("/api/upload", {
         method: "POST",
         body: formData
       });
+
+      // Cas du DOUBLON STRICT (HTTP 409 Conflict)
+      if (res.status === 409) {
+        const conflictData = await res.json();
+        uploadModal.style.display = "none";
+        
+        // Afficher la modale d'alerte de doublon
+        const exist = conflictData.existing_doc || {};
+        duplicateTitle.textContent = exist.title || "Document sans titre";
+        duplicateFilename.textContent = exist.filename || file.name;
+        duplicateDate.textContent = exist.created_at ? new Date(exist.created_at).toLocaleString("fr-FR") : "Date inconnue";
+        duplicateModal.style.display = "flex";
+        return;
+      }
 
       if (!res.ok) {
         const errorData = await res.json();
@@ -404,7 +543,7 @@ document.addEventListener("DOMContentLoaded", () => {
         } else {
           loadRecentDocuments();
         }
-      }, 600);
+      }, 500);
 
     } catch (err) {
       console.error("Upload error:", err);

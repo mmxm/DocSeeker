@@ -23,17 +23,25 @@ def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Table des documents
+    # Table des documents avec file_hash pour détection de doublons stricts
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS documents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         filename TEXT NOT NULL UNIQUE,
         title TEXT,
+        file_hash TEXT,
         total_pages INTEGER DEFAULT 0,
         file_size INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     """)
+
+    # Migration si colonne file_hash manquante
+    cursor.execute("PRAGMA table_info(documents);")
+    columns = [col["name"] for col in cursor.fetchall()]
+    if "file_hash" not in columns:
+        cursor.execute("ALTER TABLE documents ADD COLUMN file_hash TEXT;")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_file_hash ON documents(file_hash);")
 
     # Table des pages
     cursor.execute("""

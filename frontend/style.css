@@ -1,34 +1,37 @@
 :root {
-  --bg-primary: #0b0f19;
-  --bg-secondary: #131b2e;
-  --bg-card: #182238;
-  --bg-hover: #212e4a;
-  --border-color: #24314d;
-  --border-focus: #3b82f6;
+  --bg-primary: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-subtle: #f1f5f9;
+  --bg-hover: #e2e8f0;
+  --border-color: #e2e8f0;
+  --border-focus: #2563eb;
   
-  --text-main: #f8fafc;
-  --text-muted: #94a3b8;
-  --text-dim: #64748b;
+  --text-main: #0f172a;
+  --text-muted: #475569;
+  --text-dim: #94a3b8;
 
-  --accent: #3b82f6;
-  --accent-hover: #2563eb;
-  --accent-glow: rgba(59, 130, 246, 0.25);
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-light: #eff6ff;
+  --accent-border: #bfdbfe;
   
-  --highlight-gold: #f59e0b;
-  --highlight-gold-bg: rgba(245, 158, 11, 0.15);
-  
-  --danger: #ef4444;
-  --danger-bg: rgba(239, 68, 68, 0.15);
+  --danger: #dc2626;
+  --danger-bg: #fef2f2;
+  --danger-border: #fecaca;
+
+  --warning-bg: #fffbeb;
+  --warning-border: #fef3c7;
+  --warning-text: #92400e;
   
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
   
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.25);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35);
-  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.12);
   
-  --transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  --transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 * {
@@ -37,13 +40,14 @@
   padding: 0;
 }
 
-body {
+body.light-theme {
   font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background-color: var(--bg-primary);
   color: var(--text-main);
   height: 100vh;
   overflow: hidden;
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
 .app-layout {
@@ -53,7 +57,7 @@ body {
 }
 
 /* ==========================================================================
-   Header & Barre de Recherche
+   Header & Barre de Recherche (Mode Clair)
    ========================================================================== */
 .app-header {
   display: flex;
@@ -61,10 +65,11 @@ body {
   justify-content: space-between;
   gap: 20px;
   padding: 12px 24px;
-  background-color: var(--bg-secondary);
+  background-color: var(--bg-surface);
   border-bottom: 1px solid var(--border-color);
   z-index: 100;
   height: 64px;
+  box-shadow: var(--shadow-sm);
 }
 
 .header-brand {
@@ -79,12 +84,12 @@ body {
   width: 36px;
   height: 36px;
   border-radius: var(--radius-md);
-  background: linear-gradient(135deg, #3b82f6, #6366f1);
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
   display: flex;
   align-items: center;
   justify-content: center;
   color: white;
-  box-shadow: 0 2px 10px rgba(99, 102, 241, 0.3);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
 }
 
 .brand-text {
@@ -96,7 +101,7 @@ body {
   font-weight: 700;
   font-size: 16px;
   letter-spacing: -0.3px;
-  color: #fff;
+  color: var(--text-main);
 }
 
 .brand-subtitle {
@@ -105,10 +110,10 @@ body {
   font-weight: 500;
 }
 
-/* Barre de recherche centrale */
+/* Barre de recherche Goodnotes */
 .search-container {
   flex: 1;
-  max-width: 680px;
+  max-width: 650px;
   position: relative;
 }
 
@@ -121,7 +126,7 @@ body {
 .search-icon {
   position: absolute;
   left: 14px;
-  color: var(--text-muted);
+  color: var(--text-dim);
   pointer-events: none;
   transition: var(--transition);
 }
@@ -130,21 +135,21 @@ body {
   width: 100%;
   height: 42px;
   padding: 0 42px 0 44px;
-  background-color: var(--bg-primary);
+  background-color: var(--bg-subtle);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   color: var(--text-main);
   font-size: 14px;
   font-family: inherit;
+  font-weight: 500;
   outline: none;
   transition: var(--transition);
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 .search-input-wrapper input:focus {
+  background-color: var(--bg-surface);
   border-color: var(--border-focus);
-  background-color: #0d1424;
-  box-shadow: 0 0 0 3px var(--accent-glow), inset 0 2px 4px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
 }
 
 .search-input-wrapper input:focus + .search-icon {
@@ -156,7 +161,7 @@ body {
   right: 12px;
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--text-dim);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -169,7 +174,7 @@ body {
 
 .clear-btn:hover {
   background-color: var(--bg-hover);
-  color: #fff;
+  color: var(--text-main);
 }
 
 .search-stats {
@@ -177,10 +182,11 @@ body {
   right: 14px;
   top: 48px;
   font-size: 12px;
-  color: var(--text-dim);
+  font-weight: 600;
+  color: var(--accent);
 }
 
-/* Boutons d'actions */
+/* Boutons */
 .header-actions {
   display: flex;
   align-items: center;
@@ -206,22 +212,37 @@ body {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--accent), #2563eb);
+  background-color: var(--accent);
   color: white;
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25);
 }
 
 .btn-primary:hover {
-  background: linear-gradient(135deg, #4f91ff, #1d4ed8);
+  background-color: var(--accent-hover);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.45);
+  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.35);
+}
+
+.btn-back {
+  background-color: var(--bg-subtle);
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+  padding: 0 14px;
+  height: 34px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.btn-back:hover {
+  background-color: var(--bg-hover);
+  border-color: #cbd5e1;
 }
 
 .btn-icon {
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   padding: 0;
-  background: var(--bg-card);
+  background: var(--bg-subtle);
   color: var(--text-muted);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -230,7 +251,6 @@ body {
 .btn-icon:hover {
   background: var(--bg-hover);
   color: var(--text-main);
-  border-color: #3b82f6;
 }
 
 /* ==========================================================================
@@ -243,7 +263,7 @@ body {
   position: relative;
 }
 
-/* Colonne Résultats (Grisée / Adaptative) */
+/* Colonne Résultats Gauche */
 .results-pane {
   flex: 1;
   display: flex;
@@ -251,33 +271,34 @@ body {
   height: 100%;
   overflow-y: auto;
   padding: 20px 28px;
-  transition: width 0.3s cubic-bezier(0.16, 1, 0.3, 1), flex 0.3s ease;
+  transition: width 0.25s cubic-bezier(0.16, 1, 0.3, 1), flex 0.25s ease;
 }
 
-/* Split View actif : réduction de la colonne résultats */
+/* Split View actif : largeur compacte de la liste */
 .main-workspace.split-active .results-pane {
-  flex: 0 0 450px;
-  max-width: 450px;
+  flex: 0 0 380px;
+  max-width: 380px;
+  background-color: var(--bg-surface);
   border-right: 1px solid var(--border-color);
   padding: 16px;
 }
 
-/* Colonne Lecteur Latéral */
+/* Colonne Lecteur Latéral Droit */
 .viewer-pane {
   display: none;
   flex: 1;
   height: 100%;
   flex-direction: column;
-  background-color: var(--bg-secondary);
-  animation: fadeIn 0.25s ease-out;
+  background-color: #f1f5f9;
+  animation: slideIn 0.2s ease-out;
 }
 
 .main-workspace.split-active .viewer-pane {
   display: flex;
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateX(20px); }
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(15px); }
   to { opacity: 1; transform: translateX(0); }
 }
 
@@ -285,10 +306,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 20px;
-  background-color: var(--bg-card);
+  padding: 10px 18px;
+  background-color: var(--bg-surface);
   border-bottom: 1px solid var(--border-color);
-  height: 54px;
+  height: 52px;
 }
 
 .viewer-doc-info {
@@ -310,7 +331,7 @@ body {
 
 .viewer-doc-title {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-main);
   white-space: nowrap;
   overflow: hidden;
@@ -319,7 +340,7 @@ body {
 
 .viewer-body {
   flex: 1;
-  background-color: #525659;
+  background-color: #cbd5e1;
   position: relative;
 }
 
@@ -330,92 +351,62 @@ body {
 }
 
 /* ==========================================================================
-   Section Titre & Cartes de Documents (Goodnotes Style)
+   VUE 1 : Liste générale des documents
    ========================================================================== */
 .section-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 20px;
+  margin-bottom: 18px;
 }
 
 .section-title {
   font-size: 18px;
-  font-weight: 700;
+  font-weight: 800;
   letter-spacing: -0.3px;
   color: var(--text-main);
-}
-
-.view-toggles {
-  font-size: 13px;
-  color: var(--text-muted);
 }
 
 .results-list {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 
-/* Carte Document */
 .doc-card {
-  background-color: var(--bg-card);
+  background-color: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   padding: 16px;
   display: flex;
   gap: 20px;
+  box-shadow: var(--shadow-sm);
   transition: var(--transition);
   position: relative;
 }
 
 .doc-card:hover {
-  border-color: #334366;
-  box-shadow: var(--shadow-sm);
+  border-color: #cbd5e1;
+  box-shadow: var(--shadow-md);
 }
 
-/* Document Top Match (Le plus pertinent) */
-.doc-card.top-match {
-  border-color: rgba(245, 158, 11, 0.45);
-  background: linear-gradient(180deg, rgba(245, 158, 11, 0.04) 0%, var(--bg-card) 100%);
-}
-
-.top-badge {
-  position: absolute;
-  top: -10px;
-  left: 20px;
-  background: linear-gradient(135deg, #f59e0b, #d97706);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 800;
-  text-transform: uppercase;
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  letter-spacing: 0.5px;
-  box-shadow: 0 2px 6px rgba(245, 158, 11, 0.4);
-}
-
-/* Colonne Gauche Carte Document (Couverture + Métas) */
+/* Infos document (gauche) */
 .doc-card-info {
   display: flex;
   flex-direction: column;
-  width: 140px;
+  width: 130px;
   flex-shrink: 0;
   gap: 10px;
-}
-
-.main-workspace.split-active .doc-card-info {
-  width: 110px;
 }
 
 .doc-cover-wrapper {
   width: 100%;
   aspect-ratio: 1 / 1.35;
-  background-color: var(--bg-secondary);
+  background-color: var(--bg-subtle);
   border-radius: var(--radius-sm);
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
   cursor: pointer;
   position: relative;
 }
@@ -424,11 +415,11 @@ body {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: transform 0.3s ease;
+  transition: transform 0.25s ease;
 }
 
 .doc-cover-wrapper:hover .doc-cover-img {
-  transform: scale(1.04);
+  transform: scale(1.03);
 }
 
 .doc-meta {
@@ -441,7 +432,7 @@ body {
   font-size: 13px;
   font-weight: 700;
   color: var(--text-main);
-  line-height: 1.3;
+  line-height: 1.35;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -456,13 +447,7 @@ body {
 .doc-stats {
   font-size: 11px;
   color: var(--text-muted);
-  font-weight: 500;
-}
-
-.doc-actions-inline {
-  display: flex;
-  gap: 6px;
-  margin-top: 4px;
+  font-weight: 600;
 }
 
 .btn-delete-doc {
@@ -470,6 +455,7 @@ body {
   border: none;
   color: var(--text-dim);
   font-size: 11px;
+  font-weight: 600;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -484,70 +470,65 @@ body {
   background-color: var(--danger-bg);
 }
 
-/* Colonne Droite Carte Document (Ruban des Vignettes Goodnotes) */
+/* Ruban horizontal des vignettes */
 .doc-card-vignettes {
   flex: 1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  justify-content: center;
 }
 
 .vignettes-ribbon-container {
   display: flex;
   gap: 14px;
   overflow-x: auto;
-  padding: 4px 2px 10px 2px;
+  padding: 4px 2px 8px 2px;
   scroll-behavior: smooth;
 }
 
-/* Scrollbar discrète pour le ruban */
 .vignettes-ribbon-container::-webkit-scrollbar {
   height: 6px;
 }
 
 .vignettes-ribbon-container::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-subtle);
   border-radius: 3px;
 }
 
 .vignettes-ribbon-container::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: #cbd5e1;
   border-radius: 3px;
 }
 
 .vignettes-ribbon-container::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
+  background: #94a3b8;
 }
 
-/* Format vignette individuelle */
+/* Format vignette horizontale Goodnotes */
 .vignette-item {
   flex-shrink: 0;
   width: 250px;
-  height: 120px;
+  height: 125px;
   background-color: #ffffff;
   border-radius: var(--radius-md);
   overflow: hidden;
   position: relative;
   cursor: pointer;
-  border: 2px solid transparent;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
   transition: var(--transition);
-}
-
-.main-workspace.split-active .vignette-item {
-  width: 220px;
-  height: 110px;
 }
 
 .vignette-item:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
-  border-color: rgba(59, 130, 246, 0.5);
+  border-color: var(--accent);
+  box-shadow: var(--shadow-md);
 }
 
 .vignette-item.active {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent), 0 8px 20px rgba(59, 130, 246, 0.35);
+  box-shadow: 0 0 0 2px var(--accent), var(--shadow-md);
 }
 
 .vignette-crop-img {
@@ -557,7 +538,6 @@ body {
   display: block;
 }
 
-/* Badge de page en incrustation Goodnotes (ex: p. 1) */
 .vignette-page-badge {
   position: absolute;
   bottom: 6px;
@@ -569,19 +549,119 @@ body {
   font-weight: 700;
   padding: 2px 6px;
   border-radius: 4px;
-  letter-spacing: 0.2px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
   pointer-events: none;
 }
 
 /* ==========================================================================
-   Modale d'Upload
+   VUE 2 : Occurrences Verticales du Document en Split View
+   ========================================================================== */
+.doc-detail-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.doc-detail-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.doc-detail-title {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--text-main);
+  line-height: 1.3;
+}
+
+.doc-detail-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.doc-vertical-occurrences {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+/* Carte occurrence verticale */
+.vertical-occ-card {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  cursor: pointer;
+  transition: var(--transition);
+  box-shadow: var(--shadow-sm);
+}
+
+.vertical-occ-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.vertical-occ-card.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent), var(--shadow-md);
+  background-color: var(--accent-light);
+}
+
+.vertical-occ-img-wrapper {
+  position: relative;
+  width: 100%;
+  height: 130px;
+  background-color: #ffffff;
+  overflow: hidden;
+}
+
+.vertical-occ-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.vertical-occ-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background-color: var(--bg-surface);
+  border-top: 1px solid var(--border-color);
+}
+
+.vertical-occ-page {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--accent);
+}
+
+.vertical-occ-snippet {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 230px;
+}
+
+/* ==========================================================================
+   Modales (Upload & Doublon Conflit)
    ========================================================================== */
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background-color: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(5px);
+  background-color: rgba(15, 23, 42, 0.5);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -589,59 +669,64 @@ body {
 }
 
 .modal-card {
-  background-color: var(--bg-card);
+  background-color: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   width: 90%;
-  max-width: 500px;
+  max-width: 480px;
   padding: 24px;
   box-shadow: var(--shadow-lg);
+}
+
+.modal-card-warning {
+  border-top: 4px solid #eab308;
 }
 
 .modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 18px;
+  margin-bottom: 16px;
 }
 
 .modal-close-btn {
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--text-dim);
   font-size: 24px;
   cursor: pointer;
   line-height: 1;
 }
 
 .modal-close-btn:hover {
-  color: #fff;
+  color: var(--text-main);
 }
 
 .dropzone {
-  border: 2px dashed #334366;
+  border: 2px dashed #cbd5e1;
   border-radius: var(--radius-md);
-  padding: 32px 16px;
+  padding: 30px 16px;
   text-align: center;
-  background-color: var(--bg-secondary);
+  background-color: var(--bg-subtle);
   cursor: pointer;
   transition: var(--transition);
 }
 
 .dropzone:hover, .dropzone.dragover {
   border-color: var(--accent);
-  background-color: rgba(59, 130, 246, 0.05);
+  background-color: var(--accent-light);
 }
 
 .dropzone svg {
   color: var(--accent);
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .dropzone-text {
   font-size: 14px;
+  font-weight: 600;
   color: var(--text-main);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .dropzone-sub {
@@ -652,7 +737,7 @@ body {
 .form-group label {
   display: block;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-muted);
   margin-bottom: 6px;
 }
@@ -661,7 +746,7 @@ body {
   width: 100%;
   height: 38px;
   padding: 0 12px;
-  background-color: var(--bg-secondary);
+  background-color: var(--bg-subtle);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   color: var(--text-main);
@@ -672,6 +757,7 @@ body {
 
 .form-control:focus {
   border-color: var(--border-focus);
+  background-color: #fff;
 }
 
 .upload-progress {
@@ -681,7 +767,7 @@ body {
 .progress-bar-bg {
   width: 100%;
   height: 6px;
-  background-color: var(--bg-secondary);
+  background-color: var(--bg-subtle);
   border-radius: 3px;
   overflow: hidden;
   margin-bottom: 6px;
@@ -690,13 +776,42 @@ body {
 .progress-bar-fill {
   width: 0%;
   height: 100%;
-  background: linear-gradient(90deg, var(--accent), #10b981);
+  background: var(--accent);
   transition: width 0.3s ease;
 }
 
 .progress-status {
   font-size: 11px;
   color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* Boîte de conflit de doublon */
+.conflict-box {
+  background-color: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conflict-item {
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+}
+
+.conflict-label {
+  color: var(--warning-text);
+  font-weight: 600;
+  min-width: 125px;
+}
+
+.conflict-val {
+  color: var(--text-main);
+  word-break: break-all;
 }
 
 /* État vide */
@@ -711,14 +826,15 @@ body {
 }
 
 .empty-icon {
-  margin-bottom: 16px;
+  margin-bottom: 14px;
   color: var(--text-dim);
 }
 
 .empty-state h3 {
   font-size: 16px;
+  font-weight: 700;
   color: var(--text-main);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .empty-state p {

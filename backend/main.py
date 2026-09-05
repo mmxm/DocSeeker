@@ -47,18 +47,50 @@ def list_documents():
 
 @app.post("/api/upload")
 async def upload_pdf(file: UploadFile = File(...), title: Optional[str] = Form(None)):
-    """Reçoit un fichier PDF, le stocke et lance son indexation textuelle et spatiale."""
+    """Reçoit un fichier PDF, vérifie s'il est en doublon strict, et l'indexe."""
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Seuls les fichiers PDF sont acceptés.")
 
     original_filename = file.filename
-    # Nom sécurisé pour éviter les collisions
-    safe_filename = re.sub(r'[^\w\-_\.]', '_', original_filename)
+    # Nettoyage sécurisé minimal pour le système de fichier sans défigurer les espaces et accents
+    # On supprime seulement les séparateurs de chemin potentiellement dangereux
+    safe_filename = re.sub(r'[/\\:\0]', ' ', original_filename).strip()
     dest_path = os.path.join(DOCUMENTS_DIR, safe_filename)
 
-    # Écriture du fichier sur disque
-    with open(dest_path, "wb") as buffer:
+    # Sauvegarde temporaire pour vérification du hash SHA-256
+    temp_path = dest_path + ".tmp"
+    with open(temp_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
+
+    from backend.indexer import compute_file_hash, find_duplicate_by_hash
+    file_hash = compute_file_hash(temp_path)
+
+    # Vérification de doublon strict
+    duplicate = find_duplicate_by_hash(file_hash)
+    if duplicate:
+        os.remove(temp_path)
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "duplicate",
+                "message": "Un document strictement identique existe déjà dans la base.",
+                "existing_doc": {
+                    "id": duplicate["id"],
+                    "filename": duplicate["filename"],
+                    "title": duplicate["title"],
+                    "created_at": duplicate["created_at"]
+                }
+            }
+        )
+
+    # Déplacement définitif
+    if os.path.exists(dest_path):
+        # Si un fichier de même nom existe mais contenu différent, suffixer
+        base, ext = os.path.splitext(safe_filename)
+        safe_filename = f"{base}_{file_hash[:6]}{ext}"
+        dest_path = os.path.join(DOCUMENTS_DIR, safe_filename)
+
+    shutil.move(temp_path, dest_path)
 
     try:
         doc_info = index_pdf_file(dest_path, safe_filename, custom_title=title)
@@ -92,12 +124,28 @@ def get_cover(doc_id: int):
     return FileResponse(cover_path, media_type="image/jpeg")
 
 @app.get("/api/crop/{doc_id}/{page}/{occ_id}")
-def get_crop(doc_id: int, page: int, occ_id: int):
+def get_crop(doc_id: int, page: int, occ_id: int, h: Optional[str] = Query(None)):
     """Renvoie la vignette cropée et surlignée de l'occurrence."""
-    crop_path = os.path.join(CACHE_DIR, f"doc_{doc_id}", f"p{page}_occ{occ_id}.jpg")
-    if not os.path.exists(crop_path):
-        raise HTTPException(status_code=404, detail="Vignette non trouvée.")
-    return FileResponse(crop_path, media_type="image/jpeg")
+    doc_cache_dir = os.path.join(CACHE_DIR, f"doc_{doc_id}")
+    
+    # Chercher d'abord avec le hash précis
+    if h:
+        crop_path = os.path.join(doc_cache_dir, f"p{page}_occ{occ_id}_{h}.jpg")
+        if os.path.exists(crop_path):
+            return FileResponse(crop_path, media_type="image/jpeg")
+
+    # Recherche générique ou premier fichier correspondant
+    crop_path_default = os.path.join(doc_cache_dir, f"p{page}_occ{occ_id}.jpg")
+    if os.path.exists(crop_path_default):
+        return FileResponse(crop_path_default, media_type="image/jpeg")
+
+    # Si fichier avec n'importe quel hash existe
+    if os.path.exists(doc_cache_dir):
+        for fname in os.listdir(doc_cache_dir):
+            if fname.startswith(f"p{page}_occ{occ_id}") and fname.endswith(".jpg"):
+                return FileResponse(os.path.join(doc_cache_dir, fname), media_type="image/jpeg")
+
+    raise HTTPException(status_code=404, detail="Vignette non trouvée.")
 
 @app.get("/api/pdf/{doc_id}")
 def stream_pdf(doc_id: int, range: Optional[str] = Header(None)):
