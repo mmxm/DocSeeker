@@ -126,12 +126,15 @@ document.addEventListener("DOMContentLoaded", () => {
     clearDocSearchBtn.style.display = "none";
     docDetailCount.textContent = `${currentDocOriginalOccurrences.length} occurrence${currentDocOriginalOccurrences.length > 1 ? 's' : ''} dans ce document`;
     renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentDocOriginalOccurrences);
+    // Restaurer le surlignage de la recherche d'origine
+    updateViewerSearchHighlight(currentSearchQuery);
   });
 
   async function performDocSearch(query) {
     if (!query) {
       docDetailCount.textContent = `${currentDocOriginalOccurrences.length} occurrence${currentDocOriginalOccurrences.length > 1 ? 's' : ''} dans ce document`;
       renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentDocOriginalOccurrences);
+      updateViewerSearchHighlight(currentSearchQuery);
       return;
     }
 
@@ -142,12 +145,37 @@ document.addEventListener("DOMContentLoaded", () => {
       docDetailCount.textContent = `${occs.length} résultat${occs.length > 1 ? 's' : ''} pour "${query}"`;
       renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, occs);
       
-      // Sauter directement sur la 1ère occurrence
+      // Mettre à jour le surlignage global dans le PDF : seulement les nouveaux résultats
+      updateViewerSearchHighlight(query);
+
+      // Sauter directement sur la 1ère occurrence avec l'encadré actif
       if (occs.length > 0) {
-        goToPageAndScrollToOccurrence(occs[0].page_number, occs[0].y_ratio, occs[0].text_snippet);
+        goToPageAndScrollToOccurrence(occs[0].page_number, occs[0].rect, occs[0].y_ratio);
       }
     } catch (err) {
       console.error("Erreur recherche document:", err);
+    }
+  }
+
+  // Met à jour la surbrillance générale de recherche dans PDF.js (remplace l'ancien mot)
+  function updateViewerSearchHighlight(query) {
+    try {
+      const win = pdfFrame.contentWindow;
+      if (!win) return;
+      const app = win.PDFViewerApplication;
+      if (app && app.eventBus) {
+        app.eventBus.dispatch('find', {
+          type: '',
+          query: query || '',
+          phraseSearch: true,
+          caseSensitive: false,
+          entireWord: false,
+          highlightAll: true,
+          findPrevious: false
+        });
+      }
+    } catch (e) {
+      console.warn("Erreur synchronisation surbrillance PDF.js:", e);
     }
   }
 

@@ -121,26 +121,24 @@ def get_cover(doc_id: int):
     cover_path = os.path.join(COVERS_DIR, f"{doc_id}.jpg")
     if not os.path.exists(cover_path):
         raise HTTPException(status_code=404, detail="Couverture non disponible.")
-    return FileResponse(cover_path, media_type="image/jpeg")
+    return FileResponse(cover_path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=3600"})
 
 @app.get("/api/crop/{doc_id}/{page}/{occ_id}")
 def get_crop(doc_id: int, page: int, occ_id: int, h: Optional[str] = Query(None), terms: Optional[str] = Query(None)):
     """Renvoie la vignette cropée, générée à la volée (Lazy Crop) si nécessaire."""
     from backend.crop_service import get_or_generate_crop_on_demand
     
-    # Génération à la volée / récupération cache
     terms_decoded = terms or ""
     crop_path = get_or_generate_crop_on_demand(doc_id, page, occ_id, h or "", terms_decoded)
     
     if crop_path and os.path.exists(crop_path):
-        return FileResponse(crop_path, media_type="image/jpeg")
+        return FileResponse(crop_path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
 
-    # Fallback si cache existant
     doc_cache_dir = os.path.join(CACHE_DIR, f"doc_{doc_id}")
     if os.path.exists(doc_cache_dir):
         for fname in os.listdir(doc_cache_dir):
             if fname.startswith(f"p{page}_occ{occ_id}") and fname.endswith(".jpg"):
-                return FileResponse(os.path.join(doc_cache_dir, fname), media_type="image/jpeg")
+                return FileResponse(os.path.join(doc_cache_dir, fname), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
 
     raise HTTPException(status_code=404, detail="Vignette non trouvée.")
 
