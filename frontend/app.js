@@ -1255,24 +1255,41 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // 1. Option Racine
     const isRootCurrent = (currentCommonFolderId === null || (currentCommonFolderId === undefined && !currentFolderId));
-    const rootItem = document.createElement("div");
+    const rootItem = document.createElement("label");
     rootItem.className = `folder-select-item ${isRootCurrent ? 'disabled' : ''}`;
+    rootItem.style.cssText = "display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-radius: 8px; background-color: #ffffff; cursor: pointer; border: 2px solid #e2e8f0; margin-bottom: 6px; user-select: none;";
     rootItem.innerHTML = `
-      <div class="folder-select-item-left">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.2">
+      <div class="folder-select-item-left" style="display: flex; align-items: center; gap: 10px; flex: 1;">
+        <input type="radio" name="targetFolderRadio" class="folder-select-radio" value="root" ${isRootCurrent ? 'disabled' : ''} style="width:18px; height:18px; cursor:pointer;" />
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.2">
           <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
         </svg>
-        <span>Racine (aucun dossier)</span>
+        <span style="font-weight: 600;">Racine (aucun dossier)</span>
       </div>
-      <span class="folder-select-badge">${isRootCurrent ? 'Actuel' : 'Racine'}</span>
+      <span class="folder-select-badge" style="font-size: 11px; padding: 2px 7px; border-radius: 5px; background: #f1f5f9; color: #64748b; font-weight: 600; border: 1px solid #cbd5e1;">${isRootCurrent ? 'Actuel' : 'Racine'}</span>
     `;
 
     if (!isRootCurrent) {
-      rootItem.addEventListener("click", () => {
-        document.querySelectorAll(".folder-select-item").forEach(el => el.classList.remove("selected"));
+      const radio = rootItem.querySelector("input[type='radio']");
+      const selectRoot = () => {
+        radio.checked = true;
+        document.querySelectorAll(".folder-select-item").forEach(el => {
+          el.classList.remove("selected");
+          el.style.borderColor = "#e2e8f0";
+          el.style.backgroundColor = "#ffffff";
+        });
         rootItem.classList.add("selected");
+        rootItem.style.borderColor = "#2563eb";
+        rootItem.style.backgroundColor = "#eff6ff";
         moveModalTargetFolderId = null;
         confirmMoveDocBtn.disabled = false;
+      };
+
+      rootItem.addEventListener("click", selectRoot);
+      radio.addEventListener("change", selectRoot);
+      rootItem.addEventListener("dblclick", () => {
+        selectRoot();
+        confirmMoveDocBtn.click();
       });
     }
     folderSelectList.appendChild(rootItem);
@@ -1285,28 +1302,46 @@ document.addEventListener("DOMContentLoaded", () => {
 
     sortedFolders.forEach(f => {
       const isCurrent = (currentCommonFolderId === f.id);
-      const item = document.createElement("div");
+      const item = document.createElement("label");
       item.className = `folder-select-item ${isCurrent ? 'disabled' : ''}`;
       
       const depth = (f.fullPath.match(/\//g) || []).length;
-      const indentPx = depth * 14;
+      const indentPx = depth * 16;
+
+      item.style.cssText = `display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-radius: 8px; background-color: ${isCurrent ? '#f8fafc' : '#ffffff'}; cursor: ${isCurrent ? 'not-allowed' : 'pointer'}; border: 2px solid #e2e8f0; margin-bottom: 6px; user-select: none; opacity: ${isCurrent ? '0.6' : '1'};`;
 
       item.innerHTML = `
-        <div class="folder-select-item-left" style="padding-left: ${indentPx}px;">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="#3b82f6" stroke="#3b82f6" stroke-width="1">
+        <div class="folder-select-item-left" style="display: flex; align-items: center; gap: 10px; flex: 1; padding-left: ${indentPx}px;">
+          <input type="radio" name="targetFolderRadio" class="folder-select-radio" value="${f.id}" ${isCurrent ? 'disabled' : ''} style="width:18px; height:18px; cursor:pointer;" />
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="#3b82f6" stroke="#3b82f6" stroke-width="1">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
           </svg>
-          <span title="${f.fullPath}">${f.name}</span>
+          <span style="font-weight: 600;" title="${f.fullPath}">${f.name}</span>
         </div>
-        <span class="folder-select-badge">${isCurrent ? 'Actuel' : (f.doc_count ? `${f.doc_count} doc.` : '0 doc.')}</span>
+        <span class="folder-select-badge" style="font-size: 11px; padding: 2px 7px; border-radius: 5px; background: #f1f5f9; color: #64748b; font-weight: 600; border: 1px solid #cbd5e1;">${isCurrent ? 'Actuel' : (f.doc_count ? `${f.doc_count} doc.` : '0 doc.')}</span>
       `;
 
       if (!isCurrent) {
-        item.addEventListener("click", () => {
-          document.querySelectorAll(".folder-select-item").forEach(el => el.classList.remove("selected"));
+        const radio = item.querySelector("input[type='radio']");
+        const selectFolder = () => {
+          radio.checked = true;
+          document.querySelectorAll(".folder-select-item").forEach(el => {
+            el.classList.remove("selected");
+            el.style.borderColor = "#e2e8f0";
+            el.style.backgroundColor = "#ffffff";
+          });
           item.classList.add("selected");
+          item.style.borderColor = "#2563eb";
+          item.style.backgroundColor = "#eff6ff";
           moveModalTargetFolderId = f.id;
           confirmMoveDocBtn.disabled = false;
+        };
+
+        item.addEventListener("click", selectFolder);
+        radio.addEventListener("change", selectFolder);
+        item.addEventListener("dblclick", () => {
+          selectFolder();
+          confirmMoveDocBtn.click();
         });
       }
 

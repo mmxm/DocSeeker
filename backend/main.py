@@ -463,6 +463,12 @@ def stream_pdf(doc_id: int, range: Optional[str] = Header(None)):
 
     return StreamingResponse(iter_file_chunk(), status_code=206, headers=headers)
 
-# Monter les fichiers statiques du frontend
+class NoCacheStaticFiles(StaticFiles):
+    def file_response(self, *args, **kwargs) -> Response:
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return resp
+
+# Monter les fichiers statiques du frontend avec cache désactivé pour CSS et JS
 if os.path.exists(FRONTEND_DIR):
-    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+    app.mount("/", NoCacheStaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

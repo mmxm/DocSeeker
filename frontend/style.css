@@ -211,7 +211,17 @@ body.light-theme {
   box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25);
 }
 
-.btn-primary:hover {
+.btn:disabled,
+.btn-primary:disabled {
+  opacity: 0.45 !important;
+  cursor: not-allowed !important;
+  box-shadow: none !important;
+  background-color: #94a3b8 !important;
+  border-color: #94a3b8 !important;
+  pointer-events: none !important;
+}
+
+.btn-primary:hover:not(:disabled) {
   background-color: var(--accent-hover);
   transform: translateY(-1px);
   box-shadow: 0 4px 10px rgba(37, 99, 235, 0.35);
@@ -1306,68 +1316,82 @@ body.light-theme {
    Liste de Sélection de Dossier (Modal Déplacement)
    ========================================================================== */
 .folder-select-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 280px;
-  overflow-y: auto;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  padding: 6px;
-  background-color: var(--bg-subtle);
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+  max-height: 280px !important;
+  overflow-y: auto !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: var(--radius-md) !important;
+  padding: 8px !important;
+  background-color: #f8fafc !important;
 }
 
 .folder-select-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  background-color: var(--bg-surface);
-  cursor: pointer;
-  border: 1.5px solid transparent;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-main);
-  transition: var(--transition);
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  padding: 10px 14px !important;
+  border-radius: 8px !important;
+  background-color: #ffffff !important;
+  cursor: pointer !important;
+  border: 2px solid #e2e8f0 !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  color: var(--text-main) !important;
+  transition: all 0.15s ease !important;
+  user-select: none !important;
 }
 
 .folder-select-item:hover:not(.disabled) {
-  background-color: #f8fafc;
-  border-color: var(--accent-border);
+  background-color: #f8fafc !important;
+  border-color: #93c5fd !important;
 }
 
 .folder-select-item.selected {
   background-color: #eff6ff !important;
-  border-color: var(--accent) !important;
-  color: var(--accent) !important;
+  border-color: #2563eb !important;
+  color: #1d4ed8 !important;
+  box-shadow: 0 0 0 1px #2563eb !important;
 }
 
 .folder-select-item.disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-  background-color: transparent;
-  border: 1px dashed var(--border-color);
+  opacity: 0.55 !important;
+  cursor: not-allowed !important;
+  background-color: #f1f5f9 !important;
+  border: 1.5px dashed var(--border-color) !important;
 }
 
 .folder-select-item-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  flex: 1 !important;
+}
+
+.folder-select-radio {
+  width: 18px !important;
+  height: 18px !important;
+  accent-color: #2563eb !important;
+  cursor: pointer !important;
+  flex-shrink: 0 !important;
+  margin: 0 !important;
 }
 
 .folder-select-badge {
-  font-size: 10.5px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--bg-subtle);
-  color: var(--text-muted);
-  font-weight: 500;
-  border: 1px solid var(--border-color);
+  font-size: 11px !important;
+  padding: 3px 8px !important;
+  border-radius: 5px !important;
+  background: var(--bg-subtle) !important;
+  color: var(--text-muted) !important;
+  font-weight: 600 !important;
+  border: 1px solid var(--border-color) !important;
+  flex-shrink: 0 !important;
 }
 
 /* ==========================================================================
