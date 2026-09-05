@@ -52,6 +52,28 @@ document.addEventListener("DOMContentLoaded", () => {
   const pdfFrame = document.getElementById("pdfFrame");
   const closeViewerBtn = document.getElementById("closeViewerBtn");
   const saveAnnotationsBtn = document.getElementById("saveAnnotationsBtn");
+  const viewerBackBtn = document.getElementById("viewerBackBtn");
+  const mobileOccurrencesBtn = document.getElementById("mobileOccurrencesBtn");
+  const mobileOccurrencesCountText = document.getElementById("mobileOccurrencesCountText");
+  const toggleSidebarBtn = document.getElementById("toggleSidebarBtn");
+  const splitResizer = document.getElementById("splitResizer");
+  const toggleSelectionModeBtn = document.getElementById("toggleSelectionModeBtn");
+
+  // Tiroir Mobile d'extraits
+  const mobileDrawerOverlay = document.getElementById("mobileDrawerOverlay");
+  const mobileOccurrencesDrawer = document.getElementById("mobileOccurrencesDrawer");
+  const closeDrawerBtn = document.getElementById("closeDrawerBtn");
+  const drawerDocTitle = document.getElementById("drawerDocTitle");
+  const drawerDocCount = document.getElementById("drawerDocCount");
+  const drawerOccurrencesList = document.getElementById("drawerOccurrencesList");
+
+  // Menu Contextuel Universel
+  const cardContextMenu = document.getElementById("cardContextMenu");
+  const contextMenuTitle = document.getElementById("contextMenuTitle");
+  const ctxMenuRename = document.getElementById("ctxMenuRename");
+  const ctxMenuMove = document.getElementById("ctxMenuMove");
+  const ctxMenuReindex = document.getElementById("ctxMenuReindex");
+  const ctxMenuDelete = document.getElementById("ctxMenuDelete");
 
   // Upload Modal
   const openUploadBtn = document.getElementById("openUploadBtn");
@@ -154,6 +176,232 @@ document.addEventListener("DOMContentLoaded", () => {
   let selectedDocIds = new Set();
   let lastSelectedDocId = null;
   let clipboardDocIds = [];
+  let isSelectionModeActive = false;
+
+  // État du menu contextuel flottant
+  let activeContextMenuDoc = null;
+
+  // =========================================================================
+  // Menu Contextuel Universel (•••)
+  // =========================================================================
+  function openDocContextMenu(e, docId, docTitle) {
+    e.stopPropagation();
+    activeContextMenuDoc = { id: docId, title: docTitle };
+    if (contextMenuTitle) {
+      contextMenuTitle.textContent = docTitle;
+    }
+
+    if (!cardContextMenu) return;
+
+    cardContextMenu.style.display = "flex";
+    const popoverWidth = 180;
+    const popoverHeight = 160;
+
+    const target = e.currentTarget;
+    const rect = target.getBoundingClientRect();
+
+    let left = rect.right - popoverWidth;
+    if (left < 10) left = 10;
+    if (left + popoverWidth > window.innerWidth - 10) {
+      left = window.innerWidth - popoverWidth - 10;
+    }
+
+    let top = rect.bottom + 4;
+    if (top + popoverHeight > window.innerHeight - 10) {
+      top = rect.top - popoverHeight - 4;
+    }
+
+    cardContextMenu.style.left = `${left}px`;
+    cardContextMenu.style.top = `${top}px`;
+  }
+
+  function closeContextMenu() {
+    if (cardContextMenu) {
+      cardContextMenu.style.display = "none";
+      activeContextMenuDoc = null;
+    }
+  }
+
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest("#cardContextMenu") && !e.target.closest(".doc-menu-trigger-btn")) {
+      closeContextMenu();
+    }
+  });
+
+  window.addEventListener("resize", closeContextMenu);
+  window.addEventListener("scroll", closeContextMenu, true);
+
+  if (ctxMenuRename) {
+    ctxMenuRename.addEventListener("click", () => {
+      if (!activeContextMenuDoc) return;
+      const { id, title } = activeContextMenuDoc;
+      closeContextMenu();
+      openRenameModal(id, title);
+    });
+  }
+
+  if (ctxMenuMove) {
+    ctxMenuMove.addEventListener("click", () => {
+      if (!activeContextMenuDoc) return;
+      const { id } = activeContextMenuDoc;
+      closeContextMenu();
+      openBatchMoveModal([id]);
+    });
+  }
+
+  if (ctxMenuReindex) {
+    ctxMenuReindex.addEventListener("click", () => {
+      if (!activeContextMenuDoc) return;
+      const { id, title } = activeContextMenuDoc;
+      closeContextMenu();
+      handleReindexDocument(id, title, null);
+    });
+  }
+
+  if (ctxMenuDelete) {
+    ctxMenuDelete.addEventListener("click", () => {
+      if (!activeContextMenuDoc) return;
+      const { id, title } = activeContextMenuDoc;
+      closeContextMenu();
+      confirmDeleteDocument(id, title);
+    });
+  }
+
+  // =========================================================================
+  // Séparateur Redimensionnable Split-View (Desktop)
+  // =========================================================================
+  if (splitResizer) {
+    let isResizing = false;
+
+    const stopResizing = () => {
+      if (!isResizing) return;
+      isResizing = false;
+      workspace.classList.remove("resizing");
+      splitResizer.classList.remove("resizing");
+      if (pdfFrame) {
+        pdfFrame.style.pointerEvents = "";
+      }
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    splitResizer.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      isResizing = true;
+      workspace.classList.add("resizing");
+      splitResizer.classList.add("resizing");
+      if (pdfFrame) {
+        pdfFrame.style.pointerEvents = "none";
+      }
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+    });
+
+    window.addEventListener("mousemove", (e) => {
+      if (!isResizing) return;
+      const workspaceRect = workspace.getBoundingClientRect();
+      const minW = 260;
+      const maxW = Math.min(window.innerWidth - 300, 750);
+      const calculatedW = e.clientX - workspaceRect.left;
+      const newW = Math.max(minW, Math.min(calculatedW, maxW));
+      workspace.style.setProperty("--results-pane-width", `${newW}px`);
+    });
+
+    window.addEventListener("mouseup", stopResizing);
+    window.addEventListener("mouseleave", stopResizing);
+  }
+
+  // Bouton replier/déplier volet latéral gauche (Desktop)
+  if (toggleSidebarBtn) {
+    toggleSidebarBtn.addEventListener("click", () => {
+      workspace.classList.toggle("sidebar-collapsed");
+    });
+  }
+
+  // Bouton retour mobile dans le lecteur PDF
+  if (viewerBackBtn) {
+    viewerBackBtn.addEventListener("click", () => {
+      closeSplitViewer();
+    });
+  }
+
+  // Prise en charge du bouton retour matériel / gestuel mobile
+  window.addEventListener("popstate", () => {
+    if (workspace.classList.contains("split-active")) {
+      closeSplitViewer();
+    }
+  });
+
+  // =========================================================================
+  // Tiroir Mobile d'extraits (Bottom Sheet)
+  // =========================================================================
+  function openMobileOccurrencesDrawer() {
+    if (mobileDrawerOverlay && mobileOccurrencesDrawer) {
+      mobileDrawerOverlay.style.display = "block";
+      mobileOccurrencesDrawer.style.display = "flex";
+    }
+  }
+
+  function closeMobileOccurrencesDrawer() {
+    if (mobileDrawerOverlay && mobileOccurrencesDrawer) {
+      mobileDrawerOverlay.style.display = "none";
+      mobileOccurrencesDrawer.style.display = "none";
+    }
+  }
+
+  if (mobileOccurrencesBtn) {
+    mobileOccurrencesBtn.addEventListener("click", openMobileOccurrencesDrawer);
+  }
+  if (closeDrawerBtn) {
+    closeDrawerBtn.addEventListener("click", closeMobileOccurrencesDrawer);
+  }
+  if (mobileDrawerOverlay) {
+    mobileDrawerOverlay.addEventListener("click", closeMobileOccurrencesDrawer);
+  }
+
+  function renderDrawerOccurrences(docId, docTitle, occurrences, activePage) {
+    if (!drawerOccurrencesList) return;
+    drawerOccurrencesList.innerHTML = "";
+    if (!occurrences || occurrences.length === 0) {
+      drawerOccurrencesList.innerHTML = `<div style="color:var(--text-muted); font-size:12.5px; padding:10px;">Aucun extrait pour ce document.</div>`;
+      return;
+    }
+
+    occurrences.forEach((occ) => {
+      const item = document.createElement("div");
+      const isActive = (occ.page_number === activePage);
+      item.className = `vertical-occ-card ${isActive ? 'active' : ''}`;
+      item.innerHTML = `
+        <div class="vertical-occ-img-wrapper">
+          <img src="${occ.crop_url}" class="vertical-occ-img" alt="Extrait p. ${occ.page_number}" loading="lazy" />
+        </div>
+        <div class="vertical-occ-footer">
+          <span class="vertical-occ-page">Page ${occ.page_number}</span>
+          <span class="vertical-occ-snippet">${escapeHtml(occ.text_snippet || '')}</span>
+        </div>
+      `;
+      item.addEventListener("click", () => {
+        closeMobileOccurrencesDrawer();
+        openDocumentInSplitView(docId, docTitle, occ.page_number, occurrences, occ.rect, occ.y_ratio || 0);
+      });
+      drawerOccurrencesList.appendChild(item);
+    });
+  }
+
+  // =========================================================================
+  // Mode Sélection Tactile
+  // =========================================================================
+  if (toggleSelectionModeBtn) {
+    toggleSelectionModeBtn.addEventListener("click", () => {
+      isSelectionModeActive = !isSelectionModeActive;
+      toggleSelectionModeBtn.classList.toggle("active", isSelectionModeActive);
+      document.body.classList.toggle("selection-mode-active", isSelectionModeActive);
+      if (!isSelectionModeActive && selectedDocIds.size === 0) {
+        clearSelection();
+      }
+    });
+  }
 
   // Initialisation du nuancier dans la modale dossier
   initColorPalette();
@@ -195,11 +443,14 @@ document.addEventListener("DOMContentLoaded", () => {
     // Mettre à jour la classe .selected sur toutes les cartes affichées
     document.querySelectorAll(".doc-card").forEach(card => {
       const docId = parseInt(card.getAttribute("data-doc-id"), 10);
-      if (selectedDocIds.has(docId)) {
+      const isSelected = selectedDocIds.has(docId);
+      if (isSelected) {
         card.classList.add("selected");
       } else {
         card.classList.remove("selected");
       }
+      const chk = card.querySelector(".doc-selection-checkbox");
+      if (chk) chk.checked = isSelected;
     });
 
     const count = selectedDocIds.size;
@@ -959,40 +1210,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
     card.innerHTML = `
       <div class="doc-card-header">
-        <div class="doc-title-main" title="${escapeHtml(doc.title)}">${displayTitle}</div>
+        <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; flex: 1;">
+          <input type="checkbox" class="doc-selection-checkbox" data-id="${doc.id}" ${selectedDocIds.has(doc.id) ? 'checked' : ''} title="Sélectionner ce document" />
+          <div class="doc-title-main" title="${escapeHtml(doc.title)}">${displayTitle}</div>
+        </div>
         <div class="doc-meta-badges">
+          ${doc.is_top_result ? `<span class="doc-badge-pill top-badge" title="Score de pertinence le plus élevé">★ Plus pertinent</span>` : ''}
           ${isSearch ? `<span class="doc-badge-pill highlight">${doc.total_occurrences} occ.</span>` : ''}
           <span class="doc-badge-pill">${doc.total_pages} p.</span>
           
-          <button class="btn-reindex-doc" data-id="${doc.id}" title="Réindexer ce document">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <polyline points="23 4 23 10 17 10"></polyline>
-              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+          <button class="doc-menu-trigger-btn" data-id="${doc.id}" title="Options du document (Renommer, Déplacer, Réindexer, Supprimer)" aria-label="Options">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="12" cy="5" r="2.2"></circle>
+              <circle cx="12" cy="12" r="2.2"></circle>
+              <circle cx="12" cy="19" r="2.2"></circle>
             </svg>
-            Réindexer
-          </button>
-
-          <button class="btn-rename-doc" data-id="${doc.id}" title="Renommer ce document">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-            </svg>
-            Renommer
-          </button>
-
-          <button class="btn-move-doc" data-id="${doc.id}" title="Déplacer vers un autre dossier">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-            </svg>
-            Déplacer
-          </button>
-
-          <button class="btn-delete-doc" data-id="${doc.id}" title="Supprimer ce document">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="3 6 5 6 21 6"></polyline>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-            </svg>
-            Supprimer
           </button>
         </div>
       </div>
@@ -1007,6 +1239,82 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
       </div>
     `;
+
+    // Clic case à cocher de sélection tactile
+    const checkbox = card.querySelector(".doc-selection-checkbox");
+    if (checkbox) {
+      checkbox.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (selectedDocIds.has(doc.id)) {
+          selectedDocIds.delete(doc.id);
+        } else {
+          selectedDocIds.add(doc.id);
+        }
+        lastSelectedDocId = doc.id;
+        updateSelectionUI();
+      });
+    }
+
+    // Clic menu contextuel d'options •••
+    const menuBtn = card.querySelector(".doc-menu-trigger-btn");
+    if (menuBtn) {
+      menuBtn.addEventListener("click", (e) => {
+        openDocContextMenu(e, doc.id, doc.title);
+      });
+    }
+
+    // Support de l'appui long tactile pour sélectionner facilement sur tablette et smartphone
+    let touchTimer = null;
+    let touchMoved = false;
+
+    card.addEventListener("touchstart", (e) => {
+      if (e.target.closest("button") || e.target.closest(".vignette-item") || e.target.closest("input")) return;
+      touchMoved = false;
+      touchTimer = setTimeout(() => {
+        if (!touchMoved) {
+          if (!selectedDocIds.has(doc.id)) {
+            selectedDocIds.add(doc.id);
+          } else {
+            selectedDocIds.delete(doc.id);
+          }
+          updateSelectionUI();
+          if (navigator.vibrate) navigator.vibrate(35);
+        }
+      }, 480);
+    }, { passive: true });
+
+    card.addEventListener("touchmove", () => {
+      touchMoved = true;
+      if (touchTimer) clearTimeout(touchTimer);
+    }, { passive: true });
+
+    card.addEventListener("touchend", () => {
+      if (touchTimer) clearTimeout(touchTimer);
+    }, { passive: true });
+
+    // Défilement par glisser à la souris du ruban Goodnotes sur ordinateur
+    const ribbon = card.querySelector(".vignettes-ribbon-container");
+    if (ribbon) {
+      let isMouseDown = false;
+      let startX;
+      let scrollLeftPos;
+
+      ribbon.addEventListener("mousedown", (e) => {
+        if (e.target.closest(".vignette-item")) return;
+        isMouseDown = true;
+        startX = e.pageX - ribbon.offsetLeft;
+        scrollLeftPos = ribbon.scrollLeft;
+      });
+      ribbon.addEventListener("mouseleave", () => { isMouseDown = false; });
+      ribbon.addEventListener("mouseup", () => { isMouseDown = false; });
+      ribbon.addEventListener("mousemove", (e) => {
+        if (!isMouseDown) return;
+        e.preventDefault();
+        const x = e.pageX - ribbon.offsetLeft;
+        const walk = (x - startX) * 1.5;
+        ribbon.scrollLeft = scrollLeftPos - walk;
+      });
+    }
 
     // Clics vignettes
     card.querySelectorAll(".vignette-item").forEach(vEl => {
@@ -1035,36 +1343,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     card.querySelector(".doc-cover-wrapper").addEventListener("click", openDocAction);
     card.querySelector(".doc-title-main").addEventListener("click", openDocAction);
-
-    // Clic Réindexer
-    const reindexBtn = card.querySelector(".btn-reindex-doc");
-    reindexBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      handleReindexDocument(doc.id, doc.title, reindexBtn);
-    });
-
-    // Clic Renommer
-    const renameBtn = card.querySelector(".btn-rename-doc");
-    if (renameBtn) {
-      renameBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        openRenameModal(doc.id, doc.title);
-      });
-    }
-
-    // Clic Déplacer
-    const moveBtn = card.querySelector(".btn-move-doc");
-    moveBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openBatchMoveModal([doc.id]);
-    });
-
-    // Clic Supprimer
-    const delBtn = card.querySelector(".btn-delete-doc");
-    delBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      confirmDeleteDocument(doc.id, doc.title);
-    });
 
     return card;
   }
@@ -1869,8 +2147,13 @@ document.addEventListener("DOMContentLoaded", () => {
     resetSaveButtonState();
     cacheDocumentPdf(docId);
 
-    docSearchInput.value = "";
-    clearDocSearchBtn.style.display = "none";
+    // Support de l'historique de navigation pour le bouton retour mobile
+    if (!workspace.classList.contains("split-active")) {
+      window.history.pushState({ view: "split" }, "");
+    }
+
+    if (docSearchInput) docSearchInput.value = "";
+    if (clearDocSearchBtn) clearDocSearchBtn.style.display = "none";
 
     workspace.classList.add("split-active");
 
@@ -1880,6 +2163,18 @@ document.addEventListener("DOMContentLoaded", () => {
     docDetailCount.textContent = `${occurrences.length} occurrence${occurrences.length > 1 ? 's' : ''} dans ce document`;
 
     renderVerticalOccurrences(docId, docTitle, occurrences, targetPage);
+
+    // Synchronisation du tiroir mobile d'extraits
+    if (mobileOccurrencesCountText) {
+      mobileOccurrencesCountText.textContent = `${occurrences.length} extrait${occurrences.length > 1 ? 's' : ''}`;
+    }
+    if (drawerDocTitle) {
+      drawerDocTitle.textContent = docTitle;
+    }
+    if (drawerDocCount) {
+      drawerDocCount.textContent = `${occurrences.length} extrait${occurrences.length > 1 ? 's' : ''}`;
+    }
+    renderDrawerOccurrences(docId, docTitle, occurrences, targetPage);
 
     viewerDocTitle.textContent = docTitle;
     viewerPageBadge.textContent = `Page ${targetPage}`;
