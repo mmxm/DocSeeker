@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional
 from backend.database import get_db_connection, normalize_text
 from backend.crop_service import find_occurrences_on_page, get_query_hash
 
-MAX_OCCURRENCES_PER_DOC = 10
+MAX_OCCURRENCES_PER_DOC = 25
 
 def sanitize_fts_query(query: str) -> List[str]:
     """Nettoie la requête pour extraire les mots alphanumériques."""

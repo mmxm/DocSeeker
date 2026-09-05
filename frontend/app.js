@@ -82,10 +82,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Move Doc Modal
   const moveDocModal = document.getElementById("moveDocModal");
+  const moveDocModalTitle = document.getElementById("moveDocModalTitle");
+  const moveDocCurrentName = document.getElementById("moveDocCurrentName");
   const closeMoveDocModalBtn = document.getElementById("closeMoveDocModalBtn");
   const cancelMoveDocBtn = document.getElementById("cancelMoveDocBtn");
   const confirmMoveDocBtn = document.getElementById("confirmMoveDocBtn");
   const folderSelectList = document.getElementById("folderSelectList");
+  const modalCreateNewFolderBtn = document.getElementById("modalCreateNewFolderBtn");
 
   // Toast Container
   const toastContainer = document.getElementById("toastContainer");
@@ -106,7 +109,23 @@ document.addEventListener("DOMContentLoaded", () => {
   let folderBreadcrumbs = [{ id: null, name: "Documents" }];
   let allFolders = [];
   let currentLoadedDocs = [];
-  let selectedFolderColor = "#ef4444";
+  let selectedFolderColor = "#3b82f6"; // Uniforme bleu par défaut
+
+  // Observateur pour lazy-loading horizontal des extraits cropés
+  const cropObserver = new IntersectionObserver((entries, observer) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const img = entry.target;
+        if (img.dataset.src) {
+          img.src = img.dataset.src;
+          delete img.dataset.src;
+        }
+        observer.unobserve(img);
+      }
+    });
+  }, {
+    rootMargin: "80px 200px" // Pré-chargement fluide avant entrée dans le viewport
+  });
 
   // Sélection multiple & Presse-papier
   let selectedDocIds = new Set();
@@ -261,13 +280,24 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // =========================================================================
-  // Gestion de la Recherche & des Filtres
+  // Gestion de la Recherche & des Filtres (0ms sur titres + debounced FTS)
   // =========================================================================
   searchInput.addEventListener("input", (e) => {
     const val = e.target.value.trim();
     clearSearchBtn.style.display = val ? "flex" : "none";
+
+    // Filtre visuel instantané à 0ms sur les titres déjà affichés
+    if (val && resultsContainer.children.length > 0 && !currentSearchQuery) {
+      const lower = val.toLowerCase();
+      document.querySelectorAll(".doc-card").forEach(card => {
+        const title = (card.querySelector(".doc-title-main")?.getAttribute("title") || "").toLowerCase();
+        card.style.opacity = title.includes(lower) ? "1" : "0.35";
+      });
+    }
+
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
+      document.querySelectorAll(".doc-card").forEach(card => card.style.opacity = "1");
       performSearch(val);
     }, 250);
   });
@@ -560,7 +590,7 @@ document.addEventListener("DOMContentLoaded", () => {
       card.className = "folder-card";
       card.setAttribute("data-folder-id", folder.id);
 
-      const folderColor = folder.color || "#3b82f6";
+      const folderColor = "#3b82f6";
 
       card.innerHTML = `
         <div class="folder-icon-wrapper" style="background-color: ${folderColor};">
@@ -783,7 +813,7 @@ document.addEventListener("DOMContentLoaded", () => {
         doc.vignettes.forEach(v => {
           vignettesHtml += `
             <div class="vignette-item" data-doc-id="${doc.id}" data-page="${v.page_number}" data-occ="${v.occ_id}" data-rect='${JSON.stringify(v.rect || [])}' data-yratio="${v.y_ratio || 0}" data-snippet="${encodeURIComponent(v.text_snippet || '')}" title="Page ${v.page_number} - Cliquer pour ouvrir">
-              <img src="${v.crop_url}" class="vignette-crop-img" alt="Extrait p. ${v.page_number}" loading="lazy" />
+              <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='250' height='125'%3E%3Crect width='100%25' height='100%25' fill='%23f1f5f9'/%3E%3C/svg%3E" data-src="${v.crop_url}" class="vignette-crop-img lazy-crop" alt="Extrait p. ${v.page_number}" loading="lazy" decoding="async" />
               <span class="vignette-page-badge">p. ${v.page_number}</span>
             </div>
           `;
@@ -859,6 +889,9 @@ document.addEventListener("DOMContentLoaded", () => {
         openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], rect, yRatio);
       });
     });
+
+    // Observer pour le chargement paresseux horizontal
+    card.querySelectorAll(".lazy-crop").forEach(img => cropObserver.observe(img));
 
     // Clics couverture et titre (double-clic ou clic si pas en sélection modale)
     const openDocAction = (e) => {
@@ -1156,45 +1189,140 @@ document.addEventListener("DOMContentLoaded", () => {
   let moveModalDocIds = [];
   let moveModalTargetFolderId = null;
 
-  function openBatchMoveModal(docIds) {
+  async function openBatchMoveModal(docIds) {
+    if (!docIds || docIds.length === 0) return;
     moveModalDocIds = docIds;
     moveModalTargetFolderId = null;
+    confirmMoveDocBtn.disabled = true;
+
+    // Charger les dossiers frais depuis l'API
+    try {
+      const res = await fetch("/api/folders");
+      const data = await res.json();
+      allFolders = data.folders || [];
+    } catch (e) {
+      console.error(e);
+    }
+
+    const foldersMap = new Map();
+    allFolders.forEach(f => foldersMap.set(f.id, f));
+
+    // Déterminer l'emplacement actuel
+    let currentCommonFolderId = undefined;
+    const docTitles = [];
+    docIds.forEach(id => {
+      const d = currentLoadedDocs.find(x => x.id === id);
+      if (d) {
+        docTitles.push(d.title);
+        if (currentCommonFolderId === undefined) {
+          currentCommonFolderId = d.folder_id;
+        } else if (currentCommonFolderId !== d.folder_id) {
+          currentCommonFolderId = "multiple";
+        }
+      }
+    });
+
+    // Titre de la boîte de dialogue
+    if (docIds.length === 1) {
+      moveDocModalTitle.textContent = `Déplacer "${docTitles[0] || 'ce document'}"`;
+    } else {
+      moveDocModalTitle.textContent = `Déplacer ${docIds.length} documents`;
+    }
+
+    // Libellé de l'emplacement actuel
+    let currentLocName = "Racine";
+    if (currentCommonFolderId && currentCommonFolderId !== "multiple") {
+      const curF = foldersMap.get(currentCommonFolderId);
+      currentLocName = curF ? curF.name : "Racine";
+    } else if (currentCommonFolderId === "multiple") {
+      currentLocName = "Emplacements multiples";
+    } else if (currentFolderId) {
+      currentLocName = currentFolderName;
+    }
+    moveDocCurrentName.textContent = currentLocName;
 
     folderSelectList.innerHTML = "";
 
-    // Option Racine
+    function getFolderPath(folder) {
+      const parts = [folder.name];
+      let curr = folder;
+      while (curr.parent_id && foldersMap.has(curr.parent_id)) {
+        curr = foldersMap.get(curr.parent_id);
+        parts.unshift(curr.name);
+      }
+      return parts.join(" / ");
+    }
+
+    // 1. Option Racine
+    const isRootCurrent = (currentCommonFolderId === null || (currentCommonFolderId === undefined && !currentFolderId));
     const rootItem = document.createElement("div");
-    rootItem.className = "folder-select-item selected";
+    rootItem.className = `folder-select-item ${isRootCurrent ? 'disabled' : ''}`;
     rootItem.innerHTML = `
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-      </svg>
-      <span>📁 Racine (aucun dossier)</span>
+      <div class="folder-select-item-left">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.2">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+        </svg>
+        <span>Racine (aucun dossier)</span>
+      </div>
+      <span class="folder-select-badge">${isRootCurrent ? 'Actuel' : 'Racine'}</span>
     `;
-    rootItem.addEventListener("click", () => {
-      document.querySelectorAll(".folder-select-item").forEach(el => el.classList.remove("selected"));
-      rootItem.classList.add("selected");
-      moveModalTargetFolderId = null;
-    });
+
+    if (!isRootCurrent) {
+      rootItem.addEventListener("click", () => {
+        document.querySelectorAll(".folder-select-item").forEach(el => el.classList.remove("selected"));
+        rootItem.classList.add("selected");
+        moveModalTargetFolderId = null;
+        confirmMoveDocBtn.disabled = false;
+      });
+    }
     folderSelectList.appendChild(rootItem);
 
-    // Liste des dossiers
-    allFolders.forEach(f => {
+    // 2. Dossiers classés par arborescence
+    const sortedFolders = [...allFolders].map(f => ({
+      ...f,
+      fullPath: getFolderPath(f)
+    })).sort((a, b) => a.fullPath.localeCompare(b.fullPath, 'fr', { sensitivity: 'base' }));
+
+    sortedFolders.forEach(f => {
+      const isCurrent = (currentCommonFolderId === f.id);
       const item = document.createElement("div");
-      item.className = "folder-select-item";
+      item.className = `folder-select-item ${isCurrent ? 'disabled' : ''}`;
+      
+      const depth = (f.fullPath.match(/\//g) || []).length;
+      const indentPx = depth * 14;
+
       item.innerHTML = `
-        <span style="display:inline-block; width:12px; height:12px; border-radius:50%; background-color:${f.color || '#3b82f6'};"></span>
-        <span>${f.name}</span>
+        <div class="folder-select-item-left" style="padding-left: ${indentPx}px;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="#3b82f6" stroke="#3b82f6" stroke-width="1">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span title="${f.fullPath}">${f.name}</span>
+        </div>
+        <span class="folder-select-badge">${isCurrent ? 'Actuel' : (f.doc_count ? `${f.doc_count} doc.` : '0 doc.')}</span>
       `;
-      item.addEventListener("click", () => {
-        document.querySelectorAll(".folder-select-item").forEach(el => el.classList.remove("selected"));
-        item.classList.add("selected");
-        moveModalTargetFolderId = f.id;
-      });
+
+      if (!isCurrent) {
+        item.addEventListener("click", () => {
+          document.querySelectorAll(".folder-select-item").forEach(el => el.classList.remove("selected"));
+          item.classList.add("selected");
+          moveModalTargetFolderId = f.id;
+          confirmMoveDocBtn.disabled = false;
+        });
+      }
+
       folderSelectList.appendChild(item);
     });
 
     moveDocModal.style.display = "flex";
+  }
+
+  if (modalCreateNewFolderBtn) {
+    modalCreateNewFolderBtn.addEventListener("click", () => {
+      folderModalTitle.textContent = "Nouveau dossier";
+      folderNameInput.value = "";
+      folderModal.style.display = "flex";
+      folderNameInput.focus();
+    });
   }
 
   closeMoveDocModalBtn.addEventListener("click", () => moveDocModal.style.display = "none");

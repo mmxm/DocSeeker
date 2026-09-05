@@ -21,9 +21,10 @@ class TestSearchEngine(unittest.TestCase):
         self.assertIn("results", res)
         self.assertGreater(res["total_documents"], 0)
         
+        from backend.search_engine import MAX_OCCURRENCES_PER_DOC
         top_doc = res["results"][0]
-        # Vérifier que les vignettes du ruban sont plafonnées à 10 max
-        self.assertLessEqual(len(top_doc["vignettes"]), 10)
+        # Vérifier que les vignettes du ruban sont plafonnées à MAX_OCCURRENCES_PER_DOC
+        self.assertLessEqual(len(top_doc["vignettes"]), MAX_OCCURRENCES_PER_DOC)
         
         # Vérifier que occurrences_by_page conserve l'intégralité
         self.assertGreaterEqual(len(top_doc["occurrences_by_page"]), len(top_doc["vignettes"]))

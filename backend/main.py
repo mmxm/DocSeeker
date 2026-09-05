@@ -6,6 +6,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Quer
 from fastapi.responses import FileResponse, StreamingResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from backend.database import init_db, get_db_connection
 from backend.indexer import index_pdf_file, remove_document, DOCUMENTS_DIR, COVERS_DIR, CACHE_DIR
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DocFastExplorer API", lifespan=lifespan)
 
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -349,11 +351,15 @@ def search(
 
 @app.get("/api/cover/{doc_id}")
 def get_cover(doc_id: int):
-    """Renvoie la miniature de la première page du document."""
-    cover_path = os.path.join(COVERS_DIR, f"{doc_id}.jpg")
-    if not os.path.exists(cover_path):
-        raise HTTPException(status_code=404, detail="Couverture non disponible.")
-    return FileResponse(cover_path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=3600"})
+    """Renvoie la miniature de la première page du document avec cache immuable longue durée."""
+    cover_webp = os.path.join(COVERS_DIR, f"{doc_id}.webp")
+    cover_jpg = os.path.join(COVERS_DIR, f"{doc_id}.jpg")
+    cache_headers = {"Cache-Control": "public, max-age=31536000, immutable"}
+    if os.path.exists(cover_webp):
+        return FileResponse(cover_webp, media_type="image/webp", headers=cache_headers)
+    if os.path.exists(cover_jpg):
+        return FileResponse(cover_jpg, media_type="image/jpeg", headers=cache_headers)
+    raise HTTPException(status_code=404, detail="Couverture non disponible.")
 
 @app.get("/api/crop/{doc_id}/{page}/{occ_id}")
 def get_crop(doc_id: int, page: int, occ_id: int, h: Optional[str] = Query(None), terms: Optional[str] = Query(None)):
@@ -363,14 +369,20 @@ def get_crop(doc_id: int, page: int, occ_id: int, h: Optional[str] = Query(None)
     terms_decoded = terms or ""
     crop_path = get_or_generate_crop_on_demand(doc_id, page, occ_id, h or "", terms_decoded)
     
+    # Cache court/aucun pour les requêtes de recherche très spécifiques (selon demande utilisateur)
+    nocache_headers = {"Cache-Control": "no-cache, must-revalidate"}
+    
     if crop_path and os.path.exists(crop_path):
-        return FileResponse(crop_path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+        media_type = "image/webp" if crop_path.endswith(".webp") else "image/jpeg"
+        return FileResponse(crop_path, media_type=media_type, headers=nocache_headers)
 
     doc_cache_dir = os.path.join(CACHE_DIR, f"doc_{doc_id}")
     if os.path.exists(doc_cache_dir):
         for fname in os.listdir(doc_cache_dir):
-            if fname.startswith(f"p{page}_occ{occ_id}") and fname.endswith(".jpg"):
-                return FileResponse(os.path.join(doc_cache_dir, fname), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+            if fname.startswith(f"p{page}_occ{occ_id}"):
+                fpath = os.path.join(doc_cache_dir, fname)
+                media_type = "image/webp" if fname.endswith(".webp") else "image/jpeg"
+                return FileResponse(fpath, media_type=media_type, headers=nocache_headers)
 
     raise HTTPException(status_code=404, detail="Vignette non trouvée.")
 

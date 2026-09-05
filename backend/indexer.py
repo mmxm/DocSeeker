@@ -101,6 +101,11 @@ def index_pdf_file(file_path: str, original_filename: str, custom_title: Optiona
         scale = 180 / first_page.rect.width if first_page.rect.width > 0 else 1.0
         matrix = pymupdf.Matrix(scale, scale)
         cover_pix = first_page.get_pixmap(matrix=matrix, alpha=False)
+        cover_webp = os.path.join(COVERS_DIR, f"{doc_id}.webp")
+        try:
+            cover_pix.pil_save(cover_webp, format="WEBP", quality=80)
+        except Exception:
+            pass
         cover_path = os.path.join(COVERS_DIR, f"{doc_id}.jpg")
         cover_pix.save(cover_path)
 

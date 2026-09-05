@@ -93,11 +93,15 @@ def generate_crop_image(doc_id: int, filename: str, page_number: int, occ_data: 
 
     occ_id = occ_data.get("occ_id", 0)
     query_hash = occ_data.get("query_hash") or get_query_hash(query_terms)
-    crop_filename = f"p{page_number}_occ{occ_id}_{query_hash}.jpg"
+    crop_filename = f"p{page_number}_occ{occ_id}_{query_hash}.webp"
     crop_path = os.path.join(doc_cache_dir, crop_filename)
 
     if os.path.exists(crop_path):
         return crop_path
+
+    crop_jpg = os.path.join(doc_cache_dir, f"p{page_number}_occ{occ_id}_{query_hash}.jpg")
+    if os.path.exists(crop_jpg):
+        return crop_jpg
 
     pdf_path = os.path.join(DOCUMENTS_DIR, filename)
     if not os.path.exists(pdf_path):
@@ -158,7 +162,10 @@ def generate_crop_image(doc_id: int, filename: str, page_number: int, occ_data: 
     shape.commit()
 
     pix = page.get_pixmap(clip=clip_rect, dpi=144, alpha=False)
-    pix.save(crop_path)
+    try:
+        pix.pil_save(crop_path, format="WEBP", quality=80)
+    except Exception:
+        pix.save(crop_path)
 
     doc.close()
     return crop_path
@@ -168,10 +175,14 @@ def get_or_generate_crop_on_demand(doc_id: int, page_number: int, occ_id: int, q
     doc_cache_dir = os.path.join(CACHE_DIR, f"doc_{doc_id}")
     os.makedirs(doc_cache_dir, exist_ok=True)
     
-    crop_filename = f"p{page_number}_occ{occ_id}_{query_hash}.jpg" if query_hash else f"p{page_number}_occ{occ_id}.jpg"
+    crop_filename = f"p{page_number}_occ{occ_id}_{query_hash}.webp" if query_hash else f"p{page_number}_occ{occ_id}.webp"
     crop_path = os.path.join(doc_cache_dir, crop_filename)
     if os.path.exists(crop_path):
         return crop_path
+
+    crop_jpg = os.path.join(doc_cache_dir, f"p{page_number}_occ{occ_id}_{query_hash}.jpg" if query_hash else f"p{page_number}_occ{occ_id}.jpg")
+    if os.path.exists(crop_jpg):
+        return crop_jpg
 
     # Génération à la volée
     conn = get_db_connection()
