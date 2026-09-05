@@ -124,8 +124,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Tri des documents et résultats
   const sortSelect = document.getElementById("sortSelect");
+  const sortPillCurrent = document.getElementById("sortPillCurrent");
   let currentSortMode = "name_asc";
   let userManuallyChangedSort = false;
+
+  function updateSortPillLabel() {
+    if (sortPillCurrent && sortSelect && sortSelect.selectedOptions && sortSelect.selectedOptions[0]) {
+      sortPillCurrent.textContent = sortSelect.selectedOptions[0].textContent;
+    }
+  }
 
   // Observateur pour lazy-loading horizontal des extraits cropés
   const cropObserver = new IntersectionObserver((entries, observer) => {
@@ -380,6 +387,7 @@ document.addEventListener("DOMContentLoaded", () => {
     sortSelect.addEventListener("change", (e) => {
       currentSortMode = e.target.value;
       userManuallyChangedSort = true;
+      updateSortPillLabel();
       if (currentSearchQuery && lastSearchResultsData) {
         renderSearchResults(lastSearchResultsData);
       } else {
@@ -387,6 +395,7 @@ document.addEventListener("DOMContentLoaded", () => {
         renderDocumentLibrary(rawLoadedDocs);
       }
     });
+    updateSortPillLabel();
   }
 
   function closeSplitViewer() {
@@ -767,6 +776,7 @@ document.addEventListener("DOMContentLoaded", () => {
         relOpt.remove();
       }
     }
+    updateSortPillLabel();
   }
 
   // =========================================================================
@@ -1102,6 +1112,7 @@ document.addEventListener("DOMContentLoaded", () => {
         currentSortMode = "relevance";
         if (sortSelect) sortSelect.value = "relevance";
       }
+      updateSortPillLabel();
 
       renderSearchResults(data);
     } catch (err) {

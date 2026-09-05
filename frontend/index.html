@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css?v=3.5">
+  <link rel="stylesheet" href="/style.css?v=3.6">
 </head>
 <body class="light-theme">
   <div id="app" class="app-layout">
@@ -177,14 +177,19 @@
 
           <div class="section-bar">
             <h2 id="sectionTitle" class="section-title">Documents</h2>
-            <div class="sort-wrapper">
-              <label for="sortSelect" class="sort-label">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-                  <path d="M3 6h18M6 12h12M10 18h4"></path>
-                </svg>
-                <span>Trier :</span>
-              </label>
-              <select id="sortSelect" class="sort-select">
+            <div class="sort-pill-btn" title="Changer l'ordre d'affichage">
+              <svg class="sort-icon-left" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m3 16 4 4 4-4"></path>
+                <path d="M7 20V4"></path>
+                <path d="m21 8-4-4-4 4"></path>
+                <path d="M17 4v16"></path>
+              </svg>
+              <span class="sort-pill-label">Trier :</span>
+              <span id="sortPillCurrent" class="sort-pill-value">Nom (A → Z)</span>
+              <svg class="sort-icon-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+              <select id="sortSelect" class="sort-select-overlay" title="Trier les documents">
                 <option value="name_asc">Nom (A → Z)</option>
                 <option value="name_desc">Nom (Z → A)</option>
                 <option value="date_mod_desc">Modifié (Plus récent)</option>
@@ -416,6 +421,6 @@
 
   </div>
 
-  <script src="/app.js?v=3.5"></script>
+  <script src="/app.js?v=3.6"></script>
 </body>
 </html>
