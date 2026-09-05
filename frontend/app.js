@@ -1,5 +1,7 @@
 document.addEventListener("DOMContentLoaded", () => {
+  // =========================================================================
   // Éléments DOM
+  // =========================================================================
   const searchInput = document.getElementById("searchInput");
   const clearSearchBtn = document.getElementById("clearSearchBtn");
   const searchStats = document.getElementById("searchStats");
@@ -12,7 +14,21 @@ document.addEventListener("DOMContentLoaded", () => {
   const emptyMessage = document.getElementById("emptyMessage");
   const brandBtn = document.getElementById("brandBtn");
 
-  // Vues Déroulé Vertical Document
+  // Filtres de recherche
+  const filterTitlesOnly = document.getElementById("filterTitlesOnly");
+  const filterTitlesChip = document.getElementById("filterTitlesChip");
+  const filterCurrentFolderOnly = document.getElementById("filterCurrentFolderOnly");
+  const filterFolderChip = document.getElementById("filterFolderChip");
+  const filterFolderLabel = document.getElementById("filterFolderLabel");
+
+  // Navigation par dossiers & fil d'Ariane
+  const breadcrumbsNav = document.getElementById("breadcrumbsNav");
+  const foldersSection = document.getElementById("foldersSection");
+  const foldersContainer = document.getElementById("foldersContainer");
+  const syncDocsBtn = document.getElementById("syncDocsBtn");
+  const newFolderBtn = document.getElementById("newFolderBtn");
+
+  // Vues Déroulé Vertical Document (Split View)
   const backToResultsBtn = document.getElementById("backToResultsBtn");
   const docDetailTitle = document.getElementById("docDetailTitle");
   const docDetailCount = document.getElementById("docDetailCount");
@@ -20,7 +36,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const docSearchInput = document.getElementById("docSearchInput");
   const clearDocSearchBtn = document.getElementById("clearDocSearchBtn");
 
-  // Visualiseur
+  // Visualiseur Latéral
   const viewerDocTitle = document.getElementById("viewerDocTitle");
   const viewerPageBadge = document.getElementById("viewerPageBadge");
   const pdfFrame = document.getElementById("pdfFrame");
@@ -45,6 +61,28 @@ document.addEventListener("DOMContentLoaded", () => {
   const duplicateDate = document.getElementById("duplicateDate");
   const confirmDuplicateOkBtn = document.getElementById("confirmDuplicateOkBtn");
 
+  // Folder Modal
+  const folderModal = document.getElementById("folderModal");
+  const folderModalTitle = document.getElementById("folderModalTitle");
+  const closeFolderModalBtn = document.getElementById("closeFolderModalBtn");
+  const cancelFolderModalBtn = document.getElementById("cancelFolderModalBtn");
+  const saveFolderBtn = document.getElementById("saveFolderBtn");
+  const folderNameInput = document.getElementById("folderNameInput");
+  const colorPicker = document.getElementById("colorPicker");
+
+  // Move Doc Modal
+  const moveDocModal = document.getElementById("moveDocModal");
+  const closeMoveDocModalBtn = document.getElementById("closeMoveDocModalBtn");
+  const cancelMoveDocBtn = document.getElementById("cancelMoveDocBtn");
+  const confirmMoveDocBtn = document.getElementById("confirmMoveDocBtn");
+  const folderSelectList = document.getElementById("folderSelectList");
+
+  // Toast Container
+  const toastContainer = document.getElementById("toastContainer");
+
+  // =========================================================================
+  // État de l'Application
+  // =========================================================================
   let debounceTimer = null;
   let docSearchDebounceTimer = null;
   let currentSearchQuery = "";
@@ -52,10 +90,63 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentActiveDocTitle = "";
   let currentDocOriginalOccurrences = [];
 
-  // Charger la liste initiale
-  loadRecentDocuments();
+  // État des dossiers
+  let currentFolderId = null; // null = racine
+  let currentFolderName = "Documents";
+  let folderBreadcrumbs = [{ id: null, name: "Documents" }];
+  let allFolders = [];
+  let editingFolderId = null;
+  let targetMoveDocId = null;
+  let selectedMoveFolderId = null;
 
-  // Recherche générale
+  // Couleurs Goodnotes disponibles
+  const GOODNOTES_COLORS = [
+    { color: "#ef4444", name: "Corail / Rouge" },
+    { color: "#3b82f6", name: "Bleu Océan" },
+    { color: "#10b981", name: "Vert Émeraude" },
+    { color: "#f59e0b", name: "Ambre Chaud" },
+    { color: "#8b5cf6", name: "Violet Doux" },
+    { color: "#ec4899", name: "Rose Bonbon" },
+    { color: "#64748b", name: "Gris Ardoise" }
+  ];
+  let selectedFolderColor = GOODNOTES_COLORS[0].color;
+
+  // Initialisation du nuancier dans la modale dossier
+  initColorPalette();
+
+  // Chargement initial
+  loadFoldersAndDocuments();
+
+  // =========================================================================
+  // Notifications Toast
+  // =========================================================================
+  function showToast(message, type = "info", duration = 3500) {
+    const toast = document.createElement("div");
+    toast.className = `toast toast-${type}`;
+    
+    let iconSvg = '';
+    if (type === 'success') {
+      iconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+    } else if (type === 'error') {
+      iconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>`;
+    } else {
+      iconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`;
+    }
+
+    toast.innerHTML = `${iconSvg}<span>${message}</span>`;
+    toastContainer.appendChild(toast);
+
+    setTimeout(() => {
+      toast.style.opacity = "0";
+      toast.style.transform = "translateY(15px)";
+      toast.style.transition = "all 0.3s";
+      setTimeout(() => toast.remove(), 300);
+    }, duration);
+  }
+
+  // =========================================================================
+  // Gestion de la Recherche & des Filtres
+  // =========================================================================
   searchInput.addEventListener("input", (e) => {
     const val = e.target.value.trim();
     clearSearchBtn.style.display = val ? "flex" : "none";
@@ -76,22 +167,40 @@ document.addEventListener("DOMContentLoaded", () => {
     searchInput.value = "";
     clearSearchBtn.style.display = "none";
     searchInput.focus();
-    loadRecentDocuments();
+    loadFoldersAndDocuments();
+  });
+
+  // Filtre : Titres uniquement
+  filterTitlesOnly.addEventListener("change", () => {
+    filterTitlesChip.classList.toggle("active", filterTitlesOnly.checked);
+    if (searchInput.value.trim()) {
+      performSearch(searchInput.value.trim());
+    }
+  });
+
+  // Filtre : Dans ce dossier uniquement
+  filterCurrentFolderOnly.addEventListener("change", () => {
+    filterFolderChip.classList.toggle("active", filterCurrentFolderOnly.checked);
+    if (searchInput.value.trim()) {
+      performSearch(searchInput.value.trim());
+    }
   });
 
   brandBtn.addEventListener("click", () => {
     searchInput.value = "";
     clearSearchBtn.style.display = "none";
+    currentFolderId = null;
+    currentFolderName = "Documents";
+    folderBreadcrumbs = [{ id: null, name: "Documents" }];
+    updateFolderFilterVisibility();
     closeSplitViewer();
-    loadRecentDocuments();
+    loadFoldersAndDocuments();
   });
 
-  // Bouton retour aux résultats généraux
   backToResultsBtn.addEventListener("click", () => {
     showGeneralResultsView();
   });
 
-  // Fermeture du lecteur latéral
   closeViewerBtn.addEventListener("click", () => {
     closeSplitViewer();
   });
@@ -109,8 +218,20 @@ document.addEventListener("DOMContentLoaded", () => {
     document.querySelectorAll(".vignette-item.active").forEach(el => el.classList.remove("active"));
   }
 
+  function updateFolderFilterVisibility() {
+    if (currentFolderId === null) {
+      filterFolderLabel.textContent = "Dans ce dossier uniquement";
+      filterFolderChip.style.display = "none";
+      filterCurrentFolderOnly.checked = false;
+      filterFolderChip.classList.remove("active");
+    } else {
+      filterFolderLabel.textContent = `Dans "${currentFolderName}" uniquement`;
+      filterFolderChip.style.display = "inline-flex";
+    }
+  }
+
   // =========================================================================
-  // Recherche Interne au Document en cours (Split View)
+  // Recherche Interne au Document (Split View)
   // =========================================================================
   docSearchInput.addEventListener("input", (e) => {
     const val = e.target.value.trim();
@@ -126,7 +247,6 @@ document.addEventListener("DOMContentLoaded", () => {
     clearDocSearchBtn.style.display = "none";
     docDetailCount.textContent = `${currentDocOriginalOccurrences.length} occurrence${currentDocOriginalOccurrences.length > 1 ? 's' : ''} dans ce document`;
     renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentDocOriginalOccurrences);
-    // Restaurer le surlignage de la recherche d'origine
     updateViewerSearchHighlight(currentSearchQuery);
   });
 
@@ -142,13 +262,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch(`/api/doc-search?doc_id=${currentActiveDocId}&q=${encodeURIComponent(query)}`);
       const data = await res.json();
       const occs = data.occurrences || [];
+
       docDetailCount.textContent = `${occs.length} résultat${occs.length > 1 ? 's' : ''} pour "${query}"`;
       renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, occs);
-      
-      // Mettre à jour le surlignage global dans le PDF : seulement les nouveaux résultats
       updateViewerSearchHighlight(query);
 
-      // Sauter directement sur la 1ère occurrence avec l'encadré actif
       if (occs.length > 0) {
         goToPageAndScrollToOccurrence(occs[0].page_number, occs[0].rect, occs[0].y_ratio);
       }
@@ -157,7 +275,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Met à jour la surbrillance générale de recherche dans PDF.js (remplace l'ancien mot)
   function updateViewerSearchHighlight(query) {
     try {
       const win = pdfFrame.contentWindow;
@@ -180,95 +297,370 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
-  // Chargement des Documents Récents
+  // Navigation Dossiers & Fil d'Ariane (Goodnotes-like)
   // =========================================================================
-  async function loadRecentDocuments() {
+  function renderBreadcrumbs() {
+    breadcrumbsNav.innerHTML = "";
+
+    folderBreadcrumbs.forEach((crumb, index) => {
+      const isLast = (index === folderBreadcrumbs.length - 1);
+
+      if (index > 0) {
+        const sep = document.createElement("span");
+        sep.className = "breadcrumb-separator";
+        sep.innerHTML = `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        `;
+        breadcrumbsNav.appendChild(sep);
+      }
+
+      const item = document.createElement("span");
+      item.className = `breadcrumb-item ${isLast ? 'active' : ''}`;
+      
+      if (index === 0) {
+        item.innerHTML = `
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          ${crumb.name}
+        `;
+      } else {
+        item.textContent = crumb.name;
+      }
+
+      if (!isLast) {
+        item.addEventListener("click", () => {
+          navigateToCrumb(index);
+        });
+      }
+
+      breadcrumbsNav.appendChild(item);
+    });
+  }
+
+  function navigateToCrumb(index) {
+    folderBreadcrumbs = folderBreadcrumbs.slice(0, index + 1);
+    const target = folderBreadcrumbs[index];
+    currentFolderId = target.id;
+    currentFolderName = target.name;
+    updateFolderFilterVisibility();
+    loadFoldersAndDocuments();
+  }
+
+  function enterFolder(folder) {
+    currentFolderId = folder.id;
+    currentFolderName = folder.name;
+    folderBreadcrumbs.push({ id: folder.id, name: folder.name });
+    updateFolderFilterVisibility();
+    loadFoldersAndDocuments();
+  }
+
+  async function loadFoldersAndDocuments() {
     currentSearchQuery = "";
-    sectionTitle.textContent = "Documents disponibles";
-    searchStats.textContent = "";
     showGeneralResultsView();
+    renderBreadcrumbs();
+    updateFolderFilterVisibility();
+
+    sectionTitle.textContent = currentFolderId ? `Documents dans "${currentFolderName}"` : "Documents";
+    searchStats.textContent = "";
 
     try {
-      const res = await fetch("/api/documents");
-      const data = await res.json();
-      renderDocumentLibrary(data.documents || []);
+      // 1. Récupérer les dossiers
+      const parentParam = currentFolderId ? currentFolderId : "root";
+      const foldersRes = await fetch(`/api/folders?parent_id=${parentParam}`);
+      const foldersData = await foldersRes.json();
+      const currentFolders = foldersData.folders || [];
+
+      // Charger également tous les dossiers en mémoire pour le déplacement
+      const allFoldersRes = await fetch("/api/folders");
+      const allFoldersData = await allFoldersRes.json();
+      allFolders = allFoldersData.folders || [];
+
+      renderFolders(currentFolders);
+
+      // 2. Récupérer les documents du dossier courant
+      const docFolderParam = currentFolderId ? currentFolderId : "root";
+      const docsRes = await fetch(`/api/documents?folder_id=${docFolderParam}`);
+      const docsData = await docsRes.json();
+      renderDocumentLibrary(docsData.documents || []);
+
     } catch (err) {
-      console.error("Erreur chargement documents:", err);
+      console.error("Erreur chargement arborescence:", err);
+      showToast("Erreur de chargement des documents et dossiers", "error");
     }
   }
 
+  function renderFolders(folders) {
+    foldersContainer.innerHTML = "";
+
+    if (!folders || folders.length === 0) {
+      foldersSection.style.display = "none";
+      return;
+    }
+
+    foldersSection.style.display = "block";
+
+    folders.forEach(folder => {
+      const card = document.createElement("div");
+      card.className = "folder-card";
+      card.setAttribute("data-folder-id", folder.id);
+
+      const folderColor = folder.color || "#3b82f6";
+
+      card.innerHTML = `
+        <div class="folder-icon-wrapper" style="background-color: ${folderColor};">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+        </div>
+        <div class="folder-info">
+          <div class="folder-name" title="${folder.name}">${folder.name}</div>
+          <div class="folder-meta">${folder.doc_count || 0} document${(folder.doc_count || 0) > 1 ? 's' : ''}</div>
+        </div>
+        <div class="folder-actions">
+          <button class="folder-btn-action btn-delete-folder" title="Supprimer ce dossier" data-id="${folder.id}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+          </button>
+          <div class="folder-chevron">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="9 18 15 12 9 6"></polyline>
+            </svg>
+          </div>
+        </div>
+      `;
+
+      // Clic pour entrer dans le dossier
+      card.addEventListener("click", (e) => {
+        if (e.target.closest(".folder-btn-action")) return;
+        enterFolder(folder);
+      });
+
+      // Bouton supprimer dossier
+      const delBtn = card.querySelector(".btn-delete-folder");
+      delBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        confirmDeleteFolder(folder.id, folder.name);
+      });
+
+      // Drop Zone pour Glisser-Déposer de documents
+      card.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        card.classList.add("drag-over");
+      });
+
+      card.addEventListener("dragleave", () => {
+        card.classList.remove("drag-over");
+      });
+
+      card.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        card.classList.remove("drag-over");
+        const docIdStr = e.dataTransfer.getData("text/plain");
+        if (docIdStr) {
+          const docId = parseInt(docIdStr, 10);
+          await moveDocumentToFolder(docId, folder.id, folder.name);
+        }
+      });
+
+      foldersContainer.appendChild(card);
+    });
+  }
+
+  // =========================================================================
+  // Affichage des Documents (Bibliothèque & Résultats)
+  // =========================================================================
   function renderDocumentLibrary(docs) {
     resultsContainer.innerHTML = "";
 
     if (!docs || docs.length === 0) {
-      emptyState.style.display = "flex";
-      emptyMessage.textContent = "Aucun document indexé. Cliquez sur 'Importer PDF' pour commencer.";
+      if (foldersContainer.children.length === 0) {
+        emptyState.style.display = "flex";
+        emptyMessage.textContent = currentFolderId ? "Ce dossier est vide. Glissez-y des documents ou importez un PDF." : "Aucun document indexé. Cliquez sur 'Importer PDF' ou 'Scanner' pour commencer.";
+      } else {
+        emptyState.style.display = "none";
+      }
       return;
     }
 
     emptyState.style.display = "none";
 
     docs.forEach(doc => {
-      const card = document.createElement("div");
-      card.className = "doc-card";
-      card.innerHTML = `
-        <div class="doc-card-header">
-          <div class="doc-title-main" title="${doc.title}">${doc.title}</div>
-          <div class="doc-meta-badges">
-            <span class="doc-badge-pill">${doc.total_pages} page${doc.total_pages > 1 ? 's' : ''}</span>
-            <button class="btn-delete-doc" data-id="${doc.id}" title="Supprimer ce document">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="3 6 5 6 21 6"></polyline>
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-              </svg>
-              Supprimer
-            </button>
-          </div>
-        </div>
-        <div class="doc-card-body">
-          <div class="doc-cover-wrapper" title="Ouvrir le document">
-            <img src="${doc.cover_url}" class="doc-cover-img" alt="Couverture" loading="lazy" onerror="this.src='/placeholder-cover.png'" />
-          </div>
-          <div class="doc-card-vignettes">
-            <div style="display:flex; align-items:center; height:100%; color:var(--text-dim); font-size:13px;">
-              Tapez un mot-clé ci-dessus pour rechercher et afficher les extraits cropés avec surbrillance.
-            </div>
-          </div>
-        </div>
-      `;
-
-      card.querySelector(".doc-cover-wrapper").addEventListener("click", () => {
-        openDocumentInSplitView(doc.id, doc.title, 1, []);
-      });
-      card.querySelector(".doc-title-main").addEventListener("click", () => {
-        openDocumentInSplitView(doc.id, doc.title, 1, []);
-      });
-
-      card.querySelector(".btn-delete-doc").addEventListener("click", (e) => {
-        e.stopPropagation();
-        confirmDeleteDocument(doc.id, doc.title);
-      });
-
+      const card = createDocCardElement(doc, false);
       resultsContainer.appendChild(card);
     });
   }
 
+  function createDocCardElement(doc, isSearch = false) {
+    const card = document.createElement("div");
+    card.className = "doc-card";
+    card.setAttribute("draggable", "true");
+    card.setAttribute("data-doc-id", doc.id);
+
+    // Événements de Glisser-Déposer pour le document
+    card.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData("text/plain", doc.id);
+      e.dataTransfer.effectAllowed = "move";
+      card.classList.add("dragging");
+    });
+
+    card.addEventListener("dragend", () => {
+      card.classList.remove("dragging");
+    });
+
+    let vignettesHtml = '';
+    if (isSearch) {
+      if (doc.vignettes && doc.vignettes.length > 0) {
+        doc.vignettes.forEach(v => {
+          vignettesHtml += `
+            <div class="vignette-item" data-doc-id="${doc.id}" data-page="${v.page_number}" data-occ="${v.occ_id}" data-rect='${JSON.stringify(v.rect || [])}' data-yratio="${v.y_ratio || 0}" data-snippet="${encodeURIComponent(v.text_snippet || '')}" title="Page ${v.page_number} - Cliquer pour ouvrir">
+              <img src="${v.crop_url}" class="vignette-crop-img" alt="Extrait p. ${v.page_number}" loading="lazy" />
+              <span class="vignette-page-badge">p. ${v.page_number}</span>
+            </div>
+          `;
+        });
+      } else if (filterTitlesOnly.checked) {
+        vignettesHtml = `<div style="display:flex; align-items:center; color:var(--accent); font-size:13px; font-weight:600;">Correspondance dans le titre du document.</div>`;
+      } else {
+        vignettesHtml = `<div style="color:var(--text-dim); font-size:13px; align-self:center;">Aucun extrait visuel.</div>`;
+      }
+    } else {
+      vignettesHtml = `
+        <div style="display:flex; align-items:center; height:100%; color:var(--text-dim); font-size:13px;">
+          Tapez un mot-clé ci-dessus pour rechercher et afficher les extraits cropés avec surbrillance.
+        </div>
+      `;
+    }
+
+    card.innerHTML = `
+      <div class="doc-card-header">
+        <div class="doc-title-main" title="${doc.title}">${doc.title}</div>
+        <div class="doc-meta-badges">
+          ${isSearch ? `<span class="doc-badge-pill highlight">${doc.total_occurrences} occ.</span>` : ''}
+          <span class="doc-badge-pill">${doc.total_pages} page${doc.total_pages > 1 ? 's' : ''}</span>
+          
+          <button class="btn-reindex-doc" data-id="${doc.id}" title="Réindexer ce document">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+            </svg>
+            Réindexer
+          </button>
+
+          <button class="btn-move-doc" data-id="${doc.id}" title="Déplacer vers un autre dossier">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+            Déplacer
+          </button>
+
+          <button class="btn-delete-doc" data-id="${doc.id}" title="Supprimer ce document">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+            Supprimer
+          </button>
+        </div>
+      </div>
+      <div class="doc-card-body">
+        <div class="doc-cover-wrapper" title="Ouvrir le document">
+          <img src="${doc.cover_url}" class="doc-cover-img" alt="Couverture" loading="lazy" onerror="this.src='/placeholder-cover.png'" />
+        </div>
+        <div class="doc-card-vignettes">
+          <div class="vignettes-ribbon-container">
+            ${vignettesHtml}
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Clics vignettes
+    card.querySelectorAll(".vignette-item").forEach(vEl => {
+      vEl.addEventListener("click", () => {
+        const dPage = parseInt(vEl.getAttribute("data-page"), 10);
+        const yRatio = parseFloat(vEl.getAttribute("data-yratio") || 0);
+        let rect = null;
+        try { rect = JSON.parse(vEl.getAttribute("data-rect") || "[]"); } catch(e) {}
+        openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], rect, yRatio);
+      });
+    });
+
+    // Clics couverture et titre
+    const openDocAction = () => {
+      const firstOcc = (doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0] : null;
+      const firstPage = firstOcc ? firstOcc.page_number : 1;
+      const firstRect = firstOcc ? firstOcc.rect : null;
+      const yRatio = firstOcc ? firstOcc.y_ratio : 0;
+      openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], firstRect, yRatio);
+    };
+
+    card.querySelector(".doc-cover-wrapper").addEventListener("click", openDocAction);
+    card.querySelector(".doc-title-main").addEventListener("click", openDocAction);
+
+    // Clic Réindexer
+    const reindexBtn = card.querySelector(".btn-reindex-doc");
+    reindexBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      handleReindexDocument(doc.id, doc.title, reindexBtn);
+    });
+
+    // Clic Déplacer
+    const moveBtn = card.querySelector(".btn-move-doc");
+    moveBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openMoveDocModal(doc.id, doc.title);
+    });
+
+    // Clic Supprimer
+    const delBtn = card.querySelector(".btn-delete-doc");
+    delBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      confirmDeleteDocument(doc.id, doc.title);
+    });
+
+    return card;
+  }
+
   // =========================================================================
-  // Exécution de la Recherche Goodnotes (Instantanée avec Lazy Crop)
+  // Exécution de la Recherche avec Filtres (Titres, Dossier Courant)
   // =========================================================================
   async function performSearch(query) {
     if (!query) {
-      loadRecentDocuments();
+      loadFoldersAndDocuments();
       return;
     }
 
     currentSearchQuery = query;
-    sectionTitle.textContent = `Résultats pour "${query}"`;
-    resultsContainer.innerHTML = `<div style="padding: 20px; color: var(--text-muted);">Recherche en cours...</div>`;
+    foldersSection.style.display = "none";
     showGeneralResultsView();
 
+    const isTitlesOnly = filterTitlesOnly.checked;
+    const isFolderOnly = filterCurrentFolderOnly.checked && currentFolderId !== null;
+
+    let searchScopeLabel = "";
+    if (isTitlesOnly && isFolderOnly) {
+      searchScopeLabel = ` (dans les titres de "${currentFolderName}")`;
+    } else if (isTitlesOnly) {
+      searchScopeLabel = " (titres uniquement)";
+    } else if (isFolderOnly) {
+      searchScopeLabel = ` (dans "${currentFolderName}")`;
+    }
+
+    sectionTitle.textContent = `Résultats pour "${query}"${searchScopeLabel}`;
+    resultsContainer.innerHTML = `<div style="padding: 20px; color: var(--text-muted);">Recherche en cours...</div>`;
+
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+      let url = `/api/search?q=${encodeURIComponent(query)}`;
+      if (isTitlesOnly) url += `&titles_only=true`;
+      if (isFolderOnly) url += `&folder_id=${currentFolderId}`;
+
+      const res = await fetch(url);
       const data = await res.json();
       renderSearchResults(data);
     } catch (err) {
@@ -281,105 +673,262 @@ document.addEventListener("DOMContentLoaded", () => {
     resultsContainer.innerHTML = "";
     const results = data.results || [];
 
-    searchStats.textContent = `${data.total_occurrences} occurrence${data.total_occurrences > 1 ? 's' : ''} dans ${data.total_documents} document${data.total_documents > 1 ? 's' : ''}`;
+    if (filterTitlesOnly.checked) {
+      searchStats.textContent = `${data.total_documents} document${data.total_documents > 1 ? 's' : ''} correspondant${data.total_documents > 1 ? 's' : ''}`;
+    } else {
+      searchStats.textContent = `${data.total_occurrences} occurrence${data.total_occurrences > 1 ? 's' : ''} dans ${data.total_documents} document${data.total_documents > 1 ? 's' : ''}`;
+    }
 
     if (results.length === 0) {
       emptyState.style.display = "flex";
-      emptyMessage.textContent = `Aucun résultat correspondant à "${data.query}". Vérifiez l'orthographe ou essayez d'autres termes.`;
+      emptyMessage.textContent = `Aucun résultat correspondant à "${data.query}".`;
       return;
     }
 
     emptyState.style.display = "none";
 
     results.forEach(doc => {
-      const card = document.createElement("div");
-      card.className = "doc-card";
-
-      // Ruban horizontal : vignettes ordonnées par pertinence à gauche
-      let vignettesHtml = '';
-      if (doc.vignettes && doc.vignettes.length > 0) {
-        doc.vignettes.forEach(v => {
-          vignettesHtml += `
-            <div class="vignette-item" data-doc-id="${doc.id}" data-page="${v.page_number}" data-occ="${v.occ_id}" data-rect='${JSON.stringify(v.rect || [])}' data-yratio="${v.y_ratio || 0}" data-snippet="${encodeURIComponent(v.text_snippet || '')}" title="Page ${v.page_number} - Cliquer pour ouvrir">
-              <img src="${v.crop_url}" class="vignette-crop-img" alt="Extrait p. ${v.page_number}" loading="lazy" />
-              <span class="vignette-page-badge">p. ${v.page_number}</span>
-            </div>
-          `;
-        });
-      } else {
-        vignettesHtml = `<div style="color:var(--text-dim); font-size:13px; align-self:center;">Aucun extrait visuel.</div>`;
-      }
-
-      card.innerHTML = `
-        <div class="doc-card-header">
-          <div class="doc-title-main" title="${doc.title}">${doc.title}</div>
-          <div class="doc-meta-badges">
-            <span class="doc-badge-pill highlight">${doc.total_occurrences} occ.</span>
-            <span class="doc-badge-pill">${doc.total_pages} p.</span>
-            <button class="btn-delete-doc" data-id="${doc.id}" title="Supprimer ce document">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="3 6 5 6 21 6"></polyline>
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-              </svg>
-              Supprimer
-            </button>
-          </div>
-        </div>
-        <div class="doc-card-body">
-          <div class="doc-cover-wrapper" title="Ouvrir le document">
-            <img src="${doc.cover_url}" class="doc-cover-img" alt="Couverture" loading="lazy" onerror="this.src='/placeholder-cover.png'" />
-          </div>
-          <div class="doc-card-vignettes">
-            <div class="vignettes-ribbon-container">
-              ${vignettesHtml}
-            </div>
-          </div>
-        </div>
-      `;
-
-      // Clics sur les vignettes du ruban horizontal
-      card.querySelectorAll(".vignette-item").forEach(vEl => {
-        vEl.addEventListener("click", () => {
-          const dPage = parseInt(vEl.getAttribute("data-page"), 10);
-          const yRatio = parseFloat(vEl.getAttribute("data-yratio") || 0);
-          let rect = null;
-          try {
-            rect = JSON.parse(vEl.getAttribute("data-rect") || "[]");
-          } catch(e) {}
-          openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], rect, yRatio);
-        });
-      });
-
-      // Clic sur la couverture
-      card.querySelector(".doc-cover-wrapper").addEventListener("click", () => {
-        const firstOcc = (doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0] : null;
-        const firstPage = firstOcc ? firstOcc.page_number : 1;
-        const firstRect = firstOcc ? firstOcc.rect : null;
-        const yRatio = firstOcc ? firstOcc.y_ratio : 0;
-        openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], firstRect, yRatio);
-      });
-
-      // Clic sur le titre
-      card.querySelector(".doc-title-main").addEventListener("click", () => {
-        const firstOcc = (doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0] : null;
-        const firstPage = firstOcc ? firstOcc.page_number : 1;
-        const firstRect = firstOcc ? firstOcc.rect : null;
-        const yRatio = firstOcc ? firstOcc.y_ratio : 0;
-        openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], firstRect, yRatio);
-      });
-
-      // Bouton supprimer
-      card.querySelector(".btn-delete-doc").addEventListener("click", (e) => {
-        e.stopPropagation();
-        confirmDeleteDocument(doc.id, doc.title);
-      });
-
+      const card = createDocCardElement(doc, true);
       resultsContainer.appendChild(card);
     });
   }
 
   // =========================================================================
-  // Split View & Navigation Verticale par Document
+  // Réindexation d'un Document Spécifique
+  // =========================================================================
+  async function handleReindexDocument(docId, docTitle, btnElement) {
+    btnElement.classList.add("spinning");
+    btnElement.disabled = true;
+
+    try {
+      const res = await fetch(`/api/documents/${docId}/reindex`, { method: "POST" });
+      if (!res.ok) {
+        throw new Error("Échec de la réindexation");
+      }
+      showToast(`"${docTitle}" réindexé avec succès !`, "success");
+      
+      if (currentSearchQuery) {
+        performSearch(currentSearchQuery);
+      } else {
+        loadFoldersAndDocuments();
+      }
+    } catch (err) {
+      console.error(err);
+      showToast(`Erreur lors de la réindexation de "${docTitle}"`, "error");
+    } finally {
+      btnElement.classList.remove("spinning");
+      btnElement.disabled = false;
+    }
+  }
+
+  // =========================================================================
+  // Synchronisation Automatique / Scan des Nouveaux Documents
+  // =========================================================================
+  syncDocsBtn.addEventListener("click", async () => {
+    syncDocsBtn.disabled = true;
+    syncDocsBtn.querySelector("svg").style.animation = "spin 1s linear infinite";
+
+    try {
+      const res = await fetch("/api/sync", { method: "POST" });
+      const data = await res.json();
+      
+      if (data.added > 0) {
+        showToast(`${data.added} nouveau(x) document(s) détecté(s) et indexé(s) !`, "success", 4500);
+      } else {
+        showToast("Tous les documents PDF sont déjà synchronisés.", "info");
+      }
+
+      loadFoldersAndDocuments();
+    } catch (err) {
+      console.error(err);
+      showToast("Erreur lors de la synchronisation des fichiers", "error");
+    } finally {
+      syncDocsBtn.disabled = false;
+      syncDocsBtn.querySelector("svg").style.animation = "none";
+    }
+  });
+
+  // =========================================================================
+  // Modale Nouveau Dossier & Couleurs
+  // =========================================================================
+  function initColorPalette() {
+    colorPicker.innerHTML = "";
+    GOODNOTES_COLORS.forEach((preset, idx) => {
+      const circle = document.createElement("div");
+      circle.className = `color-preset-circle ${idx === 0 ? 'selected' : ''}`;
+      circle.style.backgroundColor = preset.color;
+      circle.setAttribute("title", preset.name);
+
+      circle.addEventListener("click", () => {
+        document.querySelectorAll(".color-preset-circle").forEach(el => el.classList.remove("selected"));
+        circle.classList.add("selected");
+        selectedFolderColor = preset.color;
+      });
+
+      colorPicker.appendChild(circle);
+    });
+  }
+
+  newFolderBtn.addEventListener("click", () => {
+    editingFolderId = null;
+    folderModalTitle.textContent = currentFolderId ? `Nouveau sous-dossier dans "${currentFolderName}"` : "Nouveau dossier";
+    folderNameInput.value = "";
+    folderModal.style.display = "flex";
+    folderNameInput.focus();
+  });
+
+  closeFolderModalBtn.addEventListener("click", () => {
+    folderModal.style.display = "none";
+  });
+
+  cancelFolderModalBtn.addEventListener("click", () => {
+    folderModal.style.display = "none";
+  });
+
+  folderModal.addEventListener("click", (e) => {
+    if (e.target === folderModal) folderModal.style.display = "none";
+  });
+
+  saveFolderBtn.addEventListener("click", async () => {
+    const name = folderNameInput.value.trim();
+    if (!name) {
+      alert("Veuillez saisir un nom pour le dossier.");
+      folderNameInput.focus();
+      return;
+    }
+
+    try {
+      const payload = {
+        name: name,
+        parent_id: currentFolderId,
+        color: selectedFolderColor
+      };
+
+      const res = await fetch("/api/folders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) throw new Error("Erreur création dossier");
+
+      folderModal.style.display = "none";
+      showToast(`Dossier "${name}" créé avec succès !`, "success");
+      loadFoldersAndDocuments();
+    } catch (err) {
+      console.error(err);
+      showToast("Impossible de créer le dossier", "error");
+    }
+  });
+
+  folderNameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") saveFolderBtn.click();
+  });
+
+  // Suppression de Dossier
+  async function confirmDeleteFolder(folderId, folderName) {
+    if (!confirm(`Supprimer le dossier "${folderName}" ? Les documents qu'il contient seront replacés à la racine.`)) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/folders/${folderId}`, { method: "DELETE" });
+      if (res.ok) {
+        showToast(`Dossier "${folderName}" supprimé.`, "info");
+        loadFoldersAndDocuments();
+      } else {
+        showToast("Erreur lors de la suppression du dossier.", "error");
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("Erreur réseau.", "error");
+    }
+  }
+
+  // =========================================================================
+  // Déplacement de Document (Glisser-Déposer & Modale)
+  // =========================================================================
+  async function moveDocumentToFolder(docId, folderId, folderName = "Racine") {
+    try {
+      const res = await fetch(`/api/documents/${docId}/move`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder_id: folderId })
+      });
+
+      if (!res.ok) throw new Error("Erreur de déplacement");
+
+      showToast(`Document classé dans "${folderName}"`, "success");
+      
+      if (currentSearchQuery) {
+        performSearch(currentSearchQuery);
+      } else {
+        loadFoldersAndDocuments();
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("Erreur lors du déplacement du document", "error");
+    }
+  }
+
+  function openMoveDocModal(docId, docTitle) {
+    targetMoveDocId = docId;
+    selectedMoveFolderId = null;
+
+    folderSelectList.innerHTML = "";
+
+    // Option Racine
+    const rootItem = document.createElement("div");
+    rootItem.className = "folder-select-item selected";
+    rootItem.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+      </svg>
+      <span>📁 Racine (aucun dossier)</span>
+    `;
+    rootItem.addEventListener("click", () => {
+      document.querySelectorAll(".folder-select-item").forEach(el => el.classList.remove("selected"));
+      rootItem.classList.add("selected");
+      selectedMoveFolderId = null;
+    });
+    folderSelectList.appendChild(rootItem);
+
+    // Liste des dossiers
+    allFolders.forEach(f => {
+      const item = document.createElement("div");
+      item.className = "folder-select-item";
+      item.innerHTML = `
+        <span style="display:inline-block; width:12px; height:12px; border-radius:50%; background-color:${f.color || '#3b82f6'};"></span>
+        <span>${f.name}</span>
+      `;
+      item.addEventListener("click", () => {
+        document.querySelectorAll(".folder-select-item").forEach(el => el.classList.remove("selected"));
+        item.classList.add("selected");
+        selectedMoveFolderId = f.id;
+      });
+      folderSelectList.appendChild(item);
+    });
+
+    moveDocModal.style.display = "flex";
+  }
+
+  closeMoveDocModalBtn.addEventListener("click", () => moveDocModal.style.display = "none");
+  cancelMoveDocBtn.addEventListener("click", () => moveDocModal.style.display = "none");
+  moveDocModal.addEventListener("click", (e) => {
+    if (e.target === moveDocModal) moveDocModal.style.display = "none";
+  });
+
+  confirmMoveDocBtn.addEventListener("click", async () => {
+    if (targetMoveDocId) {
+      const targetFolder = allFolders.find(f => f.id === selectedMoveFolderId);
+      const folderName = targetFolder ? targetFolder.name : "Racine";
+      await moveDocumentToFolder(targetMoveDocId, selectedMoveFolderId, folderName);
+      moveDocModal.style.display = "none";
+    }
+  });
+
+  // =========================================================================
+  // Split View & Lecteur PDF
   // =========================================================================
   function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0) {
     const isSameDoc = (currentActiveDocId === docId);
@@ -387,14 +936,11 @@ document.addEventListener("DOMContentLoaded", () => {
     currentActiveDocTitle = docTitle;
     currentDocOriginalOccurrences = occurrences;
 
-    // Réinitialiser le champ de recherche dans le document
     docSearchInput.value = "";
     clearDocSearchBtn.style.display = "none";
 
-    // 1. Activer le layout Split View
     workspace.classList.add("split-active");
 
-    // 2. Basculer la colonne gauche sur la vue verticale des occurrences du document
     generalView.style.display = "none";
     docDetailView.style.display = "block";
     docDetailTitle.textContent = docTitle;
@@ -402,15 +948,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     renderVerticalOccurrences(docId, docTitle, occurrences, targetPage);
 
-    // 3. Piloter le lecteur PDF
     viewerDocTitle.textContent = docTitle;
     viewerPageBadge.textContent = `Page ${targetPage}`;
 
     if (isSameDoc && pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
-      // MÊME DOCUMENT : Aucun rechargement d'iframe ! Saut et scroll instantané
       goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
     } else {
-      // NOUVEAU DOCUMENT : Chargement initial de l'iframe
       const pdfStreamUrl = `/api/pdf/${docId}`;
       let viewerUrl = `/pdfjs/web/viewer.html?file=${encodeURIComponent(pdfStreamUrl)}#page=${targetPage}`;
       if (currentSearchQuery) {
@@ -418,7 +961,6 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       pdfFrame.src = viewerUrl;
 
-      // Dès que le nouveau document est prêt, ajuster le scroll
       pdfFrame.onload = () => {
         setTimeout(() => {
           goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
@@ -463,7 +1005,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Positionnement vertical centré et encadré actif sur l'occurrence cliquée
   function goToPageAndScrollToOccurrence(pageNumber, rect = null, yRatio = 0.0) {
     try {
       const win = pdfFrame.contentWindow;
@@ -474,29 +1015,23 @@ document.addEventListener("DOMContentLoaded", () => {
         const docViewer = win.document;
         const container = docViewer.getElementById("viewerContainer");
 
-        // 1. Changer de page si nécessaire
         if (app.page !== pageNumber) {
           app.page = pageNumber;
         }
 
-        // Fonction pour placer l'encadré et scroller
         const alignOccurrence = () => {
           const pageDiv = docViewer.querySelector(`.page[data-page-number="${pageNumber}"]`);
           if (!pageDiv || !container) return;
 
-          // Retirer l'ancien encadré actif
           docViewer.querySelectorAll(".active-occ-overlay").forEach(el => el.remove());
 
           let left = 20, top = 100, width = 120, height = 24;
 
-          // Calcul des coordonnées exactes sur l'écran
           const pageView = (app.pdfViewer.getPageView && app.pdfViewer.getPageView(pageNumber - 1)) ? app.pdfViewer.getPageView(pageNumber - 1) : null;
           
           if (pageView && pageView.viewport && rect && rect.length === 4) {
             try {
-              // PDF.js utilise l'origine en bas à gauche pour les points PDF, PyMuPDF en haut à gauche
               const [x0, y0, x1, y1] = rect;
-              // Conversion PyMuPDF (top-left) vers PDF.js (bottom-left)
               const pageHeightPts = pageView.viewport.rawDims ? pageView.viewport.rawDims.pageHeight : 842.0;
               const pdfY0 = pageHeightPts - y1;
               const pdfY1 = pageHeightPts - y0;
@@ -525,7 +1060,6 @@ document.addEventListener("DOMContentLoaded", () => {
             top = (yRatio && yRatio > 0) ? (pageDiv.clientHeight * yRatio) : 100;
           }
 
-          // Création de l'encadré actif lumineux sur le mot sélectionné
           const overlay = docViewer.createElement("div");
           overlay.className = "active-occ-overlay";
           overlay.style.position = "absolute";
@@ -541,7 +1075,6 @@ document.addEventListener("DOMContentLoaded", () => {
           overlay.style.zIndex = "50";
           pageDiv.appendChild(overlay);
 
-          // Scroll centré au milieu de la hauteur du conteneur
           const targetScrollTop = pageDiv.offsetTop + top - (container.clientHeight / 2) + (height / 2);
           container.scrollTo({
             top: Math.max(0, targetScrollTop),
@@ -549,7 +1082,6 @@ document.addEventListener("DOMContentLoaded", () => {
           });
         };
 
-        // Exécuter l'alignement immédiatement et après un court délai pour s'assurer du rendu
         alignOccurrence();
         setTimeout(alignOccurrence, 150);
         return;
@@ -574,55 +1106,45 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const res = await fetch(`/api/documents/${docId}`, { method: "DELETE" });
       if (res.ok) {
+        showToast(`Document "${docTitle}" supprimé.`, "info");
         if (currentActiveDocId === docId) {
           closeSplitViewer();
         }
         if (currentSearchQuery) {
           performSearch(currentSearchQuery);
         } else {
-          loadRecentDocuments();
+          loadFoldersAndDocuments();
         }
       } else {
-        alert("Erreur lors de la suppression du document.");
+        showToast("Erreur lors de la suppression.", "error");
       }
     } catch (err) {
       console.error(err);
-      alert("Erreur réseau lors de la suppression.");
+      showToast("Erreur réseau.", "error");
     }
   }
 
   // =========================================================================
-  // Upload, Dropzone & Détection de Doublons Stricts
+  // Upload, Dropzone & Doublons Stricts
   // =========================================================================
   openUploadBtn.addEventListener("click", () => {
     uploadModal.style.display = "flex";
     uploadProgressContainer.style.display = "none";
     uploadProgressBar.style.width = "0%";
+    uploadProgressBar.style.backgroundColor = "var(--accent)";
     fileInput.value = "";
     docTitleInput.value = "";
   });
 
-  closeUploadModalBtn.addEventListener("click", () => {
-    uploadModal.style.display = "none";
-  });
-
+  closeUploadModalBtn.addEventListener("click", () => uploadModal.style.display = "none");
   uploadModal.addEventListener("click", (e) => {
-    if (e.target === uploadModal) {
-      uploadModal.style.display = "none";
-    }
+    if (e.target === uploadModal) uploadModal.style.display = "none";
   });
 
-  // Doublon Modal
-  closeDuplicateModalBtn.addEventListener("click", () => {
-    duplicateModal.style.display = "none";
-  });
-  confirmDuplicateOkBtn.addEventListener("click", () => {
-    duplicateModal.style.display = "none";
-  });
+  closeDuplicateModalBtn.addEventListener("click", () => duplicateModal.style.display = "none");
+  confirmDuplicateOkBtn.addEventListener("click", () => duplicateModal.style.display = "none");
   duplicateModal.addEventListener("click", (e) => {
-    if (e.target === duplicateModal) {
-      duplicateModal.style.display = "none";
-    }
+    if (e.target === duplicateModal) duplicateModal.style.display = "none";
   });
 
   dropZone.addEventListener("click", () => fileInput.click());
@@ -666,6 +1188,9 @@ document.addEventListener("DOMContentLoaded", () => {
     if (customTitle) {
       formData.append("title", customTitle);
     }
+    if (currentFolderId) {
+      formData.append("folder_id", currentFolderId);
+    }
 
     try {
       uploadProgressBar.style.width = "60%";
@@ -698,10 +1223,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       setTimeout(() => {
         uploadModal.style.display = "none";
+        showToast(`Document indexé avec succès !`, "success");
         if (currentSearchQuery) {
           performSearch(currentSearchQuery);
         } else {
-          loadRecentDocuments();
+          loadFoldersAndDocuments();
         }
       }, 500);
 

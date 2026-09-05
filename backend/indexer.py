@@ -179,3 +179,99 @@ def remove_document(doc_id: int) -> bool:
         shutil.rmtree(doc_cache_dir, ignore_errors=True)
 
     return True
+
+def reindex_document(doc_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Réindexe complètement un document existant :
+    1. Récupère les infos actuelles (dont folder_id).
+    2. Purge l'ancien cache de vignettes et la couverture.
+    3. Ré-analyse le PDF physique (mots, bounding boxes, FTS5, couverture, hash).
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, filename, title, folder_id FROM documents WHERE id = ?", (doc_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return None
+
+    filename = row["filename"]
+    existing_folder_id = row["folder_id"]
+    conn.close()
+
+    pdf_path = os.path.join(DOCUMENTS_DIR, filename)
+    if not os.path.exists(pdf_path):
+        return None
+
+    # Vider le cache de vignettes pour ce document
+    doc_cache_dir = os.path.join(CACHE_DIR, f"doc_{doc_id}")
+    if os.path.exists(doc_cache_dir):
+        shutil.rmtree(doc_cache_dir, ignore_errors=True)
+
+    # Réindexer
+    result = index_pdf_file(pdf_path, filename)
+    
+    # Conserver le dossier s'il était classé
+    if existing_folder_id is not None:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE documents SET folder_id = ? WHERE id = ?", (existing_folder_id, doc_id))
+        conn.commit()
+        conn.close()
+        result["folder_id"] = existing_folder_id
+
+    return result
+
+def scan_and_sync_documents() -> Dict[str, Any]:
+    """
+    Scanne le répertoire data/documents/ et indexe automatiquement tous les fichiers PDF
+    qui ne sont pas encore présents dans la base de données.
+    """
+    if not os.path.exists(DOCUMENTS_DIR):
+        os.makedirs(DOCUMENTS_DIR, exist_ok=True)
+        return {"added": 0, "indexed_files": []}
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT filename, file_hash FROM documents")
+    existing_docs = cursor.fetchall()
+    conn.close()
+
+    existing_filenames = {row["filename"] for row in existing_docs}
+    existing_hashes = {row["file_hash"] for row in existing_docs if row["file_hash"]}
+
+    added_files = []
+    
+    for fname in os.listdir(DOCUMENTS_DIR):
+        if not fname.lower().endswith(".pdf"):
+            continue
+        
+        file_path = os.path.join(DOCUMENTS_DIR, fname)
+        if not os.path.isfile(file_path):
+            continue
+
+        # Normalisation NFC du nom pour éviter les disparités d'encodage mac
+        normalized_fname = unicodedata.normalize("NFC", fname)
+
+        if normalized_fname in existing_filenames or fname in existing_filenames:
+            continue
+
+        # Vérifier le hash du fichier
+        try:
+            f_hash = compute_file_hash(file_path)
+            if f_hash in existing_hashes:
+                continue
+
+            # Indexation du nouveau PDF
+            res = index_pdf_file(file_path, normalized_fname)
+            existing_filenames.add(normalized_fname)
+            existing_hashes.add(f_hash)
+            added_files.append(res["title"])
+        except Exception as e:
+            print(f"Erreur lors de l'indexation de {fname}: {e}")
+
+    return {
+        "added": len(added_files),
+        "indexed_files": added_files
+    }
+

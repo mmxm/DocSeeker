@@ -1,7 +1,7 @@
 import json
 import re
 import urllib.parse
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from backend.database import get_db_connection, normalize_text
 from backend.crop_service import find_occurrences_on_page, get_query_hash
 
@@ -13,19 +13,88 @@ def sanitize_fts_query(query: str) -> List[str]:
     words = [w.strip() for w in cleaned.split() if len(w.strip()) > 1]
     return words
 
-def search_documents(query: str) -> Dict[str, Any]:
-    """
-    Exécute la recherche multi-termes ultra-rapide (Lazy Crop & Top 10) :
-    1. Identification des pages et documents via FTS5.
-    2. Calcul du score de pertinence composite.
-    3. Construction instantanée des métadonnées (sans bloquer sur l'écriture d'images disque).
-    4. Ordonnancement :
-       - Ruban horizontal : vignettes les plus pertinentes à gauche (multi-termes d'abord, max 10).
-       - Split View : occurrences ordonnées chronologiquement par page.
-    """
+def get_folder_and_subfolder_ids(folder_id: int) -> List[int]:
+    """Retourne la liste des IDs du dossier et de toute son arborescence de sous-dossiers."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        WITH RECURSIVE subfolders AS (
+            SELECT id FROM folders WHERE id = ?
+            UNION ALL
+            SELECT f.id FROM folders f JOIN subfolders s ON f.parent_id = s.id
+        )
+        SELECT id FROM subfolders;
+    """, (folder_id,))
+    ids = [row["id"] for row in cursor.fetchall()]
+    conn.close()
+    return ids
+
+def search_titles(query: str, folder_id: Optional[int] = None) -> Dict[str, Any]:
+    """Recherche rapide filtrée uniquement dans les titres et noms de fichiers."""
     terms = sanitize_fts_query(query)
     if not terms:
-        return {"query": query, "total_matches": 0, "results": []}
+        return {"query": query, "query_hash": "", "total_documents": 0, "total_occurrences": 0, "results": []}
+
+    norm_terms = [normalize_text(t) for t in terms]
+    allowed_folder_ids = set(get_folder_and_subfolder_ids(folder_id)) if folder_id is not None else None
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, filename, title, folder_id, total_pages, created_at FROM documents")
+    rows = cursor.fetchall()
+    conn.close()
+
+    results = []
+    for r in rows:
+        if allowed_folder_ids is not None and r["folder_id"] not in allowed_folder_ids:
+            continue
+        norm_title = normalize_text(r["title"] or "")
+        norm_filename = normalize_text(r["filename"] or "")
+
+        matches = [t for t in norm_terms if (t in norm_title or t in norm_filename)]
+        if not matches:
+            continue
+
+        matched_all = len(matches) == len(norm_terms)
+        score = 1000.0 if matched_all else (len(matches) * 100.0)
+
+        results.append({
+            "id": r["id"],
+            "filename": r["filename"],
+            "title": r["title"],
+            "folder_id": r["folder_id"],
+            "total_pages": r["total_pages"],
+            "created_at": r["created_at"],
+            "cover_url": f"/api/cover/{r['id']}",
+            "vignettes": [],
+            "occurrences_by_page": [],
+            "total_occurrences": 0,
+            "matched_all_terms": matched_all,
+            "relevance_score": score
+        })
+
+    results.sort(key=lambda d: d["relevance_score"], reverse=True)
+    return {
+        "query": query,
+        "query_hash": get_query_hash(terms),
+        "total_documents": len(results),
+        "total_occurrences": 0,
+        "results": results
+    }
+
+def search_documents(query: str, titles_only: bool = False, folder_id: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Exécute la recherche multi-termes ultra-rapide (Lazy Crop & Top 10) :
+    Supporte titles_only=True et le filtrage par folder_id.
+    """
+    if titles_only:
+        return search_titles(query, folder_id=folder_id)
+
+    terms = sanitize_fts_query(query)
+    if not terms:
+        return {"query": query, "query_hash": "", "total_documents": 0, "total_occurrences": 0, "results": []}
+
+    allowed_folder_ids = set(get_folder_and_subfolder_ids(folder_id)) if folder_id is not None else None
 
     query_hash = get_query_hash(terms)
     encoded_terms = urllib.parse.quote(",".join(terms))
@@ -42,6 +111,7 @@ def search_documents(query: str) -> Dict[str, Any]:
         p.words_json,
         d.filename,
         d.title,
+        d.folder_id,
         d.total_pages,
         d.created_at,
         bm25(pages_fts) as bm25_score
@@ -53,7 +123,10 @@ def search_documents(query: str) -> Dict[str, Any]:
     """
 
     cursor.execute(sql, (fts_and_query,))
-    rows = cursor.fetchall()
+    raw_rows = cursor.fetchall()
+
+    # Filtrer par folder_id si nécessaire
+    rows = [r for r in raw_rows if allowed_folder_ids is None or r["folder_id"] in allowed_folder_ids]
 
     matched_doc_ids_and = {r["doc_id"] for r in rows}
     if len(rows) < 8 and len(terms) > 1:
@@ -61,6 +134,8 @@ def search_documents(query: str) -> Dict[str, Any]:
         or_rows = cursor.fetchall()
         seen_keys = {(r["doc_id"], r["page_number"]) for r in rows}
         for r in or_rows:
+            if allowed_folder_ids is not None and r["folder_id"] not in allowed_folder_ids:
+                continue
             key = (r["doc_id"], r["page_number"])
             if key not in seen_keys:
                 rows.append(r)
@@ -68,7 +143,7 @@ def search_documents(query: str) -> Dict[str, Any]:
 
     if not rows:
         conn.close()
-        return {"query": query, "total_matches": 0, "results": []}
+        return {"query": query, "query_hash": query_hash, "total_documents": 0, "total_occurrences": 0, "results": []}
 
     doc_groups = {}
     for r in rows:
@@ -78,6 +153,7 @@ def search_documents(query: str) -> Dict[str, Any]:
                 "id": doc_id,
                 "filename": r["filename"],
                 "title": r["title"],
+                "folder_id": r["folder_id"],
                 "total_pages": r["total_pages"],
                 "created_at": r["created_at"],
                 "cover_url": f"/api/cover/{doc_id}",

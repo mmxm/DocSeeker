@@ -23,25 +23,42 @@ def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Table des documents avec file_hash pour détection de doublons stricts
+    # Table des dossiers (Goodnotes-like)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS folders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        parent_id INTEGER,
+        color TEXT DEFAULT '#3b82f6',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(parent_id) REFERENCES folders(id) ON DELETE CASCADE
+    );
+    """)
+
+    # Table des documents avec file_hash et folder_id
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS documents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         filename TEXT NOT NULL UNIQUE,
         title TEXT,
         file_hash TEXT,
+        folder_id INTEGER,
         total_pages INTEGER DEFAULT 0,
         file_size INTEGER DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(folder_id) REFERENCES folders(id) ON DELETE SET NULL
     );
     """)
 
-    # Migration si colonne file_hash manquante
+    # Migration si colonne file_hash ou folder_id manquante
     cursor.execute("PRAGMA table_info(documents);")
     columns = [col["name"] for col in cursor.fetchall()]
     if "file_hash" not in columns:
         cursor.execute("ALTER TABLE documents ADD COLUMN file_hash TEXT;")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_file_hash ON documents(file_hash);")
+    if "folder_id" not in columns:
+        cursor.execute("ALTER TABLE documents ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL;")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_folder_id ON documents(folder_id);")
 
     # Table des pages
     cursor.execute("""
