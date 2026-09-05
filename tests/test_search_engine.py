@@ -45,5 +45,17 @@ class TestSearchEngine(unittest.TestCase):
             self.assertIn("page_number", occ)
             self.assertIn("rect", occ)
 
+    def test_search_parenthesized_acronyms_like_geu(self):
+        from backend.crop_service import find_occurrences_on_page
+        sample_words = [
+            [10.0, 20.0, 50.0, 35.0, "La", 1, 1],
+            [55.0, 20.0, 120.0, 35.0, "grossesse", 1, 1],
+            [125.0, 20.0, 180.0, 35.0, "(GEU)", 1, 1],
+            [185.0, 20.0, 240.0, 35.0, "représente", 1, 1],
+        ]
+        occs = find_occurrences_on_page(sample_words, ["GEU"])
+        self.assertEqual(len(occs), 1)
+        self.assertEqual(occs[0]["text"], "(GEU)")
+
 if __name__ == "__main__":
     unittest.main()

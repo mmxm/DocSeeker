@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import hashlib
 import pymupdf
@@ -7,6 +8,32 @@ from backend.database import get_db_connection, normalize_text
 
 DOCUMENTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "documents")
 CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "cache_crops")
+
+def match_word(norm_w: str, term: str) -> bool:
+    """
+    Vérifie si un mot extrait du PDF correspond à un terme de recherche,
+    même s'il est entouré de parenthèses ou ponctuation (ex: '(GEU)', 'GEU,', 'l'utérus', '«GEU»').
+    """
+    if not norm_w or not term:
+        return False
+    # 1. Correspondance exacte ou préfixe direct
+    if norm_w == term or norm_w.startswith(term):
+        return True
+    # 2. Nettoyage de la ponctuation entourant le mot (ex: "(geu)" -> "geu", "mot;" -> "mot")
+    clean_w = re.sub(r'^\W+|\W+$', '', norm_w)
+    if clean_w == term or clean_w.startswith(term):
+        return True
+    # 3. Décomposition en sous-mots alphanumériques (ex: "(geu)", "l'uterus", "geu/fiv")
+    sub_tokens = re.findall(r'\w+', norm_w)
+    for sub in sub_tokens:
+        if sub == term or sub.startswith(term):
+            return True
+        if len(term) >= 4 and term in sub:
+            return True
+    # 4. Sous-chaîne pour termes d'au moins 4 caractères
+    if len(term) >= 4 and term in clean_w:
+        return True
+    return False
 
 def get_query_hash(query_terms: List[str]) -> str:
     """Calcule une empreinte courte et stable des termes de recherche."""
@@ -26,7 +53,7 @@ def find_occurrences_on_page(words_data: List[List[Any]], query_terms: List[str]
     for idx, w in enumerate(words_data):
         norm_w = normalize_text(w[4])
         for term in norm_terms:
-            if norm_w == term or norm_w.startswith(term) or (term in norm_w and len(term) >= 4):
+            if match_word(norm_w, term):
                 matched_words.append({
                     "rect": (w[0], w[1], w[2], w[3]),
                     "word": w[4],
@@ -146,7 +173,7 @@ def generate_crop_image(doc_id: int, filename: str, page_number: int, occ_data: 
         if clip_rect.intersects(w_rect):
             norm_w = normalize_text(w[4])
             for term in norm_terms:
-                if norm_w == term or norm_w.startswith(term) or (term in norm_w and len(term) >= 4):
+                if match_word(norm_w, term):
                     all_highlights.append(w_rect)
                     break
 
