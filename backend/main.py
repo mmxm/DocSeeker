@@ -1,7 +1,7 @@
 import os
 import re
 import shutil
-from typing import Optional
+from typing import Optional, List
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Query
 from fastapi.responses import FileResponse, StreamingResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -182,6 +182,35 @@ def move_document(doc_id: int, payload: DocumentMove):
     conn.close()
 
     return {"status": "success", "doc_id": doc_id, "folder_id": payload.folder_id}
+
+class BatchDocumentMove(BaseModel):
+    doc_ids: List[int]
+    folder_id: Optional[int] = None
+
+@app.post("/api/documents/batch-move")
+def batch_move_documents(payload: BatchDocumentMove):
+    """Déplace plusieurs documents vers un dossier spécifié (ou à la racine si folder_id=None)."""
+    if not payload.doc_ids:
+        return {"status": "success", "moved_count": 0}
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if payload.folder_id is not None:
+        cursor.execute("SELECT id FROM folders WHERE id = ?", (payload.folder_id,))
+        if not cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=400, detail="Dossier cible introuvable.")
+
+    placeholders = ",".join(["?"] * len(payload.doc_ids))
+    cursor.execute(
+        f"UPDATE documents SET folder_id = ? WHERE id IN ({placeholders})",
+        [payload.folder_id] + payload.doc_ids
+    )
+    conn.commit()
+    conn.close()
+
+    return {"status": "success", "moved_count": len(payload.doc_ids), "folder_id": payload.folder_id}
 
 @app.post("/api/documents/{doc_id}/reindex")
 def reindex_single_document(doc_id: int):

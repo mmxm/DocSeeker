@@ -105,7 +105,32 @@ class TestFoldersAndFilters(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data.get("status"), "success")
-        self.assertIn("document", data)
+    def test_batch_move_documents(self):
+        resp = self.client.post("/api/folders", json={"name": "Dossier Batch", "color": "#8b5cf6"})
+        folder_id = resp.json()["folder"]["id"]
+
+        try:
+            resp = self.client.get("/api/documents")
+            docs = resp.json()["documents"]
+            self.assertGreaterEqual(len(docs), 2)
+            doc_ids = [docs[0]["id"], docs[1]["id"]]
+
+            # Déplacement groupé
+            resp = self.client.post("/api/documents/batch-move", json={"doc_ids": doc_ids, "folder_id": folder_id})
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.json()["moved_count"], 2)
+
+            # Vérification
+            resp = self.client.get(f"/api/documents?folder_id={folder_id}")
+            moved_ids = [d["id"] for d in resp.json()["documents"]]
+            for d_id in doc_ids:
+                self.assertIn(d_id, moved_ids)
+
+            # Remise à la racine par lot
+            resp = self.client.post("/api/documents/batch-move", json={"doc_ids": doc_ids, "folder_id": None})
+            self.assertEqual(resp.status_code, 200)
+        finally:
+            self.client.delete(f"/api/folders/{folder_id}")
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,6 +27,16 @@ document.addEventListener("DOMContentLoaded", () => {
   const foldersContainer = document.getElementById("foldersContainer");
   const syncDocsBtn = document.getElementById("syncDocsBtn");
   const newFolderBtn = document.getElementById("newFolderBtn");
+  const pasteClipboardBtn = document.getElementById("pasteClipboardBtn");
+  const pasteClipboardText = document.getElementById("pasteClipboardText");
+
+  // Barre d'actions multi-sélection
+  const selectionActionBar = document.getElementById("selectionActionBar");
+  const selectionCountText = document.getElementById("selectionCountText");
+  const batchMoveBtn = document.getElementById("batchMoveBtn");
+  const batchCutBtn = document.getElementById("batchCutBtn");
+  const batchDeleteBtn = document.getElementById("batchDeleteBtn");
+  const clearSelectionBtn = document.getElementById("clearSelectionBtn");
 
   // Vues Déroulé Vertical Document (Split View)
   const backToResultsBtn = document.getElementById("backToResultsBtn");
@@ -95,21 +105,13 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentFolderName = "Documents";
   let folderBreadcrumbs = [{ id: null, name: "Documents" }];
   let allFolders = [];
-  let editingFolderId = null;
-  let targetMoveDocId = null;
-  let selectedMoveFolderId = null;
+  let currentLoadedDocs = [];
+  let selectedFolderColor = "#ef4444";
 
-  // Couleurs Goodnotes disponibles
-  const GOODNOTES_COLORS = [
-    { color: "#ef4444", name: "Corail / Rouge" },
-    { color: "#3b82f6", name: "Bleu Océan" },
-    { color: "#10b981", name: "Vert Émeraude" },
-    { color: "#f59e0b", name: "Ambre Chaud" },
-    { color: "#8b5cf6", name: "Violet Doux" },
-    { color: "#ec4899", name: "Rose Bonbon" },
-    { color: "#64748b", name: "Gris Ardoise" }
-  ];
-  let selectedFolderColor = GOODNOTES_COLORS[0].color;
+  // Sélection multiple & Presse-papier
+  let selectedDocIds = new Set();
+  let lastSelectedDocId = null;
+  let clipboardDocIds = [];
 
   // Initialisation du nuancier dans la modale dossier
   initColorPalette();
@@ -143,6 +145,120 @@ document.addEventListener("DOMContentLoaded", () => {
       setTimeout(() => toast.remove(), 300);
     }, duration);
   }
+
+  // =========================================================================
+  // Gestion de la Sélection Multiple & Presse-Papier
+  // =========================================================================
+  function updateSelectionUI() {
+    // Mettre à jour la classe .selected sur toutes les cartes affichées
+    document.querySelectorAll(".doc-card").forEach(card => {
+      const docId = parseInt(card.getAttribute("data-doc-id"), 10);
+      if (selectedDocIds.has(docId)) {
+        card.classList.add("selected");
+      } else {
+        card.classList.remove("selected");
+      }
+    });
+
+    const count = selectedDocIds.size;
+    if (count > 0) {
+      selectionActionBar.style.display = "flex";
+      selectionCountText.textContent = `${count} document${count > 1 ? 's' : ''} sélectionné${count > 1 ? 's' : ''}`;
+    } else {
+      selectionActionBar.style.display = "none";
+    }
+  }
+
+  function clearSelection() {
+    selectedDocIds.clear();
+    lastSelectedDocId = null;
+    updateSelectionUI();
+  }
+
+  function updatePasteButtonUI() {
+    if (clipboardDocIds && clipboardDocIds.length > 0) {
+      pasteClipboardBtn.style.display = "inline-flex";
+      pasteClipboardText.textContent = `Coller ici (${clipboardDocIds.length})`;
+    } else {
+      pasteClipboardBtn.style.display = "none";
+    }
+  }
+
+  function cutSelection() {
+    if (selectedDocIds.size === 0) return;
+    clipboardDocIds = Array.from(selectedDocIds);
+    updatePasteButtonUI();
+    showToast(`${clipboardDocIds.length} document(s) coupé(s). Ouvrez un dossier ou le fil d'Ariane et appuyez sur Cmd+V ou 'Coller ici'.`, "info", 4500);
+    clearSelection();
+  }
+
+  async function pasteClipboard() {
+    if (!clipboardDocIds || clipboardDocIds.length === 0) return;
+    await batchMoveDocuments(clipboardDocIds, currentFolderId, currentFolderName);
+    clipboardDocIds = [];
+    updatePasteButtonUI();
+  }
+
+  clearSelectionBtn.addEventListener("click", clearSelection);
+  batchCutBtn.addEventListener("click", cutSelection);
+  pasteClipboardBtn.addEventListener("click", pasteClipboard);
+
+  batchMoveBtn.addEventListener("click", () => {
+    if (selectedDocIds.size === 0) return;
+    openBatchMoveModal(Array.from(selectedDocIds));
+  });
+
+  batchDeleteBtn.addEventListener("click", async () => {
+    const count = selectedDocIds.size;
+    if (count === 0) return;
+    if (!confirm(`Supprimer définitivement les ${count} documents sélectionnés ?`)) return;
+
+    const idsToDelete = Array.from(selectedDocIds);
+    clearSelection();
+
+    try {
+      for (const id of idsToDelete) {
+        await fetch(`/api/documents/${id}`, { method: "DELETE" });
+      }
+      showToast(`${count} document(s) supprimé(s).`, "info");
+      loadFoldersAndDocuments();
+    } catch (err) {
+      console.error(err);
+      showToast("Erreur lors de la suppression par lot.", "error");
+    }
+  });
+
+  // Raccourcis Clavier Globaux (Cmd/Ctrl + X, Cmd/Ctrl + V, Cmd/Ctrl + A, Échap)
+  window.addEventListener("keydown", (e) => {
+    // Ne pas intercepter si l'utilisateur est en train de taper dans un champ de saisie
+    const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : "";
+    if (activeTag === "input" || activeTag === "textarea") return;
+
+    const isCmdOrCtrl = e.metaKey || e.ctrlKey;
+
+    if (isCmdOrCtrl && e.key.toLowerCase() === "x") {
+      if (selectedDocIds.size > 0) {
+        e.preventDefault();
+        cutSelection();
+      }
+    } else if (isCmdOrCtrl && e.key.toLowerCase() === "v") {
+      if (clipboardDocIds.length > 0) {
+        e.preventDefault();
+        pasteClipboard();
+      }
+    } else if (isCmdOrCtrl && e.key.toLowerCase() === "a") {
+      // Tout sélectionner dans la vue actuelle
+      if (currentLoadedDocs.length > 0) {
+        e.preventDefault();
+        currentLoadedDocs.forEach(d => selectedDocIds.add(d.id));
+        updateSelectionUI();
+      }
+    } else if (e.key === "Escape") {
+      if (selectedDocIds.size > 0) {
+        clearSelection();
+      }
+    }
+  });
 
   // =========================================================================
   // Gestion de la Recherche & des Filtres
@@ -194,6 +310,7 @@ document.addEventListener("DOMContentLoaded", () => {
     folderBreadcrumbs = [{ id: null, name: "Documents" }];
     updateFolderFilterVisibility();
     closeSplitViewer();
+    clearSelection();
     loadFoldersAndDocuments();
   });
 
@@ -297,7 +414,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
-  // Navigation Dossiers & Fil d'Ariane (Goodnotes-like)
+  // Navigation Dossiers & Fil d'Ariane (Goodnotes-like) avec Cibles de Drop
   // =========================================================================
   function renderBreadcrumbs() {
     breadcrumbsNav.innerHTML = "";
@@ -309,7 +426,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const sep = document.createElement("span");
         sep.className = "breadcrumb-separator";
         sep.innerHTML = `
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <polyline points="9 18 15 12 9 6"></polyline>
           </svg>
         `;
@@ -318,10 +435,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const item = document.createElement("span");
       item.className = `breadcrumb-item ${isLast ? 'active' : ''}`;
+      item.setAttribute("data-folder-id", crumb.id === null ? "root" : crumb.id);
       
       if (index === 0) {
         item.innerHTML = `
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
           </svg>
           ${crumb.name}
@@ -330,11 +448,42 @@ document.addEventListener("DOMContentLoaded", () => {
         item.textContent = crumb.name;
       }
 
+      // Clic pour naviguer en arrière
       if (!isLast) {
         item.addEventListener("click", () => {
           navigateToCrumb(index);
         });
       }
+
+      // Drop Zone sur TOUS les éléments du fil d'ariane (y compris la racine Documents)
+      item.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        item.classList.add("drag-over");
+      });
+
+      item.addEventListener("dragleave", () => {
+        item.classList.remove("drag-over");
+      });
+
+      item.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        item.classList.remove("drag-over");
+
+        let docIds = [];
+        const jsonPayload = e.dataTransfer.getData("application/json");
+        if (jsonPayload) {
+          try { docIds = JSON.parse(jsonPayload); } catch (err) {}
+        }
+        if (!docIds || docIds.length === 0) {
+          const plainId = e.dataTransfer.getData("text/plain");
+          if (plainId) docIds = [parseInt(plainId, 10)];
+        }
+
+        if (docIds.length > 0) {
+          await batchMoveDocuments(docIds, crumb.id, crumb.name);
+        }
+      });
 
       breadcrumbsNav.appendChild(item);
     });
@@ -346,6 +495,7 @@ document.addEventListener("DOMContentLoaded", () => {
     currentFolderId = target.id;
     currentFolderName = target.name;
     updateFolderFilterVisibility();
+    clearSelection();
     loadFoldersAndDocuments();
   }
 
@@ -354,6 +504,7 @@ document.addEventListener("DOMContentLoaded", () => {
     currentFolderName = folder.name;
     folderBreadcrumbs.push({ id: folder.id, name: folder.name });
     updateFolderFilterVisibility();
+    clearSelection();
     loadFoldersAndDocuments();
   }
 
@@ -362,6 +513,7 @@ document.addEventListener("DOMContentLoaded", () => {
     showGeneralResultsView();
     renderBreadcrumbs();
     updateFolderFilterVisibility();
+    updatePasteButtonUI();
 
     sectionTitle.textContent = currentFolderId ? `Documents dans "${currentFolderName}"` : "Documents";
     searchStats.textContent = "";
@@ -384,7 +536,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const docFolderParam = currentFolderId ? currentFolderId : "root";
       const docsRes = await fetch(`/api/documents?folder_id=${docFolderParam}`);
       const docsData = await docsRes.json();
-      renderDocumentLibrary(docsData.documents || []);
+      currentLoadedDocs = docsData.documents || [];
+      renderDocumentLibrary(currentLoadedDocs);
 
     } catch (err) {
       console.error("Erreur chargement arborescence:", err);
@@ -411,7 +564,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       card.innerHTML = `
         <div class="folder-icon-wrapper" style="background-color: ${folderColor};">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
           </svg>
         </div>
@@ -421,13 +574,13 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
         <div class="folder-actions">
           <button class="folder-btn-action btn-delete-folder" title="Supprimer ce dossier" data-id="${folder.id}">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6"></polyline>
               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
             </svg>
           </button>
           <div class="folder-chevron">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <polyline points="9 18 15 12 9 6"></polyline>
             </svg>
           </div>
@@ -447,7 +600,7 @@ document.addEventListener("DOMContentLoaded", () => {
         confirmDeleteFolder(folder.id, folder.name);
       });
 
-      // Drop Zone pour Glisser-Déposer de documents
+      // Drop Zone pour Glisser-Déposer de documents (multi ou unique)
       card.addEventListener("dragover", (e) => {
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
@@ -461,10 +614,19 @@ document.addEventListener("DOMContentLoaded", () => {
       card.addEventListener("drop", async (e) => {
         e.preventDefault();
         card.classList.remove("drag-over");
-        const docIdStr = e.dataTransfer.getData("text/plain");
-        if (docIdStr) {
-          const docId = parseInt(docIdStr, 10);
-          await moveDocumentToFolder(docId, folder.id, folder.name);
+
+        let docIds = [];
+        const jsonPayload = e.dataTransfer.getData("application/json");
+        if (jsonPayload) {
+          try { docIds = JSON.parse(jsonPayload); } catch (err) {}
+        }
+        if (!docIds || docIds.length === 0) {
+          const plainId = e.dataTransfer.getData("text/plain");
+          if (plainId) docIds = [parseInt(plainId, 10)];
+        }
+
+        if (docIds.length > 0) {
+          await batchMoveDocuments(docIds, folder.id, folder.name);
         }
       });
 
@@ -477,6 +639,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
   function renderDocumentLibrary(docs) {
     resultsContainer.innerHTML = "";
+    currentLoadedDocs = docs || [];
 
     if (!docs || docs.length === 0) {
       if (foldersContainer.children.length === 0) {
@@ -494,23 +657,78 @@ document.addEventListener("DOMContentLoaded", () => {
       const card = createDocCardElement(doc, false);
       resultsContainer.appendChild(card);
     });
+
+    updateSelectionUI();
   }
 
   function createDocCardElement(doc, isSearch = false) {
     const card = document.createElement("div");
-    card.className = "doc-card";
+    card.className = `doc-card ${selectedDocIds.has(doc.id) ? 'selected' : ''}`;
     card.setAttribute("draggable", "true");
     card.setAttribute("data-doc-id", doc.id);
 
-    // Événements de Glisser-Déposer pour le document
+    // Glisser-Déposer (Support multi-sélection)
     card.addEventListener("dragstart", (e) => {
-      e.dataTransfer.setData("text/plain", doc.id);
+      // Si la carte traînée n'est pas dans la sélection, la sélectionner exclusivement
+      if (!selectedDocIds.has(doc.id)) {
+        if (!e.metaKey && !e.ctrlKey) {
+          selectedDocIds.clear();
+        }
+        selectedDocIds.add(doc.id);
+        updateSelectionUI();
+      }
+
+      const idsToDrag = Array.from(selectedDocIds);
+      e.dataTransfer.setData("application/json", JSON.stringify(idsToDrag));
+      e.dataTransfer.setData("text/plain", doc.id.toString());
       e.dataTransfer.effectAllowed = "move";
+
       card.classList.add("dragging");
     });
 
     card.addEventListener("dragend", () => {
       card.classList.remove("dragging");
+    });
+
+    // Clic pour sélection avec Cmd / Ctrl ou Maj
+    card.addEventListener("click", (e) => {
+      // Si le clic vient d'un bouton d'action ou d'une vignette, ne pas modifier la sélection globale
+      if (e.target.closest("button") || e.target.closest(".vignette-item")) return;
+
+      const isCmdOrCtrl = e.metaKey || e.ctrlKey;
+      const isShift = e.shiftKey;
+
+      if (isCmdOrCtrl) {
+        // Toggle unique
+        if (selectedDocIds.has(doc.id)) {
+          selectedDocIds.delete(doc.id);
+        } else {
+          selectedDocIds.add(doc.id);
+        }
+        lastSelectedDocId = doc.id;
+        updateSelectionUI();
+        return;
+      }
+
+      if (isShift && lastSelectedDocId && currentLoadedDocs.length > 0) {
+        // Sélection par plage (Shift+Click)
+        const ids = currentLoadedDocs.map(d => d.id);
+        const startIdx = ids.indexOf(lastSelectedDocId);
+        const endIdx = ids.indexOf(doc.id);
+        if (startIdx !== -1 && endIdx !== -1) {
+          const [low, high] = [Math.min(startIdx, endIdx), Math.max(startIdx, endIdx)];
+          for (let i = low; i <= high; i++) {
+            selectedDocIds.add(ids[i]);
+          }
+          updateSelectionUI();
+          return;
+        }
+      }
+
+      // Clic normal : si une sélection était active, la vider
+      if (selectedDocIds.size > 0) {
+        clearSelection();
+      }
     });
 
     let vignettesHtml = '';
@@ -525,14 +743,14 @@ document.addEventListener("DOMContentLoaded", () => {
           `;
         });
       } else if (filterTitlesOnly.checked) {
-        vignettesHtml = `<div style="display:flex; align-items:center; color:var(--accent); font-size:13px; font-weight:600;">Correspondance dans le titre du document.</div>`;
+        vignettesHtml = `<div style="display:flex; align-items:center; color:var(--accent); font-size:12.5px; font-weight:600;">Correspondance dans le titre du document.</div>`;
       } else {
-        vignettesHtml = `<div style="color:var(--text-dim); font-size:13px; align-self:center;">Aucun extrait visuel.</div>`;
+        vignettesHtml = `<div style="color:var(--text-dim); font-size:12.5px; align-self:center;">Aucun extrait visuel.</div>`;
       }
     } else {
       vignettesHtml = `
-        <div style="display:flex; align-items:center; height:100%; color:var(--text-dim); font-size:13px;">
-          Tapez un mot-clé ci-dessus pour rechercher et afficher les extraits cropés avec surbrillance.
+        <div style="display:flex; align-items:center; height:100%; color:var(--text-dim); font-size:12.5px;">
+          Tapez un mot-clé ci-dessus pour afficher les extraits cropés avec surbrillance.
         </div>
       `;
     }
@@ -542,10 +760,10 @@ document.addEventListener("DOMContentLoaded", () => {
         <div class="doc-title-main" title="${doc.title}">${doc.title}</div>
         <div class="doc-meta-badges">
           ${isSearch ? `<span class="doc-badge-pill highlight">${doc.total_occurrences} occ.</span>` : ''}
-          <span class="doc-badge-pill">${doc.total_pages} page${doc.total_pages > 1 ? 's' : ''}</span>
+          <span class="doc-badge-pill">${doc.total_pages} p.</span>
           
           <button class="btn-reindex-doc" data-id="${doc.id}" title="Réindexer ce document">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
               <polyline points="23 4 23 10 17 10"></polyline>
               <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
             </svg>
@@ -553,14 +771,14 @@ document.addEventListener("DOMContentLoaded", () => {
           </button>
 
           <button class="btn-move-doc" data-id="${doc.id}" title="Déplacer vers un autre dossier">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
             </svg>
             Déplacer
           </button>
 
           <button class="btn-delete-doc" data-id="${doc.id}" title="Supprimer ce document">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6"></polyline>
               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
             </svg>
@@ -591,8 +809,10 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     });
 
-    // Clics couverture et titre
-    const openDocAction = () => {
+    // Clics couverture et titre (double-clic ou clic si pas en sélection modale)
+    const openDocAction = (e) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+      if (selectedDocIds.size > 0) return;
       const firstOcc = (doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0] : null;
       const firstPage = firstOcc ? firstOcc.page_number : 1;
       const firstRect = firstOcc ? firstOcc.rect : null;
@@ -614,7 +834,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const moveBtn = card.querySelector(".btn-move-doc");
     moveBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      openMoveDocModal(doc.id, doc.title);
+      openBatchMoveModal([doc.id]);
     });
 
     // Clic Supprimer
@@ -628,7 +848,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
-  // Exécution de la Recherche avec Filtres (Titres, Dossier Courant)
+  // Recherche avec Filtres (Titres & Dossier)
   // =========================================================================
   async function performSearch(query) {
     if (!query) {
@@ -653,7 +873,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     sectionTitle.textContent = `Résultats pour "${query}"${searchScopeLabel}`;
-    resultsContainer.innerHTML = `<div style="padding: 20px; color: var(--text-muted);">Recherche en cours...</div>`;
+    resultsContainer.innerHTML = `<div style="padding: 16px; color: var(--text-muted);">Recherche en cours...</div>`;
 
     try {
       let url = `/api/search?q=${encodeURIComponent(query)}`;
@@ -662,10 +882,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const res = await fetch(url);
       const data = await res.json();
+      currentLoadedDocs = data.results || [];
       renderSearchResults(data);
     } catch (err) {
       console.error("Erreur recherche:", err);
-      resultsContainer.innerHTML = `<div style="padding: 20px; color: var(--danger);">Erreur lors de la recherche.</div>`;
+      resultsContainer.innerHTML = `<div style="padding: 16px; color: var(--danger);">Erreur lors de la recherche.</div>`;
     }
   }
 
@@ -691,10 +912,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const card = createDocCardElement(doc, true);
       resultsContainer.appendChild(card);
     });
+
+    updateSelectionUI();
   }
 
   // =========================================================================
-  // Réindexation d'un Document Spécifique
+  // Réindexation d'un Document
   // =========================================================================
   async function handleReindexDocument(docId, docTitle, btnElement) {
     btnElement.classList.add("spinning");
@@ -702,9 +925,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       const res = await fetch(`/api/documents/${docId}/reindex`, { method: "POST" });
-      if (!res.ok) {
-        throw new Error("Échec de la réindexation");
-      }
+      if (!res.ok) throw new Error("Échec de la réindexation");
       showToast(`"${docTitle}" réindexé avec succès !`, "success");
       
       if (currentSearchQuery) {
@@ -722,7 +943,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
-  // Synchronisation Automatique / Scan des Nouveaux Documents
+  // Synchronisation Automatique / Scan
   // =========================================================================
   syncDocsBtn.addEventListener("click", async () => {
     syncDocsBtn.disabled = true;
@@ -753,7 +974,17 @@ document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
   function initColorPalette() {
     colorPicker.innerHTML = "";
-    GOODNOTES_COLORS.forEach((preset, idx) => {
+    const colors = [
+      { color: "#ef4444", name: "Corail / Rouge" },
+      { color: "#3b82f6", name: "Bleu Océan" },
+      { color: "#10b981", name: "Vert Émeraude" },
+      { color: "#f59e0b", name: "Ambre Chaud" },
+      { color: "#8b5cf6", name: "Violet Doux" },
+      { color: "#ec4899", name: "Rose Bonbon" },
+      { color: "#64748b", name: "Gris Ardoise" }
+    ];
+
+    colors.forEach((preset, idx) => {
       const circle = document.createElement("div");
       circle.className = `color-preset-circle ${idx === 0 ? 'selected' : ''}`;
       circle.style.backgroundColor = preset.color;
@@ -770,21 +1001,14 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   newFolderBtn.addEventListener("click", () => {
-    editingFolderId = null;
     folderModalTitle.textContent = currentFolderId ? `Nouveau sous-dossier dans "${currentFolderName}"` : "Nouveau dossier";
     folderNameInput.value = "";
     folderModal.style.display = "flex";
     folderNameInput.focus();
   });
 
-  closeFolderModalBtn.addEventListener("click", () => {
-    folderModal.style.display = "none";
-  });
-
-  cancelFolderModalBtn.addEventListener("click", () => {
-    folderModal.style.display = "none";
-  });
-
+  closeFolderModalBtn.addEventListener("click", () => folderModal.style.display = "none");
+  cancelFolderModalBtn.addEventListener("click", () => folderModal.style.display = "none");
   folderModal.addEventListener("click", (e) => {
     if (e.target === folderModal) folderModal.style.display = "none";
   });
@@ -846,20 +1070,27 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
-  // Déplacement de Document (Glisser-Déposer & Modale)
+  // Déplacement par Lot (Multi-documents & Glisser-Déposer / Modale)
   // =========================================================================
-  async function moveDocumentToFolder(docId, folderId, folderName = "Racine") {
+  async function batchMoveDocuments(docIds, folderId, folderName = "Racine") {
+    if (!docIds || docIds.length === 0) return;
+
     try {
-      const res = await fetch(`/api/documents/${docId}/move`, {
-        method: "PATCH",
+      const res = await fetch(`/api/documents/batch-move`, {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ folder_id: folderId })
+        body: JSON.stringify({
+          doc_ids: docIds,
+          folder_id: folderId
+        })
       });
 
       if (!res.ok) throw new Error("Erreur de déplacement");
 
-      showToast(`Document classé dans "${folderName}"`, "success");
-      
+      const count = docIds.length;
+      showToast(`${count} document${count > 1 ? 's' : ''} déplacé${count > 1 ? 's' : ''} dans "${folderName}"`, "success");
+      clearSelection();
+
       if (currentSearchQuery) {
         performSearch(currentSearchQuery);
       } else {
@@ -867,13 +1098,16 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     } catch (err) {
       console.error(err);
-      showToast("Erreur lors du déplacement du document", "error");
+      showToast("Erreur lors du déplacement", "error");
     }
   }
 
-  function openMoveDocModal(docId, docTitle) {
-    targetMoveDocId = docId;
-    selectedMoveFolderId = null;
+  let moveModalDocIds = [];
+  let moveModalTargetFolderId = null;
+
+  function openBatchMoveModal(docIds) {
+    moveModalDocIds = docIds;
+    moveModalTargetFolderId = null;
 
     folderSelectList.innerHTML = "";
 
@@ -889,7 +1123,7 @@ document.addEventListener("DOMContentLoaded", () => {
     rootItem.addEventListener("click", () => {
       document.querySelectorAll(".folder-select-item").forEach(el => el.classList.remove("selected"));
       rootItem.classList.add("selected");
-      selectedMoveFolderId = null;
+      moveModalTargetFolderId = null;
     });
     folderSelectList.appendChild(rootItem);
 
@@ -904,7 +1138,7 @@ document.addEventListener("DOMContentLoaded", () => {
       item.addEventListener("click", () => {
         document.querySelectorAll(".folder-select-item").forEach(el => el.classList.remove("selected"));
         item.classList.add("selected");
-        selectedMoveFolderId = f.id;
+        moveModalTargetFolderId = f.id;
       });
       folderSelectList.appendChild(item);
     });
@@ -919,10 +1153,10 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   confirmMoveDocBtn.addEventListener("click", async () => {
-    if (targetMoveDocId) {
-      const targetFolder = allFolders.find(f => f.id === selectedMoveFolderId);
+    if (moveModalDocIds.length > 0) {
+      const targetFolder = allFolders.find(f => f.id === moveModalTargetFolderId);
       const folderName = targetFolder ? targetFolder.name : "Racine";
-      await moveDocumentToFolder(targetMoveDocId, selectedMoveFolderId, folderName);
+      await batchMoveDocuments(moveModalDocIds, moveModalTargetFolderId, folderName);
       moveDocModal.style.display = "none";
     }
   });
@@ -973,7 +1207,7 @@ document.addEventListener("DOMContentLoaded", () => {
     docOccurrencesList.innerHTML = "";
 
     if (!occurrences || occurrences.length === 0) {
-      docOccurrencesList.innerHTML = `<div style="color:var(--text-muted); font-size:13px; padding:12px;">Aucun extrait trouvé pour ce terme dans ce document.</div>`;
+      docOccurrencesList.innerHTML = `<div style="color:var(--text-muted); font-size:12.5px; padding:10px;">Aucun extrait trouvé pour ce terme dans ce document.</div>`;
       return;
     }
 
@@ -1107,6 +1341,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch(`/api/documents/${docId}`, { method: "DELETE" });
       if (res.ok) {
         showToast(`Document "${docTitle}" supprimé.`, "info");
+        selectedDocIds.delete(docId);
+        updateSelectionUI();
         if (currentActiveDocId === docId) {
           closeSplitViewer();
         }

@@ -51,34 +51,44 @@
           </button>
         </div>
         
-        <!-- Filtres de recherche Goodnotes -->
+        <!-- Filtres de recherche Goodnotes & Stats -->
         <div class="search-filters-bar">
-          <label class="filter-chip" id="filterTitlesChip" title="Filtrer uniquement dans les titres des documents">
-            <input type="checkbox" id="filterTitlesOnly" />
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <line x1="4" y1="6" x2="20" y2="6"></line>
-              <line x1="4" y1="12" x2="14" y2="12"></line>
-              <line x1="4" y1="18" x2="18" y2="18"></line>
-            </svg>
-            <span>Titres uniquement</span>
-          </label>
+          <div class="filter-chips-group">
+            <label class="filter-chip" id="filterTitlesChip" title="Filtrer uniquement dans les titres des documents">
+              <input type="checkbox" id="filterTitlesOnly" />
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <line x1="4" y1="6" x2="20" y2="6"></line>
+                <line x1="4" y1="12" x2="14" y2="12"></line>
+                <line x1="4" y1="18" x2="18" y2="18"></line>
+              </svg>
+              <span>Titres uniquement</span>
+            </label>
 
-          <label class="filter-chip" id="filterFolderChip" title="Restreindre la recherche au dossier actuellement ouvert">
-            <input type="checkbox" id="filterCurrentFolderOnly" />
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-            </svg>
-            <span id="filterFolderLabel">Dans ce dossier uniquement</span>
-          </label>
+            <label class="filter-chip" id="filterFolderChip" title="Restreindre la recherche au dossier actuellement ouvert" style="display: none;">
+              <input type="checkbox" id="filterCurrentFolderOnly" />
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+              <span id="filterFolderLabel">Dans ce dossier uniquement</span>
+            </label>
+          </div>
+
+          <div id="searchStats" class="search-stats"></div>
         </div>
-
-        <div id="searchStats" class="search-stats"></div>
       </div>
 
       <!-- Actions -->
       <div class="header-actions">
+        <button id="pasteClipboardBtn" class="btn btn-secondary" style="display: none;" title="Coller les documents coupés dans l'emplacement actuel (Cmd+V)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+            <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+          </svg>
+          <span id="pasteClipboardText">Coller ici</span>
+        </button>
+
         <button id="syncDocsBtn" class="btn btn-secondary" title="Scanner les nouveaux PDF non encore indexés">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="23 4 23 10 17 10"></polyline>
             <polyline points="1 20 1 14 7 14"></polyline>
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
@@ -87,7 +97,7 @@
         </button>
 
         <button id="newFolderBtn" class="btn btn-secondary" title="Créer un nouveau dossier">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
             <line x1="12" y1="11" x2="12" y2="17"></line>
             <line x1="9" y1="14" x2="15" y2="14"></line>
@@ -96,7 +106,7 @@
         </button>
 
         <button id="openUploadBtn" class="btn btn-primary" title="Importer un nouveau document PDF">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
             <polyline points="17 8 12 3 7 8"></polyline>
             <line x1="12" y1="3" x2="12" y2="15"></line>
@@ -105,6 +115,41 @@
         </button>
       </div>
     </header>
+
+    <!-- Barre flottante d'actions de sélection multiple -->
+    <div id="selectionActionBar" class="selection-action-bar" style="display: none;">
+      <div class="selection-count-badge">
+        <span id="selectionCountText">1 document sélectionné</span>
+      </div>
+      <div class="selection-actions-btns">
+        <button id="batchMoveBtn" class="btn btn-sm btn-secondary" title="Déplacer vers un dossier">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span>Déplacer...</span>
+        </button>
+        <button id="batchCutBtn" class="btn btn-sm btn-secondary" title="Couper (Cmd+X)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <circle cx="6" cy="6" r="3"></circle>
+            <circle cx="6" cy="18" r="3"></circle>
+            <line x1="20" y1="4" x2="8.12" y2="15.88"></line>
+            <line x1="14.47" y1="14.48" x2="20" y2="20"></line>
+            <line x1="8.12" y1="8.12" x2="12" y2="12"></line>
+          </svg>
+          <span>Couper</span>
+        </button>
+        <button id="batchDeleteBtn" class="btn btn-sm btn-danger" title="Supprimer la sélection">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          </svg>
+          <span>Supprimer</span>
+        </button>
+        <button id="clearSelectionBtn" class="btn btn-sm btn-icon" title="Désélectionner (Échap)">
+          &times;
+        </button>
+      </div>
+    </div>
 
     <!-- Zone principale scindée (Split View) -->
     <main class="main-workspace" id="workspace">
