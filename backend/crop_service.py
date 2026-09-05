@@ -13,7 +13,7 @@ def get_query_hash(query_terms: List[str]) -> str:
     norm_terms = sorted([normalize_text(t) for t in query_terms if len(t.strip()) > 1])
     return hashlib.md5("_".join(norm_terms).encode("utf-8")).hexdigest()[:8]
 
-def find_occurrences_on_page(words_data: List[List[Any]], query_terms: List[str]) -> List[Dict[str, Any]]:
+def find_occurrences_on_page(words_data: List[List[Any]], query_terms: List[str], page_height: float = 842.0) -> List[Dict[str, Any]]:
     """
     Parcourt les mots d'une page et extrait les occurrences correspondantes aux termes.
     words_data: [ [x0, y0, x1, y1, word, block_no, line_no], ... ]
@@ -25,7 +25,6 @@ def find_occurrences_on_page(words_data: List[List[Any]], query_terms: List[str]
     matched_words = []
     for idx, w in enumerate(words_data):
         norm_w = normalize_text(w[4])
-        # Correspondance stricte de préfixe ou de mot entier (ex: "hemorrag" match "hemorragie", "extra" match "extra-uterine")
         for term in norm_terms:
             if norm_w == term or norm_w.startswith(term) or (term in norm_w and len(term) >= 4):
                 matched_words.append({
@@ -47,7 +46,6 @@ def find_occurrences_on_page(words_data: List[List[Any]], query_terms: List[str]
 
     for next_w in matched_words[1:]:
         prev_w = current_occ[-1]
-        # Même bloc et même ligne ou ligne consécutive immédiate
         if next_w["block_no"] == prev_w["block_no"] and abs(next_w["line_no"] - prev_w["line_no"]) <= 1:
             current_occ.append(next_w)
         else:
@@ -59,7 +57,6 @@ def find_occurrences_on_page(words_data: List[List[Any]], query_terms: List[str]
 
     query_hash = get_query_hash(query_terms)
 
-    # Pour chaque groupe d'occurrence, calculer la bounding box globale et les métadonnées
     results = []
     for occ_idx, group in enumerate(occurrences):
         x0 = min(w["rect"][0] for w in group)
@@ -69,10 +66,15 @@ def find_occurrences_on_page(words_data: List[List[Any]], query_terms: List[str]
 
         occ_text = " ".join(w["word"] for w in group)
         matched_distinct_terms = len(set(w["matched_term"] for w in group))
+        
+        # Position relative pour scroll direct dans le viewer PDF
+        y_ratio = round(max(0.0, min(1.0, y0 / page_height)), 3) if page_height > 0 else 0.0
 
         results.append({
             "occ_id": occ_idx,
             "rect": (x0, y0, x1, y1),
+            "y_pos": round(y0, 1),
+            "y_ratio": y_ratio,
             "highlight_rects": [w["rect"] for w in group],
             "text": occ_text,
             "distinct_terms_count": matched_distinct_terms,
@@ -84,7 +86,7 @@ def find_occurrences_on_page(words_data: List[List[Any]], query_terms: List[str]
 def generate_crop_image(doc_id: int, filename: str, page_number: int, occ_data: Dict[str, Any], query_terms: List[str], words_data: List[List[Any]]) -> str:
     """
     Génère l'image cropée zoomée avec surbrillance de tous les termes de la recherche dans la zone.
-    Utilise un hash de requête dans la clé de cache pour éviter toute collision.
+    Sauvegarde dans le cache sous f"p{page_number}_occ{occ_id}_{query_hash}.jpg".
     """
     doc_cache_dir = os.path.join(CACHE_DIR, f"doc_{doc_id}")
     os.makedirs(doc_cache_dir, exist_ok=True)
@@ -137,7 +139,6 @@ def generate_crop_image(doc_id: int, filename: str, page_number: int, occ_data: 
 
     for w in words_data:
         w_rect = pymupdf.Rect(w[0], w[1], w[2], w[3])
-        # Si le mot intersecte la zone de crop visible
         if clip_rect.intersects(w_rect):
             norm_w = normalize_text(w[4])
             for term in norm_terms:
@@ -145,23 +146,59 @@ def generate_crop_image(doc_id: int, filename: str, page_number: int, occ_data: 
                     all_highlights.append(w_rect)
                     break
 
-    # Si aucun trouvé par intersection (sécurité), utiliser les highlight_rects de l'occurrence
     if not all_highlights:
         for hl in occ_data.get("highlight_rects", [occ_data["rect"]]):
             all_highlights.append(pymupdf.Rect(hl[0], hl[1], hl[2], hl[3]))
 
-    # Dessiner le surlignage jaune translucide fidèle à Goodnotes
     shape = page.new_shape()
     for hl_rect in all_highlights:
-        # Marge douce de surligneur
         expanded = pymupdf.Rect(hl_rect.x0 - 1, hl_rect.y0 - 1, hl_rect.x1 + 1, hl_rect.y1 + 1)
         shape.draw_rect(expanded)
     shape.finish(fill=(1.0, 0.88, 0.2), fill_opacity=0.5, stroke_opacity=0)
     shape.commit()
 
-    # Rendu haute fidélité (DPI 144)
     pix = page.get_pixmap(clip=clip_rect, dpi=144, alpha=False)
     pix.save(crop_path)
 
     doc.close()
     return crop_path
+
+def get_or_generate_crop_on_demand(doc_id: int, page_number: int, occ_id: int, query_hash: str, terms_str: str = "") -> str:
+    """Génère la vignette à la demande (Lazy Crop) si elle n'est pas encore en cache."""
+    doc_cache_dir = os.path.join(CACHE_DIR, f"doc_{doc_id}")
+    os.makedirs(doc_cache_dir, exist_ok=True)
+    
+    crop_filename = f"p{page_number}_occ{occ_id}_{query_hash}.jpg" if query_hash else f"p{page_number}_occ{occ_id}.jpg"
+    crop_path = os.path.join(doc_cache_dir, crop_filename)
+    if os.path.exists(crop_path):
+        return crop_path
+
+    # Génération à la volée
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT p.words_json, d.filename 
+        FROM pages p 
+        JOIN documents d ON d.id = p.doc_id 
+        WHERE p.doc_id = ? AND p.page_number = ?
+    """, (doc_id, page_number))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return ""
+
+    try:
+        words_data = json.loads(row["words_json"])
+    except Exception:
+        words_data = []
+
+    terms = [t for t in terms_str.split(",") if t.strip()]
+    occs = find_occurrences_on_page(words_data, terms)
+    target_occ = next((o for o in occs if o["occ_id"] == occ_id), None)
+    if not target_occ and occs:
+        target_occ = occs[0]
+
+    if target_occ:
+        return generate_crop_image(doc_id, row["filename"], page_number, target_occ, terms, words_data)
+    return ""

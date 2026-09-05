@@ -17,6 +17,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const docDetailTitle = document.getElementById("docDetailTitle");
   const docDetailCount = document.getElementById("docDetailCount");
   const docOccurrencesList = document.getElementById("docOccurrencesList");
+  const docSearchInput = document.getElementById("docSearchInput");
+  const clearDocSearchBtn = document.getElementById("clearDocSearchBtn");
 
   // Visualiseur
   const viewerDocTitle = document.getElementById("viewerDocTitle");
@@ -44,22 +46,23 @@ document.addEventListener("DOMContentLoaded", () => {
   const confirmDuplicateOkBtn = document.getElementById("confirmDuplicateOkBtn");
 
   let debounceTimer = null;
+  let docSearchDebounceTimer = null;
   let currentSearchQuery = "";
-  let currentResultsData = null;
   let currentActiveDocId = null;
-  let currentActivePage = 1;
+  let currentActiveDocTitle = "";
+  let currentDocOriginalOccurrences = [];
 
   // Charger la liste initiale
   loadRecentDocuments();
 
-  // Recherche
+  // Recherche générale
   searchInput.addEventListener("input", (e) => {
     const val = e.target.value.trim();
     clearSearchBtn.style.display = val ? "flex" : "none";
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       performSearch(val);
-    }, 280);
+    }, 250);
   });
 
   searchInput.addEventListener("keydown", (e) => {
@@ -107,11 +110,52 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
+  // Recherche Interne au Document en cours (Split View)
+  // =========================================================================
+  docSearchInput.addEventListener("input", (e) => {
+    const val = e.target.value.trim();
+    clearDocSearchBtn.style.display = val ? "flex" : "none";
+    clearTimeout(docSearchDebounceTimer);
+    docSearchDebounceTimer = setTimeout(() => {
+      performDocSearch(val);
+    }, 250);
+  });
+
+  clearDocSearchBtn.addEventListener("click", () => {
+    docSearchInput.value = "";
+    clearDocSearchBtn.style.display = "none";
+    docDetailCount.textContent = `${currentDocOriginalOccurrences.length} occurrence${currentDocOriginalOccurrences.length > 1 ? 's' : ''} dans ce document`;
+    renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentDocOriginalOccurrences);
+  });
+
+  async function performDocSearch(query) {
+    if (!query) {
+      docDetailCount.textContent = `${currentDocOriginalOccurrences.length} occurrence${currentDocOriginalOccurrences.length > 1 ? 's' : ''} dans ce document`;
+      renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentDocOriginalOccurrences);
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/doc-search?doc_id=${currentActiveDocId}&q=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      const occs = data.occurrences || [];
+      docDetailCount.textContent = `${occs.length} résultat${occs.length > 1 ? 's' : ''} pour "${query}"`;
+      renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, occs);
+      
+      // Sauter directement sur la 1ère occurrence
+      if (occs.length > 0) {
+        goToPageAndScrollToOccurrence(occs[0].page_number, occs[0].y_ratio, occs[0].text_snippet);
+      }
+    } catch (err) {
+      console.error("Erreur recherche document:", err);
+    }
+  }
+
+  // =========================================================================
   // Chargement des Documents Récents
   // =========================================================================
   async function loadRecentDocuments() {
     currentSearchQuery = "";
-    currentResultsData = null;
     sectionTitle.textContent = "Documents disponibles";
     searchStats.textContent = "";
     showGeneralResultsView();
@@ -140,27 +184,27 @@ document.addEventListener("DOMContentLoaded", () => {
       const card = document.createElement("div");
       card.className = "doc-card";
       card.innerHTML = `
-        <div class="doc-card-info">
+        <div class="doc-card-header">
+          <div class="doc-title-main" title="${doc.title}">${doc.title}</div>
+          <div class="doc-meta-badges">
+            <span class="doc-badge-pill">${doc.total_pages} page${doc.total_pages > 1 ? 's' : ''}</span>
+            <button class="btn-delete-doc" data-id="${doc.id}" title="Supprimer ce document">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              </svg>
+              Supprimer
+            </button>
+          </div>
+        </div>
+        <div class="doc-card-body">
           <div class="doc-cover-wrapper" title="Ouvrir le document">
             <img src="${doc.cover_url}" class="doc-cover-img" alt="Couverture" loading="lazy" onerror="this.src='/placeholder-cover.png'" />
           </div>
-          <div class="doc-meta">
-            <div class="doc-title" title="${doc.title}">${doc.title}</div>
-            <div class="doc-stats">${doc.total_pages} page${doc.total_pages > 1 ? 's' : ''}</div>
-            <div class="doc-actions-inline">
-              <button class="btn-delete-doc" data-id="${doc.id}" title="Supprimer ce document">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polyline points="3 6 5 6 21 6"></polyline>
-                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                </svg>
-                Supprimer
-              </button>
+          <div class="doc-card-vignettes">
+            <div style="display:flex; align-items:center; height:100%; color:var(--text-dim); font-size:13px;">
+              Tapez un mot-clé ci-dessus pour rechercher et afficher les extraits cropés avec surbrillance.
             </div>
-          </div>
-        </div>
-        <div class="doc-card-vignettes">
-          <div style="display:flex; align-items:center; height:100%; color:var(--text-dim); font-size:13px;">
-            Tapez un mot-clé ci-dessus pour rechercher et voir les extraits cropés avec surbrillance.
           </div>
         </div>
       `;
@@ -168,7 +212,7 @@ document.addEventListener("DOMContentLoaded", () => {
       card.querySelector(".doc-cover-wrapper").addEventListener("click", () => {
         openDocumentInSplitView(doc.id, doc.title, 1, []);
       });
-      card.querySelector(".doc-title").addEventListener("click", () => {
+      card.querySelector(".doc-title-main").addEventListener("click", () => {
         openDocumentInSplitView(doc.id, doc.title, 1, []);
       });
 
@@ -182,7 +226,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
-  // Exécution de la Recherche Goodnotes
+  // Exécution de la Recherche Goodnotes (Instantanée avec Lazy Crop)
   // =========================================================================
   async function performSearch(query) {
     if (!query) {
@@ -198,7 +242,6 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
       const data = await res.json();
-      currentResultsData = data;
       renderSearchResults(data);
     } catch (err) {
       console.error("Erreur recherche:", err);
@@ -224,12 +267,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const card = document.createElement("div");
       card.className = "doc-card";
 
-      // Ruban horizontal : vignettes ordonnées avec les plus pertinentes à gauche
+      // Ruban horizontal : vignettes ordonnées par pertinence à gauche
       let vignettesHtml = '';
       if (doc.vignettes && doc.vignettes.length > 0) {
         doc.vignettes.forEach(v => {
           vignettesHtml += `
-            <div class="vignette-item" data-doc-id="${doc.id}" data-page="${v.page_number}" data-occ="${v.occ_id}" title="Page ${v.page_number} - Cliquer pour ouvrir">
+            <div class="vignette-item" data-doc-id="${doc.id}" data-page="${v.page_number}" data-occ="${v.occ_id}" data-yratio="${v.y_ratio || 0}" data-snippet="${encodeURIComponent(v.text_snippet || '')}" title="Page ${v.page_number} - Cliquer pour ouvrir">
               <img src="${v.crop_url}" class="vignette-crop-img" alt="Extrait p. ${v.page_number}" loading="lazy" />
               <span class="vignette-page-badge">p. ${v.page_number}</span>
             </div>
@@ -240,27 +283,28 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       card.innerHTML = `
-        <div class="doc-card-info">
+        <div class="doc-card-header">
+          <div class="doc-title-main" title="${doc.title}">${doc.title}</div>
+          <div class="doc-meta-badges">
+            <span class="doc-badge-pill highlight">${doc.total_occurrences} occ.</span>
+            <span class="doc-badge-pill">${doc.total_pages} p.</span>
+            <button class="btn-delete-doc" data-id="${doc.id}" title="Supprimer ce document">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              </svg>
+              Supprimer
+            </button>
+          </div>
+        </div>
+        <div class="doc-card-body">
           <div class="doc-cover-wrapper" title="Ouvrir le document">
             <img src="${doc.cover_url}" class="doc-cover-img" alt="Couverture" loading="lazy" onerror="this.src='/placeholder-cover.png'" />
           </div>
-          <div class="doc-meta">
-            <div class="doc-title" title="${doc.title}">${doc.title}</div>
-            <div class="doc-stats">${doc.total_occurrences} occurrence${doc.total_occurrences > 1 ? 's' : ''} • ${doc.total_pages} p.</div>
-            <div class="doc-actions-inline">
-              <button class="btn-delete-doc" data-id="${doc.id}" title="Supprimer ce document">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polyline points="3 6 5 6 21 6"></polyline>
-                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                </svg>
-                Supprimer
-              </button>
+          <div class="doc-card-vignettes">
+            <div class="vignettes-ribbon-container">
+              ${vignettesHtml}
             </div>
-          </div>
-        </div>
-        <div class="doc-card-vignettes">
-          <div class="vignettes-ribbon-container">
-            ${vignettesHtml}
           </div>
         </div>
       `;
@@ -269,20 +313,26 @@ document.addEventListener("DOMContentLoaded", () => {
       card.querySelectorAll(".vignette-item").forEach(vEl => {
         vEl.addEventListener("click", () => {
           const dPage = parseInt(vEl.getAttribute("data-page"), 10);
-          openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || []);
+          const yRatio = parseFloat(vEl.getAttribute("data-yratio") || 0);
+          const snippet = decodeURIComponent(vEl.getAttribute("data-snippet") || "");
+          openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], yRatio, snippet);
         });
       });
 
       // Clic sur la couverture
       card.querySelector(".doc-cover-wrapper").addEventListener("click", () => {
-        const firstPage = (doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0].page_number : 1;
-        openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || []);
+        const firstOcc = (doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0] : null;
+        const firstPage = firstOcc ? firstOcc.page_number : 1;
+        const yRatio = firstOcc ? firstOcc.y_ratio : 0;
+        openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], yRatio);
       });
 
       // Clic sur le titre
-      card.querySelector(".doc-title").addEventListener("click", () => {
-        const firstPage = (doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0].page_number : 1;
-        openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || []);
+      card.querySelector(".doc-title-main").addEventListener("click", () => {
+        const firstOcc = (doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0] : null;
+        const firstPage = firstOcc ? firstOcc.page_number : 1;
+        const yRatio = firstOcc ? firstOcc.y_ratio : 0;
+        openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], yRatio);
       });
 
       // Bouton supprimer
@@ -298,10 +348,15 @@ document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
   // Split View & Navigation Verticale par Document
   // =========================================================================
-  function openDocumentInSplitView(docId, docTitle, targetPage, occurrences) {
+  function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetYRatio = 0, targetSnippet = "") {
     const isSameDoc = (currentActiveDocId === docId);
     currentActiveDocId = docId;
-    currentActivePage = targetPage;
+    currentActiveDocTitle = docTitle;
+    currentDocOriginalOccurrences = occurrences;
+
+    // Réinitialiser le champ de recherche dans le document
+    docSearchInput.value = "";
+    clearDocSearchBtn.style.display = "none";
 
     // 1. Activer le layout Split View
     workspace.classList.add("split-active");
@@ -319,8 +374,8 @@ document.addEventListener("DOMContentLoaded", () => {
     viewerPageBadge.textContent = `Page ${targetPage}`;
 
     if (isSameDoc && pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
-      // MÊME DOCUMENT : Aucun rechargement d'iframe ! Changement de page instantané
-      goToPageWithoutReload(targetPage);
+      // MÊME DOCUMENT : Aucun rechargement d'iframe ! Saut et scroll instantané
+      goToPageAndScrollToOccurrence(targetPage, targetYRatio, targetSnippet);
     } else {
       // NOUVEAU DOCUMENT : Chargement initial de l'iframe
       const pdfStreamUrl = `/api/pdf/${docId}`;
@@ -329,6 +384,13 @@ document.addEventListener("DOMContentLoaded", () => {
         viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
       }
       pdfFrame.src = viewerUrl;
+
+      // Dès que le nouveau document est prêt, ajuster le scroll
+      pdfFrame.onload = () => {
+        setTimeout(() => {
+          goToPageAndScrollToOccurrence(targetPage, targetYRatio, targetSnippet);
+        }, 350);
+      };
     }
   }
 
@@ -336,11 +398,11 @@ document.addEventListener("DOMContentLoaded", () => {
     docOccurrencesList.innerHTML = "";
 
     if (!occurrences || occurrences.length === 0) {
-      docOccurrencesList.innerHTML = `<div style="color:var(--text-muted); font-size:13px; padding:12px;">Document ouvert (aucune occurrence de recherche spécifique).</div>`;
+      docOccurrencesList.innerHTML = `<div style="color:var(--text-muted); font-size:13px; padding:12px;">Aucun extrait trouvé pour ce terme dans ce document.</div>`;
       return;
     }
 
-    occurrences.forEach((occ, idx) => {
+    occurrences.forEach((occ) => {
       const card = document.createElement("div");
       const isActive = (occ.page_number === activePage);
       card.className = `vertical-occ-card ${isActive ? 'active' : ''}`;
@@ -361,41 +423,59 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelectorAll(".vertical-occ-card.active").forEach(el => el.classList.remove("active"));
         card.classList.add("active");
         viewerPageBadge.textContent = `Page ${occ.page_number}`;
-        currentActivePage = occ.page_number;
-        goToPageWithoutReload(occ.page_number);
+        goToPageAndScrollToOccurrence(occ.page_number, occ.y_ratio, occ.text_snippet);
       });
 
       docOccurrencesList.appendChild(card);
     });
   }
 
-  // Saut de page ultra-fluide sans rechargement de l'iframe
-  function goToPageWithoutReload(pageNumber) {
+  // Positionnement vertical précis et scroll au niveau de l'occurrence dans PDF.js
+  function goToPageAndScrollToOccurrence(pageNumber, yRatio = 0.0, textSnippet = "") {
     try {
-      if (pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
-        const app = pdfFrame.contentWindow.PDFViewerApplication;
-        if (app.pdfViewer) {
+      const win = pdfFrame.contentWindow;
+      if (!win) return;
+
+      const app = win.PDFViewerApplication;
+      if (app && app.pdfViewer) {
+        // 1. Définir la page
+        if (app.page !== pageNumber) {
           app.page = pageNumber;
-          // Synchroniser aussi la recherche si disponible
-          if (currentSearchQuery && app.eventBus) {
-            app.eventBus.dispatch('find', {
-              type: '',
-              query: currentSearchQuery,
-              phraseSearch: true,
-              caseSensitive: false,
-              entireWord: false,
-              highlightAll: true,
-              findPrevious: false
-            });
-          }
-          return;
         }
+
+        // 2. Défilement spatial précis vers le paragraphe
+        const docViewer = win.document;
+        const container = docViewer.getElementById("viewerContainer");
+        const pageDiv = docViewer.querySelector(`.page[data-page-number="${pageNumber}"]`);
+        
+        if (container && pageDiv) {
+          const ratio = (yRatio && yRatio > 0) ? yRatio : 0.2;
+          const targetTop = pageDiv.offsetTop + (pageDiv.clientHeight * ratio) - 100;
+          container.scrollTo({
+            top: Math.max(0, targetTop),
+            behavior: "smooth"
+          });
+        }
+
+        // 3. Surlignage de recherche dans PDF.js
+        const queryToHighlight = docSearchInput.value.trim() || currentSearchQuery;
+        if (queryToHighlight && app.eventBus) {
+          app.eventBus.dispatch('find', {
+            type: '',
+            query: queryToHighlight,
+            phraseSearch: true,
+            caseSensitive: false,
+            entireWord: false,
+            highlightAll: true,
+            findPrevious: false
+          });
+        }
+        return;
       }
     } catch (e) {
-      console.warn("Accès PDFViewerApplication en direct:", e);
+      console.warn("Erreur scroll PDFViewer:", e);
     }
 
-    // Si l'application PDF.js n'était pas encore initialisée
     if (pdfFrame.contentWindow) {
       pdfFrame.contentWindow.location.hash = `#page=${pageNumber}`;
     }
@@ -514,12 +594,10 @@ document.addEventListener("DOMContentLoaded", () => {
         body: formData
       });
 
-      // Cas du DOUBLON STRICT (HTTP 409 Conflict)
       if (res.status === 409) {
         const conflictData = await res.json();
         uploadModal.style.display = "none";
         
-        // Afficher la modale d'alerte de doublon
         const exist = conflictData.existing_doc || {};
         duplicateTitle.textContent = exist.title || "Document sans titre";
         duplicateFilename.textContent = exist.filename || file.name;

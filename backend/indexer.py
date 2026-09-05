@@ -1,6 +1,9 @@
 import os
+import re
 import json
 import shutil
+import unicodedata
+import hashlib
 import pymupdf
 from typing import Optional, Dict, Any
 from backend.database import get_db_connection
@@ -49,14 +52,25 @@ def index_pdf_file(file_path: str, original_filename: str, custom_title: Optiona
     total_pages = len(doc)
     file_size = os.path.getsize(file_path)
 
-    # Titre propre : priorité au titre personnalisé, sinon nom du fichier propre sans extension
-    clean_base_title = os.path.splitext(original_filename)[0].replace("_", " ").strip()
+    # Titre propre avec normalisation Unicode NFC pour restaurer les accents corrects
+    clean_base_title = os.path.splitext(original_filename)[0]
+    clean_base_title = unicodedata.normalize("NFC", clean_base_title)
+    
+    # Remplacer les underscores par des espaces tout en nettoyant les espaces multiples
+    clean_base_title = re.sub(r'[_\s]+', ' ', clean_base_title).strip()
+    # Nettoyer les tirets isolés
+    clean_base_title = re.sub(r'\s*-\s*', ' - ', clean_base_title)
+
     pdf_meta_title = doc.metadata.get("title", "").strip() if doc.metadata else ""
+    pdf_meta_title = unicodedata.normalize("NFC", pdf_meta_title) if pdf_meta_title else ""
+    
     # Éviter les titres de métadonnées PDF génériques ou corrompus
-    if pdf_meta_title and len(pdf_meta_title) > 2 and not pdf_meta_title.lower().startswith("microsoft"):
+    if pdf_meta_title and len(pdf_meta_title) > 2 and not any(pdf_meta_title.lower().startswith(x) for x in ["microsoft", "word", "powerpoint", "untitled"]):
         title = custom_title or pdf_meta_title
     else:
         title = custom_title or clean_base_title
+        
+    title = unicodedata.normalize("NFC", title)
 
     conn = get_db_connection()
     cursor = conn.cursor()

@@ -1,8 +1,11 @@
 import json
 import re
+import urllib.parse
 from typing import List, Dict, Any
 from backend.database import get_db_connection, normalize_text
-from backend.crop_service import find_occurrences_on_page, generate_crop_image, get_query_hash
+from backend.crop_service import find_occurrences_on_page, get_query_hash
+
+MAX_OCCURRENCES_PER_DOC = 10
 
 def sanitize_fts_query(query: str) -> List[str]:
     """Nettoie la requête pour extraire les mots alphanumériques."""
@@ -12,19 +15,20 @@ def sanitize_fts_query(query: str) -> List[str]:
 
 def search_documents(query: str) -> Dict[str, Any]:
     """
-    Exécute la recherche multi-termes avec ranking de pertinence :
+    Exécute la recherche multi-termes ultra-rapide (Lazy Crop & Top 10) :
     1. Identification des pages et documents via FTS5.
     2. Calcul du score de pertinence composite.
-    3. Extraction des occurrences et génération des vignettes avec hash de requête.
+    3. Construction instantanée des métadonnées (sans bloquer sur l'écriture d'images disque).
     4. Ordonnancement :
-       - Ruban horizontal : vignettes les plus pertinentes à gauche (multi-termes d'abord).
-       - Liste verticale Split View : occurrences ordonnées chronologiquement par page.
+       - Ruban horizontal : vignettes les plus pertinentes à gauche (multi-termes d'abord, max 10).
+       - Split View : occurrences ordonnées chronologiquement par page.
     """
     terms = sanitize_fts_query(query)
     if not terms:
         return {"query": query, "total_matches": 0, "results": []}
 
     query_hash = get_query_hash(terms)
+    encoded_terms = urllib.parse.quote(",".join(terms))
     fts_and_query = " AND ".join([f"{normalize_text(t)}*" for t in terms])
     fts_or_query = " OR ".join([f"{normalize_text(t)}*" for t in terms])
 
@@ -92,7 +96,6 @@ def search_documents(query: str) -> Dict[str, Any]:
     for doc_id, doc_info in doc_groups.items():
         all_occurrences = []
 
-        # Parcourir chaque page trouvée
         for p_row in doc_info["pages_data"]:
             page_num = p_row["page_number"]
             try:
@@ -102,33 +105,36 @@ def search_documents(query: str) -> Dict[str, Any]:
 
             occs = find_occurrences_on_page(words_data, terms)
             for occ in occs:
-                generate_crop_image(doc_id, doc_info["filename"], page_num, occ, terms, words_data)
-                crop_url = f"/api/crop/{doc_id}/{page_num}/{occ['occ_id']}?h={query_hash}"
+                # Lazy URL : générée à la volée par le navigateur
+                crop_url = f"/api/crop/{doc_id}/{page_num}/{occ['occ_id']}?h={query_hash}&terms={encoded_terms}"
                 all_occurrences.append({
                     "page_number": page_num,
                     "occ_id": occ["occ_id"],
                     "crop_url": crop_url,
                     "text_snippet": occ["text"],
                     "distinct_terms_count": occ.get("distinct_terms_count", 1),
+                    "y_ratio": occ.get("y_ratio", 0.0),
+                    "y_pos": occ.get("y_pos", 0.0),
+                    "rect": occ.get("rect", [0, 0, 0, 0]),
                     "bm25_score": p_row["bm25_score"]
                 })
 
         doc_info["total_occurrences"] = len(all_occurrences)
         total_matches_count += len(all_occurrences)
 
-        # 1. Pour la Split View : occurrences triées par ordre chronologique de page
-        chronological_occs = sorted(all_occurrences, key=lambda x: (x["page_number"], x["occ_id"]))
-        doc_info["occurrences_by_page"] = chronological_occs
-
-        # 2. Pour le ruban horizontal : occurrences triées par pertinence à gauche
-        # Multi-mots d'abord, puis score BM25
-        relevant_ribbon_vignettes = sorted(
+        # 1. Ruban horizontal : ordonner par pertinence (multi-termes en premier à gauche)
+        # Limiter aux 10 résultats les plus pertinents
+        relevant_ribbon = sorted(
             all_occurrences,
             key=lambda x: (-x["distinct_terms_count"], x["bm25_score"], x["page_number"])
-        )
-        doc_info["vignettes"] = relevant_ribbon_vignettes
+        )[:MAX_OCCURRENCES_PER_DOC]
+        doc_info["vignettes"] = relevant_ribbon
 
-        # Calcul du score de pertinence final pour le classement du document
+        # 2. Split View : ordonner par ordre chronologique de page
+        chronological_occs = sorted(relevant_ribbon, key=lambda x: (x["page_number"], x["occ_id"]))
+        doc_info["occurrences_by_page"] = chronological_occs
+
+        # Score global du document
         relevance_score = 0.0
         if doc_info["matched_all_terms"]:
             relevance_score += 1000.0
@@ -149,4 +155,64 @@ def search_documents(query: str) -> Dict[str, Any]:
         "total_documents": len(final_results),
         "total_occurrences": total_matches_count,
         "results": final_results
+    }
+
+def search_within_document(doc_id: int, query: str) -> Dict[str, Any]:
+    """
+    Recherche instantanée ciblée à l'intérieur d'un unique document (Split View intra-search).
+    """
+    terms = sanitize_fts_query(query)
+    if not terms:
+        return {"doc_id": doc_id, "query": query, "total_occurrences": 0, "occurrences": []}
+
+    query_hash = get_query_hash(terms)
+    encoded_terms = urllib.parse.quote(",".join(terms))
+    fts_and_query = " AND ".join([f"{normalize_text(t)}*" for t in terms])
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    sql = """
+    SELECT 
+        p.page_number,
+        p.words_json,
+        bm25(pages_fts) as bm25_score
+    FROM pages_fts
+    JOIN pages p ON p.doc_id = pages_fts.doc_id AND p.page_number = pages_fts.page_number
+    WHERE pages_fts.doc_id = ? AND pages_fts MATCH ?
+    ORDER BY p.page_number ASC;
+    """
+
+    cursor.execute(sql, (doc_id, fts_and_query))
+    rows = cursor.fetchall()
+    conn.close()
+
+    occurrences = []
+    for r in rows:
+        page_num = r["page_number"]
+        try:
+            words_data = json.loads(r["words_json"])
+        except Exception:
+            words_data = []
+
+        occs = find_occurrences_on_page(words_data, terms)
+        for occ in occs:
+            crop_url = f"/api/crop/{doc_id}/{page_num}/{occ['occ_id']}?h={query_hash}&terms={encoded_terms}"
+            occurrences.append({
+                "page_number": page_num,
+                "occ_id": occ["occ_id"],
+                "crop_url": crop_url,
+                "text_snippet": occ["text"],
+                "distinct_terms_count": occ.get("distinct_terms_count", 1),
+                "y_ratio": occ.get("y_ratio", 0.0),
+                "y_pos": occ.get("y_pos", 0.0),
+                "rect": occ.get("rect", [0, 0, 0, 0]),
+                "bm25_score": r["bm25_score"]
+            })
+
+    return {
+        "doc_id": doc_id,
+        "query": query,
+        "total_occurrences": len(occurrences),
+        "occurrences": occurrences[:25] # max 25 dans le document
     }

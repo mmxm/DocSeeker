@@ -124,28 +124,31 @@ def get_cover(doc_id: int):
     return FileResponse(cover_path, media_type="image/jpeg")
 
 @app.get("/api/crop/{doc_id}/{page}/{occ_id}")
-def get_crop(doc_id: int, page: int, occ_id: int, h: Optional[str] = Query(None)):
-    """Renvoie la vignette cropée et surlignée de l'occurrence."""
-    doc_cache_dir = os.path.join(CACHE_DIR, f"doc_{doc_id}")
+def get_crop(doc_id: int, page: int, occ_id: int, h: Optional[str] = Query(None), terms: Optional[str] = Query(None)):
+    """Renvoie la vignette cropée, générée à la volée (Lazy Crop) si nécessaire."""
+    from backend.crop_service import get_or_generate_crop_on_demand
     
-    # Chercher d'abord avec le hash précis
-    if h:
-        crop_path = os.path.join(doc_cache_dir, f"p{page}_occ{occ_id}_{h}.jpg")
-        if os.path.exists(crop_path):
-            return FileResponse(crop_path, media_type="image/jpeg")
+    # Génération à la volée / récupération cache
+    terms_decoded = terms or ""
+    crop_path = get_or_generate_crop_on_demand(doc_id, page, occ_id, h or "", terms_decoded)
+    
+    if crop_path and os.path.exists(crop_path):
+        return FileResponse(crop_path, media_type="image/jpeg")
 
-    # Recherche générique ou premier fichier correspondant
-    crop_path_default = os.path.join(doc_cache_dir, f"p{page}_occ{occ_id}.jpg")
-    if os.path.exists(crop_path_default):
-        return FileResponse(crop_path_default, media_type="image/jpeg")
-
-    # Si fichier avec n'importe quel hash existe
+    # Fallback si cache existant
+    doc_cache_dir = os.path.join(CACHE_DIR, f"doc_{doc_id}")
     if os.path.exists(doc_cache_dir):
         for fname in os.listdir(doc_cache_dir):
             if fname.startswith(f"p{page}_occ{occ_id}") and fname.endswith(".jpg"):
                 return FileResponse(os.path.join(doc_cache_dir, fname), media_type="image/jpeg")
 
     raise HTTPException(status_code=404, detail="Vignette non trouvée.")
+
+@app.get("/api/doc-search")
+def doc_search(doc_id: int = Query(...), q: str = Query(..., min_length=1)):
+    """Recherche ciblée au sein d'un document spécifique."""
+    from backend.search_engine import search_within_document
+    return search_within_document(doc_id, q)
 
 @app.get("/api/pdf/{doc_id}")
 def stream_pdf(doc_id: int, range: Optional[str] = Header(None)):

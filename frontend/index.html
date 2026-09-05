@@ -90,6 +90,17 @@
               </svg>
               <span>Retour aux résultats</span>
             </button>
+            
+            <!-- Recherche au sein de ce document -->
+            <div class="doc-search-wrapper">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+              <input type="text" id="docSearchInput" placeholder="Rechercher dans ce document..." autocomplete="off" />
+              <button id="clearDocSearchBtn" class="clear-btn" style="display: none;">&times;</button>
+            </div>
+
             <div class="doc-detail-meta">
               <h3 id="docDetailTitle" class="doc-detail-title">Titre du document</h3>
               <span id="docDetailCount" class="doc-detail-count">0 occurrence trouvée</span>
