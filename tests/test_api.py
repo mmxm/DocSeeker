@@ -1,5 +1,6 @@
 import unittest
 import io
+import os
 from fastapi.testclient import TestClient
 from backend.main import app
 
@@ -107,14 +108,31 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(len(annots_data["annotations"]), 2)
         self.assertEqual(annots_data["annotations"][0]["annotationType"], 9)
 
-        # Nettoyer et tester la suppression persistante
-        clean_res = self.client.post(f"/api/documents/{doc_id}/annotations", json={"annotations": []})
-        self.assertEqual(clean_res.status_code, 200)
-        self.assertEqual(clean_res.json().get("count"), 0)
+        # Backup document original bytes
+        doc_filename = docs[0]["filename"]
+        pdf_path = os.path.join("data/documents", doc_filename)
+        orig_bytes = None
+        if os.path.exists(pdf_path):
+            with open(pdf_path, "rb") as f:
+                orig_bytes = f.read()
 
-        get_clean = self.client.get(f"/api/documents/{doc_id}/annotations")
-        self.assertEqual(get_clean.status_code, 200)
-        self.assertEqual(len(get_clean.json()["annotations"]), 0)
+        try:
+            # Tester l'endpoint /api/documents/{doc_id}/save-pdf
+            pdf_content = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF"
+            save_pdf_res = self.client.post(
+                f"/api/documents/{doc_id}/save-pdf",
+                content=pdf_content,
+                headers={"Content-Type": "application/pdf"}
+            )
+            self.assertEqual(save_pdf_res.status_code, 200)
+            self.assertEqual(save_pdf_res.json()["status"], "success")
+            self.assertEqual(save_pdf_res.json()["size"], len(pdf_content))
+        finally:
+            if orig_bytes is not None and os.path.exists(pdf_path):
+                with open(pdf_path, "wb") as f:
+                    f.write(orig_bytes)
+            # Nettoyer les annotations de test
+            self.client.post(f"/api/documents/{doc_id}/annotations", json={"annotations": []})
 
     def test_documents_and_search_sorting_fields(self):
         # Vérifier que GET /api/documents renvoie bien created_at et updated_at

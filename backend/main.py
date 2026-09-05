@@ -2,7 +2,7 @@ import os
 import re
 import shutil
 from typing import Optional, List, Dict, Any
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Query
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -323,6 +323,45 @@ def _apply_annotations_to_pdf(pdf_path: str, annotations: List[Dict[str, Any]]):
         doc.close()
     except Exception as e:
         print(f"[PDF Annotations] Erreur PyMuPDF: {e}")
+
+@app.post("/api/documents/{doc_id}/save-pdf")
+async def save_pdf_document(doc_id: int, request: Request):
+    """
+    Reçoit le fichier PDF mis à jour avec les annotations directement cuites par PDF.js (saveDocument),
+    garantissant une fidélité 100% native (surélévation de texte, tracés, notes, suppressions).
+    """
+    pdf_bytes = await request.body()
+    if not pdf_bytes or len(pdf_bytes) < 20:
+        raise HTTPException(status_code=400, detail="Contenu PDF invalide ou vide.")
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, filename FROM documents WHERE id = ?", (doc_id,))
+    doc = cursor.fetchone()
+    if not doc:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Document introuvable.")
+    
+    filename = doc["filename"]
+    pdf_path = os.path.join(DOCUMENTS_DIR, filename)
+    tmp_path = pdf_path + ".tmp"
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(pdf_bytes)
+        os.replace(tmp_path, pdf_path)
+    except Exception as e:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        conn.close()
+        raise HTTPException(status_code=500, detail=f"Erreur lors de l'enregistrement du PDF : {str(e)}")
+    
+    from backend.indexer import compute_file_hash
+    file_hash = compute_file_hash(pdf_path)
+    cursor.execute("UPDATE documents SET file_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (file_hash, doc_id))
+    conn.commit()
+    conn.close()
+    
+    return {"status": "success", "size": len(pdf_bytes)}
 
 @app.post("/api/documents/{doc_id}/annotations")
 def save_annotations(doc_id: int, payload: AnnotationsPayload):

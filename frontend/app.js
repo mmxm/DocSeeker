@@ -389,8 +389,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  async function closeSplitViewer() {
-    await saveAnnotationsToServer(false);
+  function closeSplitViewer() {
     workspace.classList.remove("split-active");
     pdfFrame.src = "about:blank";
     currentActiveDocId = null;
@@ -1656,7 +1655,7 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-      // 1. Déclencher le hook willSave pour forcer les éditeurs en cours à commiter
+      // 1. Déclencher le hook willSave pour forcer les éditeurs en cours (surlignage, texte, dessin) à commiter
       try {
         if (app.pdfScriptingManager && typeof app.pdfScriptingManager.dispatchWillSave === "function") {
           await app.pdfScriptingManager.dispatchWillSave();
@@ -1671,12 +1670,41 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
+      // 2. Générer les octets du PDF mis à jour avec les annotations directement cuites par PDF.js
+      let pdfBytes;
+      try {
+        if (typeof doc.saveDocument === "function") {
+          pdfBytes = await doc.saveDocument();
+        } else if (typeof doc.getData === "function") {
+          pdfBytes = await doc.getData();
+        }
+      } catch (e) {
+        console.warn("[Annotations] saveDocument fallback to getData:", e);
+        if (typeof doc.getData === "function") {
+          pdfBytes = await doc.getData();
+        }
+      }
+
+      if (!pdfBytes || pdfBytes.length === 0) {
+        throw new Error("Impossible d'extraire les données du document PDF.");
+      }
+
+      // 3. Envoyer directement le fichier PDF sauvegardé au serveur (/api/documents/{id}/save-pdf)
+      const response = await fetch(`/api/documents/${currentActiveDocId}/save-pdf`, {
+        method: "POST",
+        headers: { "Content-Type": "application/pdf" },
+        body: pdfBytes
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || `Erreur serveur HTTP ${response.status}`);
+      }
+
+      // 4. Récupérer et sauvegarder également le JSON d'annotations pour SQLite
       const storage = doc.annotationStorage;
       let annots = [];
-
-      // 2. Extraction résiliente des annotations (support cross-realm iframe / parent)
       if (storage) {
-        // A. Via serializable
         try {
           const ser = storage.serializable;
           if (ser && ser.map) {
@@ -1696,51 +1724,18 @@ document.addEventListener("DOMContentLoaded", () => {
             }
           }
         } catch (e) {
-          console.warn("[Annotations] Erreur serializable:", e);
+          console.warn("[Annotations] Erreur extraction JSON:", e);
         }
 
-        // B. Si vide ou incomplet, essayer via getAll()
-        if (annots.length === 0 && typeof storage.getAll === "function") {
-          try {
-            const allObj = storage.getAll();
-            if (allObj && typeof allObj === "object") {
-              for (const k in allObj) {
-                const item = allObj[k];
-                if (!item) continue;
-                if (typeof item.serialize === "function") {
-                  const s = item.serialize(false);
-                  if (s && !s.deleted) annots.push(s);
-                } else if (!item.deleted) {
-                  annots.push(item);
-                }
-              }
-            }
-          } catch (e) {
-            console.warn("[Annotations] Erreur getAll():", e);
-          }
+        fetch(`/api/documents/${currentActiveDocId}/annotations`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ annotations: annots })
+        }).catch(e => console.warn("[Annotations] Sync JSON optionnelle:", e));
+
+        if (typeof storage.resetModified === "function") {
+          storage.resetModified();
         }
-      }
-
-      console.log(`[Annotations] Annotations trouvées (${annots.length}):`, annots);
-
-      // Envoi du JSON ultra-léger (~1-2 Ko) au serveur (enregistre ajouts, modifications ET suppressions)
-      const response = await fetch(`/api/documents/${currentActiveDocId}/annotations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ annotations: annots })
-      });
-
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err.detail || `Erreur serveur HTTP ${response.status}`);
-      }
-
-      const resData = await response.json();
-      const count = resData.count !== undefined ? resData.count : annots.length;
-
-      // Réinitialiser le drapeau de modification dans PDF.js pour éviter toute alerte de sortie
-      if (storage && typeof storage.resetModified === "function") {
-        storage.resetModified();
       }
       if (app) delete app._annotationStorageModified;
 
@@ -1757,11 +1752,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       if (showFeedback) {
-        if (annots.length === 0) {
-          showToast("✓ Enregistré : toutes les annotations ont été retirées.", "success", 4000);
-        } else {
-          showToast(`✓ ${count} annotation(s) enregistrée(s) avec succès !`, "success", 4000);
-        }
+        showToast("✓ Modifications enregistrées avec succès dans le PDF !", "success", 4000);
       }
 
       setTimeout(() => {
@@ -1774,9 +1765,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
     } catch (err) {
       console.error("[Annotations] Erreur saveAnnotationsToServer:", err);
+      if (btn) {
+        btn.style.backgroundColor = "#dc2626";
+        btn.style.borderColor = "#b91c1c";
+        if (span) span.textContent = "Erreur !";
+      }
       if (showFeedback) {
         showToast("Erreur lors de l'enregistrement : " + err.message, "error");
       }
+      setTimeout(() => {
+        if (btn) {
+          btn.style.backgroundColor = "";
+          btn.style.borderColor = "";
+          if (span) span.textContent = origText;
+        }
+      }, 3000);
     } finally {
       if (btn) {
         btn.disabled = false;
