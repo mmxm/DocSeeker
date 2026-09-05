@@ -1724,9 +1724,26 @@ document.addEventListener("DOMContentLoaded", () => {
       console.log(`[Annotations] Annotations trouvées (${annots.length}):`, annots);
 
       if (annots.length === 0) {
-        if (showFeedback) {
-          showToast("Aucune nouvelle annotation ou surlignage à enregistrer.", "info");
+        if (storage && typeof storage.resetModified === "function") {
+          storage.resetModified();
         }
+        if (app) delete app._annotationStorageModified;
+
+        if (btn) {
+          btn.style.backgroundColor = "#0284c7";
+          btn.style.borderColor = "#0369a1";
+          if (span) span.textContent = "Déjà à jour ✓";
+        }
+        if (showFeedback) {
+          showToast("Toutes les annotations sont déjà à jour sur le serveur.", "info");
+        }
+        setTimeout(() => {
+          if (btn) {
+            btn.style.backgroundColor = "";
+            btn.style.borderColor = "";
+            if (span) span.textContent = origText;
+          }
+        }, 2000);
         return;
       }
 
@@ -1745,21 +1762,35 @@ document.addEventListener("DOMContentLoaded", () => {
       const resData = await response.json();
       const count = resData.count !== undefined ? resData.count : annots.length;
 
+      // Réinitialiser le drapeau de modification dans PDF.js pour éviter toute alerte de sortie
+      if (storage && typeof storage.resetModified === "function") {
+        storage.resetModified();
+      }
+      if (app) delete app._annotationStorageModified;
+
       // Mettre à jour updated_at localement
       const docItem = currentLoadedDocs.find(d => d.id === currentActiveDocId);
       if (docItem) {
         docItem.updated_at = new Date().toISOString();
       }
 
-      if (showFeedback) {
-        showToast(`${count} annotation(s) enregistrée(s) avec succès sur le serveur !`, "success");
+      if (btn) {
+        btn.style.backgroundColor = "#059669";
+        btn.style.borderColor = "#047857";
+        if (span) span.textContent = "Enregistré ✓";
       }
 
-      // Feedback visuel sur le bouton
-      if (span) span.textContent = "Enregistré ✓";
+      if (showFeedback) {
+        showToast(`✓ ${count} annotation(s) enregistrée(s) avec succès !`, "success", 4000);
+      }
+
       setTimeout(() => {
-        if (span) span.textContent = origText;
-      }, 2200);
+        if (btn) {
+          btn.style.backgroundColor = "";
+          btn.style.borderColor = "";
+          if (span) span.textContent = origText;
+        }
+      }, 2500);
 
     } catch (err) {
       console.error("[Annotations] Erreur saveAnnotationsToServer:", err);
@@ -1775,6 +1806,9 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
   }
+
+  // Exposer pour les appels directs depuis l'iframe PDF.js
+  window.saveAnnotationsToServer = saveAnnotationsToServer;
 
   // =========================================================================
   // Split View & Lecteur PDF

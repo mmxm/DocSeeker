@@ -13846,6 +13846,10 @@ const PDFViewerApplication = {
     }
   },
   async downloadOrSave() {
+    if (window.parent && typeof window.parent.saveAnnotationsToServer === "function") {
+      await window.parent.saveAnnotationsToServer(true);
+      return;
+    }
     const {
       classList
     } = this.appConfig.appContainer;
@@ -14214,11 +14218,9 @@ const PDFViewerApplication = {
       annotationStorage
     } = pdfDocument;
     annotationStorage.onSetModified = () => {
-      window.addEventListener("beforeunload", beforeUnload);
       this._annotationStorageModified = true;
     };
     annotationStorage.onResetModified = () => {
-      window.removeEventListener("beforeunload", beforeUnload);
       delete this._annotationStorageModified;
     };
     annotationStorage.onAnnotationEditor = typeStr => {
@@ -15148,9 +15150,8 @@ function onKeyDown(evt) {
   }
 }
 function beforeUnload(evt) {
-  evt.preventDefault();
-  evt.returnValue = "";
-  return false;
+  // Désactivé pour DocFastExplorer : la persistance est gérée côté serveur
+  return;
 }
 
 ;// ./web/viewer.js
