@@ -1723,31 +1723,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       console.log(`[Annotations] Annotations trouvées (${annots.length}):`, annots);
 
-      if (annots.length === 0) {
-        if (storage && typeof storage.resetModified === "function") {
-          storage.resetModified();
-        }
-        if (app) delete app._annotationStorageModified;
-
-        if (btn) {
-          btn.style.backgroundColor = "#0284c7";
-          btn.style.borderColor = "#0369a1";
-          if (span) span.textContent = "Déjà à jour ✓";
-        }
-        if (showFeedback) {
-          showToast("Toutes les annotations sont déjà à jour sur le serveur.", "info");
-        }
-        setTimeout(() => {
-          if (btn) {
-            btn.style.backgroundColor = "";
-            btn.style.borderColor = "";
-            if (span) span.textContent = origText;
-          }
-        }, 2000);
-        return;
-      }
-
-      // Envoi du JSON ultra-léger (~1-2 Ko) au serveur
+      // Envoi du JSON ultra-léger (~1-2 Ko) au serveur (enregistre ajouts, modifications ET suppressions)
       const response = await fetch(`/api/documents/${currentActiveDocId}/annotations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1781,7 +1757,11 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       if (showFeedback) {
-        showToast(`✓ ${count} annotation(s) enregistrée(s) avec succès !`, "success", 4000);
+        if (annots.length === 0) {
+          showToast("✓ Enregistré : toutes les annotations ont été retirées.", "success", 4000);
+        } else {
+          showToast(`✓ ${count} annotation(s) enregistrée(s) avec succès !`, "success", 4000);
+        }
       }
 
       setTimeout(() => {

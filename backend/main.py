@@ -241,13 +241,24 @@ def rename_document(doc_id: int, payload: DocumentUpdate):
 def _apply_annotations_to_pdf(pdf_path: str, annotations: List[Dict[str, Any]]):
     """
     Applique les annotations directement sur le fichier PDF local via PyMuPDF.
-    Sauvegarde incrémentale instantanée sans ré-upload de PDF.
+    Nettoie d'abord les anciennes annotations DocFastExplorer / fitz pour refléter fidèlement
+    les suppressions effectuées par l'utilisateur.
     """
     import pymupdf
     try:
         doc = pymupdf.open(pdf_path)
         modified = False
 
+        # 1. Supprimer les annotations précédemment ajoutées par DocFastExplorer (ou fitz)
+        for page in doc:
+            for annot in list(page.annots()):
+                aid = annot.info.get("id", "")
+                subj = annot.info.get("subject", "")
+                if aid.startswith("fitz-") or subj == "DocFastExplorer":
+                    page.delete_annot(annot)
+                    modified = True
+
+        # 2. Appliquer les annotations actives actuelles
         for a in annotations:
             page_index = a.get("pageIndex")
             if page_index is None or page_index < 0 or page_index >= len(doc):
@@ -260,6 +271,7 @@ def _apply_annotations_to_pdf(pdf_path: str, annotations: List[Dict[str, Any]]):
                 rect = a.get("rect")
                 if rect and len(rect) == 4:
                     annot = page.add_highlight_annot(pymupdf.Rect(rect[0], rect[1], rect[2], rect[3]))
+                    annot.set_info(subject="DocFastExplorer")
                     color = a.get("color")
                     if color and len(color) == 3:
                         annot.set_colors(stroke=(color[0]/255.0 if color[0] > 1 else color[0],
@@ -278,6 +290,7 @@ def _apply_annotations_to_pdf(pdf_path: str, annotations: List[Dict[str, Any]]):
                         str(val),
                         fontsize=a.get("fontSize", 12)
                     )
+                    annot.set_info(subject="DocFastExplorer")
                     annot.update()
                     modified = True
 
@@ -286,21 +299,27 @@ def _apply_annotations_to_pdf(pdf_path: str, annotations: List[Dict[str, Any]]):
                 paths = a.get("paths") or a.get("lines")
                 if paths:
                     try:
-                        annot = page.add_ink_annot(paths)
-                        annot.update()
-                        modified = True
-                    except Exception:
-                        pass
+                        if isinstance(paths, dict):
+                            paths = paths.get("lines") or paths.get("points")
+                        if paths:
+                            annot = page.add_ink_annot(paths)
+                            annot.set_info(subject="DocFastExplorer")
+                            annot.update()
+                            modified = True
+                    except Exception as e:
+                        print(f"[Ink Annot] Erreur: {e}")
 
         if modified:
+            tmp_path = pdf_path + ".tmp"
             try:
-                doc.save(pdf_path, incremental=True, encryption=pymupdf.PDF_ENCRYPT_KEEP)
-            except Exception:
-                tmp_path = pdf_path + ".tmp"
-                doc.save(tmp_path)
+                doc.save(tmp_path, encryption=pymupdf.PDF_ENCRYPT_KEEP)
                 doc.close()
                 os.replace(tmp_path, pdf_path)
                 return
+            except Exception as e:
+                print(f"[Save PDF] Erreur: {e}")
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
         doc.close()
     except Exception as e:
         print(f"[PDF Annotations] Erreur PyMuPDF: {e}")
@@ -309,7 +328,7 @@ def _apply_annotations_to_pdf(pdf_path: str, annotations: List[Dict[str, Any]]):
 def save_annotations(doc_id: int, payload: AnnotationsPayload):
     """
     Sauvegarde légère des annotations (surlignages, dessins, notes textuelles)
-    sans retélécharger l'intégralité du PDF.
+    sans retélécharger l'intégralité du PDF. Enregistre également les suppressions (annotations=[]).
     """
     import json
     conn = get_db_connection()
@@ -332,11 +351,11 @@ def save_annotations(doc_id: int, payload: AnnotationsPayload):
     conn.commit()
     conn.close()
 
-    # Appliquer directement dans le fichier PDF local sur le serveur
+    # Toujours appliquer sur le fichier PDF local sur le serveur (y compris pour effacer si payload.annotations=[])
     try:
         from backend.indexer import DOCUMENTS_DIR
         pdf_path = os.path.join(DOCUMENTS_DIR, doc["filename"])
-        if os.path.exists(pdf_path) and payload.annotations:
+        if os.path.exists(pdf_path):
             _apply_annotations_to_pdf(pdf_path, payload.annotations)
     except Exception as e:
         print(f"[Annotations] Erreur lors de l'application sur le PDF : {e}")

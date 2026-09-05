@@ -107,6 +107,15 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(len(annots_data["annotations"]), 2)
         self.assertEqual(annots_data["annotations"][0]["annotationType"], 9)
 
+        # Nettoyer et tester la suppression persistante
+        clean_res = self.client.post(f"/api/documents/{doc_id}/annotations", json={"annotations": []})
+        self.assertEqual(clean_res.status_code, 200)
+        self.assertEqual(clean_res.json().get("count"), 0)
+
+        get_clean = self.client.get(f"/api/documents/{doc_id}/annotations")
+        self.assertEqual(get_clean.status_code, 200)
+        self.assertEqual(len(get_clean.json()["annotations"]), 0)
+
     def test_documents_and_search_sorting_fields(self):
         # Vérifier que GET /api/documents renvoie bien created_at et updated_at
         res = self.client.get("/api/documents")
