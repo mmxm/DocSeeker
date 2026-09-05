@@ -661,6 +661,52 @@ document.addEventListener("DOMContentLoaded", () => {
     updateSelectionUI();
   }
 
+  function escapeHtml(str) {
+    if (!str) return "";
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function highlightTitle(title, query) {
+    if (!title) return "";
+    if (!query || !query.trim()) return escapeHtml(title);
+
+    const rawTerms = query.trim().split(/\s+/).filter(t => t.length >= 2);
+    if (rawTerms.length === 0) return escapeHtml(title);
+
+    const accentMap = {
+      'a': '[aàáâãäåAÀÁÂÃÄÅ]',
+      'e': '[eèéêëEÈÉÊË]',
+      'i': '[iìíîïIÌÍÎÏ]',
+      'o': '[oòóôõöOÒÓÔÕÖ]',
+      'u': '[uùúûüUÙÚÛÜ]',
+      'c': '[cçCÇ]',
+      'n': '[nñNÑ]'
+    };
+
+    const regexParts = rawTerms.map(term => {
+      const normalized = term.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return escaped.split('').map(ch => accentMap[ch] || `[${ch.toUpperCase()}${ch.toLowerCase()}]`).join('');
+    });
+
+    const pattern = new RegExp(`(${regexParts.join('|')})`, 'gi');
+    let lastIndex = 0;
+    let result = '';
+    let match;
+    while ((match = pattern.exec(title)) !== null) {
+      result += escapeHtml(title.substring(lastIndex, match.index));
+      result += `<mark class="title-highlight">${escapeHtml(match[0])}</mark>`;
+      lastIndex = pattern.lastIndex;
+    }
+    result += escapeHtml(title.substring(lastIndex));
+    return result;
+  }
+
   function createDocCardElement(doc, isSearch = false) {
     const card = document.createElement("div");
     card.className = `doc-card ${selectedDocIds.has(doc.id) ? 'selected' : ''}`;
@@ -755,9 +801,14 @@ document.addEventListener("DOMContentLoaded", () => {
       `;
     }
 
+    const query = searchInput ? searchInput.value.trim() : "";
+    const displayTitle = (isSearch && query) 
+      ? highlightTitle(doc.title, query) 
+      : escapeHtml(doc.title);
+
     card.innerHTML = `
       <div class="doc-card-header">
-        <div class="doc-title-main" title="${doc.title}">${doc.title}</div>
+        <div class="doc-title-main" title="${escapeHtml(doc.title)}">${displayTitle}</div>
         <div class="doc-meta-badges">
           ${isSearch ? `<span class="doc-badge-pill highlight">${doc.total_occurrences} occ.</span>` : ''}
           <span class="doc-badge-pill">${doc.total_pages} p.</span>
