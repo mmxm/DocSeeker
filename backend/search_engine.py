@@ -122,16 +122,15 @@ def search_documents(query: str) -> Dict[str, Any]:
         doc_info["total_occurrences"] = len(all_occurrences)
         total_matches_count += len(all_occurrences)
 
-        # 1. Ruban horizontal : ordonner par pertinence (multi-termes en premier à gauche)
-        # Limiter aux 10 résultats les plus pertinents
+        # 1. Ruban horizontal (vue générale) : ordonner par pertinence et plafonner aux 10 meilleurs
         relevant_ribbon = sorted(
             all_occurrences,
             key=lambda x: (-x["distinct_terms_count"], x["bm25_score"], x["page_number"])
         )[:MAX_OCCURRENCES_PER_DOC]
         doc_info["vignettes"] = relevant_ribbon
 
-        # 2. Split View : ordonner par ordre chronologique de page
-        chronological_occs = sorted(relevant_ribbon, key=lambda x: (x["page_number"], x["occ_id"]))
+        # 2. Split View (document ouvert) : TOUTES les occurrences du document ordonnées chronologiquement par page
+        chronological_occs = sorted(all_occurrences, key=lambda x: (x["page_number"], x["occ_id"]))
         doc_info["occurrences_by_page"] = chronological_occs
 
         # Score global du document

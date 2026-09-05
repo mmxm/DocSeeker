@@ -272,7 +272,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (doc.vignettes && doc.vignettes.length > 0) {
         doc.vignettes.forEach(v => {
           vignettesHtml += `
-            <div class="vignette-item" data-doc-id="${doc.id}" data-page="${v.page_number}" data-occ="${v.occ_id}" data-yratio="${v.y_ratio || 0}" data-snippet="${encodeURIComponent(v.text_snippet || '')}" title="Page ${v.page_number} - Cliquer pour ouvrir">
+            <div class="vignette-item" data-doc-id="${doc.id}" data-page="${v.page_number}" data-occ="${v.occ_id}" data-rect='${JSON.stringify(v.rect || [])}' data-yratio="${v.y_ratio || 0}" data-snippet="${encodeURIComponent(v.text_snippet || '')}" title="Page ${v.page_number} - Cliquer pour ouvrir">
               <img src="${v.crop_url}" class="vignette-crop-img" alt="Extrait p. ${v.page_number}" loading="lazy" />
               <span class="vignette-page-badge">p. ${v.page_number}</span>
             </div>
@@ -314,8 +314,11 @@ document.addEventListener("DOMContentLoaded", () => {
         vEl.addEventListener("click", () => {
           const dPage = parseInt(vEl.getAttribute("data-page"), 10);
           const yRatio = parseFloat(vEl.getAttribute("data-yratio") || 0);
-          const snippet = decodeURIComponent(vEl.getAttribute("data-snippet") || "");
-          openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], yRatio, snippet);
+          let rect = null;
+          try {
+            rect = JSON.parse(vEl.getAttribute("data-rect") || "[]");
+          } catch(e) {}
+          openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], rect, yRatio);
         });
       });
 
@@ -323,16 +326,18 @@ document.addEventListener("DOMContentLoaded", () => {
       card.querySelector(".doc-cover-wrapper").addEventListener("click", () => {
         const firstOcc = (doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0] : null;
         const firstPage = firstOcc ? firstOcc.page_number : 1;
+        const firstRect = firstOcc ? firstOcc.rect : null;
         const yRatio = firstOcc ? firstOcc.y_ratio : 0;
-        openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], yRatio);
+        openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], firstRect, yRatio);
       });
 
       // Clic sur le titre
       card.querySelector(".doc-title-main").addEventListener("click", () => {
         const firstOcc = (doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0] : null;
         const firstPage = firstOcc ? firstOcc.page_number : 1;
+        const firstRect = firstOcc ? firstOcc.rect : null;
         const yRatio = firstOcc ? firstOcc.y_ratio : 0;
-        openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], yRatio);
+        openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], firstRect, yRatio);
       });
 
       // Bouton supprimer
@@ -348,7 +353,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
   // Split View & Navigation Verticale par Document
   // =========================================================================
-  function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetYRatio = 0, targetSnippet = "") {
+  function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0) {
     const isSameDoc = (currentActiveDocId === docId);
     currentActiveDocId = docId;
     currentActiveDocTitle = docTitle;
@@ -375,7 +380,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (isSameDoc && pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
       // MÊME DOCUMENT : Aucun rechargement d'iframe ! Saut et scroll instantané
-      goToPageAndScrollToOccurrence(targetPage, targetYRatio, targetSnippet);
+      goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
     } else {
       // NOUVEAU DOCUMENT : Chargement initial de l'iframe
       const pdfStreamUrl = `/api/pdf/${docId}`;
@@ -388,8 +393,8 @@ document.addEventListener("DOMContentLoaded", () => {
       // Dès que le nouveau document est prêt, ajuster le scroll
       pdfFrame.onload = () => {
         setTimeout(() => {
-          goToPageAndScrollToOccurrence(targetPage, targetYRatio, targetSnippet);
-        }, 350);
+          goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
+        }, 400);
       };
     }
   }
@@ -423,53 +428,102 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelectorAll(".vertical-occ-card.active").forEach(el => el.classList.remove("active"));
         card.classList.add("active");
         viewerPageBadge.textContent = `Page ${occ.page_number}`;
-        goToPageAndScrollToOccurrence(occ.page_number, occ.y_ratio, occ.text_snippet);
+        goToPageAndScrollToOccurrence(occ.page_number, occ.rect, occ.y_ratio);
       });
 
       docOccurrencesList.appendChild(card);
     });
   }
 
-  // Positionnement vertical précis et scroll au niveau de l'occurrence dans PDF.js
-  function goToPageAndScrollToOccurrence(pageNumber, yRatio = 0.0, textSnippet = "") {
+  // Positionnement vertical centré et encadré actif sur l'occurrence cliquée
+  function goToPageAndScrollToOccurrence(pageNumber, rect = null, yRatio = 0.0) {
     try {
       const win = pdfFrame.contentWindow;
       if (!win) return;
 
       const app = win.PDFViewerApplication;
       if (app && app.pdfViewer) {
-        // 1. Définir la page
+        const docViewer = win.document;
+        const container = docViewer.getElementById("viewerContainer");
+
+        // 1. Changer de page si nécessaire
         if (app.page !== pageNumber) {
           app.page = pageNumber;
         }
 
-        // 2. Défilement spatial précis vers le paragraphe
-        const docViewer = win.document;
-        const container = docViewer.getElementById("viewerContainer");
-        const pageDiv = docViewer.querySelector(`.page[data-page-number="${pageNumber}"]`);
-        
-        if (container && pageDiv) {
-          const ratio = (yRatio && yRatio > 0) ? yRatio : 0.2;
-          const targetTop = pageDiv.offsetTop + (pageDiv.clientHeight * ratio) - 100;
+        // Fonction pour placer l'encadré et scroller
+        const alignOccurrence = () => {
+          const pageDiv = docViewer.querySelector(`.page[data-page-number="${pageNumber}"]`);
+          if (!pageDiv || !container) return;
+
+          // Retirer l'ancien encadré actif
+          docViewer.querySelectorAll(".active-occ-overlay").forEach(el => el.remove());
+
+          let left = 20, top = 100, width = 120, height = 24;
+
+          // Calcul des coordonnées exactes sur l'écran
+          const pageView = (app.pdfViewer.getPageView && app.pdfViewer.getPageView(pageNumber - 1)) ? app.pdfViewer.getPageView(pageNumber - 1) : null;
+          
+          if (pageView && pageView.viewport && rect && rect.length === 4) {
+            try {
+              // PDF.js utilise l'origine en bas à gauche pour les points PDF, PyMuPDF en haut à gauche
+              const [x0, y0, x1, y1] = rect;
+              // Conversion PyMuPDF (top-left) vers PDF.js (bottom-left)
+              const pageHeightPts = pageView.viewport.rawDims ? pageView.viewport.rawDims.pageHeight : 842.0;
+              const pdfY0 = pageHeightPts - y1;
+              const pdfY1 = pageHeightPts - y0;
+              const vpRect = pageView.viewport.convertToViewportRectangle([x0, pdfY0, x1, pdfY1]);
+              
+              left = Math.min(vpRect[0], vpRect[2]) - 4;
+              top = Math.min(vpRect[1], vpRect[3]) - 3;
+              width = Math.abs(vpRect[2] - vpRect[0]) + 8;
+              height = Math.abs(vpRect[3] - vpRect[1]) + 6;
+            } catch (convErr) {
+              const scaleX = pageDiv.clientWidth / 595.0;
+              const scaleY = pageDiv.clientHeight / 842.0;
+              left = (rect[0] * scaleX) - 4;
+              top = (rect[1] * scaleY) - 3;
+              width = ((rect[2] - rect[0]) * scaleX) + 8;
+              height = ((rect[3] - rect[1]) * scaleY) + 6;
+            }
+          } else if (rect && rect.length === 4) {
+            const scaleX = pageDiv.clientWidth / 595.0;
+            const scaleY = pageDiv.clientHeight / 842.0;
+            left = (rect[0] * scaleX) - 4;
+            top = (rect[1] * scaleY) - 3;
+            width = ((rect[2] - rect[0]) * scaleX) + 8;
+            height = ((rect[3] - rect[1]) * scaleY) + 6;
+          } else {
+            top = (yRatio && yRatio > 0) ? (pageDiv.clientHeight * yRatio) : 100;
+          }
+
+          // Création de l'encadré actif lumineux sur le mot sélectionné
+          const overlay = docViewer.createElement("div");
+          overlay.className = "active-occ-overlay";
+          overlay.style.position = "absolute";
+          overlay.style.left = `${Math.max(0, left)}px`;
+          overlay.style.top = `${Math.max(0, top)}px`;
+          overlay.style.width = `${Math.max(20, width)}px`;
+          overlay.style.height = `${Math.max(16, height)}px`;
+          overlay.style.backgroundColor = "rgba(37, 99, 235, 0.28)";
+          overlay.style.border = "2px solid #2563eb";
+          overlay.style.borderRadius = "4px";
+          overlay.style.boxShadow = "0 0 14px rgba(37, 99, 235, 0.6), inset 0 0 6px rgba(37, 99, 235, 0.4)";
+          overlay.style.pointerEvents = "none";
+          overlay.style.zIndex = "50";
+          pageDiv.appendChild(overlay);
+
+          // Scroll centré au milieu de la hauteur du conteneur
+          const targetScrollTop = pageDiv.offsetTop + top - (container.clientHeight / 2) + (height / 2);
           container.scrollTo({
-            top: Math.max(0, targetTop),
+            top: Math.max(0, targetScrollTop),
             behavior: "smooth"
           });
-        }
+        };
 
-        // 3. Surlignage de recherche dans PDF.js
-        const queryToHighlight = docSearchInput.value.trim() || currentSearchQuery;
-        if (queryToHighlight && app.eventBus) {
-          app.eventBus.dispatch('find', {
-            type: '',
-            query: queryToHighlight,
-            phraseSearch: true,
-            caseSensitive: false,
-            entireWord: false,
-            highlightAll: true,
-            findPrevious: false
-          });
-        }
+        // Exécuter l'alignement immédiatement et après un court délai pour s'assurer du rendu
+        alignOccurrence();
+        setTimeout(alignOccurrence, 150);
         return;
       }
     } catch (e) {
