@@ -52,5 +52,60 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(data.get("error"), "duplicate")
         self.assertIn("existing_doc", data)
 
+    def test_rename_document(self):
+        # Récupérer un document
+        res = self.client.get("/api/documents")
+        docs = res.json().get("documents", [])
+        self.assertGreater(len(docs), 0)
+        doc_id = docs[0]["id"]
+        original_title = docs[0]["title"]
+
+        # Renommer
+        new_title = "Nouveau Titre Test"
+        patch_res = self.client.patch(f"/api/documents/{doc_id}", json={"title": new_title})
+        self.assertEqual(patch_res.status_code, 200)
+        self.assertEqual(patch_res.json()["title"], new_title)
+
+        # Vérifier que le titre a bien persisté
+        get_res = self.client.get("/api/documents")
+        updated_doc = next(d for d in get_res.json()["documents"] if d["id"] == doc_id)
+        self.assertEqual(updated_doc["title"], new_title)
+
+        # Restaurer l'original
+        self.client.patch(f"/api/documents/{doc_id}", json={"title": original_title})
+
+    def test_annotations_endpoints(self):
+        res = self.client.get("/api/documents")
+        docs = res.json().get("documents", [])
+        self.assertGreater(len(docs), 0)
+        doc_id = docs[0]["id"]
+
+        # Sauvegarder des annotations légères
+        sample_annots = [
+            {
+                "pageIndex": 0,
+                "annotationType": 9,
+                "rect": [100.0, 200.0, 300.0, 220.0],
+                "color": [255, 235, 59]
+            },
+            {
+                "pageIndex": 0,
+                "annotationType": 3,
+                "rect": [50.0, 50.0, 150.0, 80.0],
+                "value": "Note importante"
+            }
+        ]
+        post_res = self.client.post(f"/api/documents/{doc_id}/annotations", json={"annotations": sample_annots})
+        self.assertEqual(post_res.status_code, 200)
+        self.assertEqual(post_res.json().get("count"), 2)
+
+        # Récupérer les annotations
+        get_res = self.client.get(f"/api/documents/{doc_id}/annotations")
+        self.assertEqual(get_res.status_code, 200)
+        annots_data = get_res.json()
+        self.assertIn("annotations", annots_data)
+        self.assertEqual(len(annots_data["annotations"]), 2)
+        self.assertEqual(annots_data["annotations"][0]["annotationType"], 9)
+
 if __name__ == "__main__":
     unittest.main()

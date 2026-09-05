@@ -86,6 +86,16 @@ def init_db():
     );
     """)
 
+    # Table des annotations manuelles persistantes (stockage JSON très léger)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS document_annotations (
+        doc_id INTEGER PRIMARY KEY,
+        annotations_json TEXT NOT NULL,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(doc_id) REFERENCES documents(id) ON DELETE CASCADE
+    );
+    """)
+
     conn.commit()
     conn.close()
 

@@ -477,6 +477,7 @@ body.light-theme {
 /* Boutons d'actions épurés sans cadre brut */
 .btn-reindex-doc,
 .btn-move-doc,
+.btn-rename-doc,
 .btn-delete-doc {
   appearance: none;
   -webkit-appearance: none;
@@ -496,8 +497,15 @@ body.light-theme {
 }
 
 .btn-reindex-doc,
-.btn-move-doc {
+.btn-move-doc,
+.btn-rename-doc {
   color: #64748b;
+}
+
+.btn-rename-doc:hover {
+  color: #b45309;
+  background-color: #fffbeb;
+  border-color: #fde68a;
 }
 
 .btn-reindex-doc:hover {

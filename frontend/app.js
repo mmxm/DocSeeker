@@ -51,6 +51,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const viewerPageBadge = document.getElementById("viewerPageBadge");
   const pdfFrame = document.getElementById("pdfFrame");
   const closeViewerBtn = document.getElementById("closeViewerBtn");
+  const saveAnnotationsBtn = document.getElementById("saveAnnotationsBtn");
 
   // Upload Modal
   const openUploadBtn = document.getElementById("openUploadBtn");
@@ -89,6 +90,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const confirmMoveDocBtn = document.getElementById("confirmMoveDocBtn");
   const folderSelectList = document.getElementById("folderSelectList");
   const modalCreateNewFolderBtn = document.getElementById("modalCreateNewFolderBtn");
+
+  // Rename Doc Modal
+  const renameDocModal = document.getElementById("renameDocModal");
+  const closeRenameDocModalBtn = document.getElementById("closeRenameDocModalBtn");
+  const cancelRenameDocBtn = document.getElementById("cancelRenameDocBtn");
+  const confirmRenameDocBtn = document.getElementById("confirmRenameDocBtn");
+  const renameDocInput = document.getElementById("renameDocInput");
+  let docIdToRename = null;
 
   // Toast Container
   const toastContainer = document.getElementById("toastContainer");
@@ -352,7 +361,14 @@ document.addEventListener("DOMContentLoaded", () => {
     closeSplitViewer();
   });
 
-  function closeSplitViewer() {
+  if (saveAnnotationsBtn) {
+    saveAnnotationsBtn.addEventListener("click", () => {
+      saveAnnotationsToServer(true);
+    });
+  }
+
+  async function closeSplitViewer() {
+    await saveAnnotationsToServer(false);
     workspace.classList.remove("split-active");
     pdfFrame.src = "about:blank";
     currentActiveDocId = null;
@@ -851,6 +867,14 @@ document.addEventListener("DOMContentLoaded", () => {
             Réindexer
           </button>
 
+          <button class="btn-rename-doc" data-id="${doc.id}" title="Renommer ce document">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+            </svg>
+            Renommer
+          </button>
+
           <button class="btn-move-doc" data-id="${doc.id}" title="Déplacer vers un autre dossier">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
@@ -913,6 +937,15 @@ document.addEventListener("DOMContentLoaded", () => {
       e.stopPropagation();
       handleReindexDocument(doc.id, doc.title, reindexBtn);
     });
+
+    // Clic Renommer
+    const renameBtn = card.querySelector(".btn-rename-doc");
+    if (renameBtn) {
+      renameBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openRenameModal(doc.id, doc.title);
+      });
+    }
 
     // Clic Déplacer
     const moveBtn = card.querySelector(".btn-move-doc");
@@ -1374,6 +1407,197 @@ document.addEventListener("DOMContentLoaded", () => {
       moveDocModal.style.display = "none";
     }
   });
+
+  // =========================================================================
+  // Renommage Document
+  // =========================================================================
+  function openRenameModal(docId, currentTitle) {
+    docIdToRename = docId;
+    if (renameDocInput) {
+      renameDocInput.value = currentTitle || "";
+    }
+    if (renameDocModal) {
+      renameDocModal.style.display = "flex";
+      setTimeout(() => {
+        if (renameDocInput) {
+          renameDocInput.focus();
+          renameDocInput.select();
+        }
+      }, 50);
+    }
+  }
+
+  function closeRenameModal() {
+    docIdToRename = null;
+    if (renameDocModal) {
+      renameDocModal.style.display = "none";
+    }
+  }
+
+  if (closeRenameDocModalBtn) {
+    closeRenameDocModalBtn.addEventListener("click", closeRenameModal);
+  }
+  if (cancelRenameDocBtn) {
+    cancelRenameDocBtn.addEventListener("click", closeRenameModal);
+  }
+  if (renameDocModal) {
+    renameDocModal.addEventListener("click", (e) => {
+      if (e.target === renameDocModal) closeRenameModal();
+    });
+  }
+
+  async function handleRenameDocument() {
+    if (!docIdToRename) return;
+    const newTitle = renameDocInput.value.trim();
+    if (!newTitle) {
+      showToast("Le titre ne peut pas être vide.", "warning");
+      return;
+    }
+
+    try {
+      if (confirmRenameDocBtn) confirmRenameDocBtn.disabled = true;
+
+      const res = await fetch(`/api/documents/${docIdToRename}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: newTitle })
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Erreur lors du renommage");
+      }
+
+      // Mettre à jour dans les données en mémoire
+      const docItem = currentLoadedDocs.find(d => d.id === docIdToRename);
+      if (docItem) {
+        docItem.title = newTitle;
+      }
+
+      // Mettre à jour dans le DOM si présent
+      const card = document.querySelector(`.doc-card[data-doc-id="${docIdToRename}"]`);
+      if (card) {
+        const titleEl = card.querySelector(".doc-title-main");
+        if (titleEl) {
+          titleEl.textContent = newTitle;
+          titleEl.title = newTitle;
+        }
+      }
+
+      // Si ouvert dans le visualiseur
+      if (currentActiveDocId === docIdToRename) {
+        currentActiveDocTitle = newTitle;
+        if (viewerDocTitle) viewerDocTitle.textContent = newTitle;
+        if (docDetailTitle) docDetailTitle.textContent = newTitle;
+      }
+
+      closeRenameModal();
+      showToast("Document renommé avec succès !", "success");
+    } catch (err) {
+      showToast("Erreur : " + err.message, "error");
+    } finally {
+      if (confirmRenameDocBtn) confirmRenameDocBtn.disabled = false;
+    }
+  }
+
+  if (confirmRenameDocBtn) {
+    confirmRenameDocBtn.addEventListener("click", handleRenameDocument);
+  }
+  if (renameDocInput) {
+    renameDocInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        handleRenameDocument();
+      } else if (e.key === "Escape") {
+        closeRenameModal();
+      }
+    });
+  }
+
+  // =========================================================================
+  // Sauvegarde Légère des Annotations & Surlignages (Économe en bande passante)
+  // =========================================================================
+  async function saveAnnotationsToServer(showFeedback = true) {
+    if (!currentActiveDocId) return;
+
+    try {
+      const win = pdfFrame.contentWindow;
+      if (!win || !win.PDFViewerApplication) {
+        if (showFeedback) showToast("Le visualiseur PDF n'est pas encore prêt.", "warning");
+        return;
+      }
+
+      const app = win.PDFViewerApplication;
+      const doc = app.pdfDocument;
+      if (!doc || !doc.annotationStorage) {
+        if (showFeedback) showToast("Aucun document chargé dans le visualiseur.", "info");
+        return;
+      }
+
+      const storage = doc.annotationStorage;
+      let annots = [];
+
+      // Dans PDF.js annotationStorage.serializable renvoie { map: Map | Object, transfer: [...] }
+      if (storage.serializable && storage.serializable.map) {
+        const rawMap = storage.serializable.map;
+        if (rawMap instanceof Map) {
+          annots = Array.from(rawMap.values());
+        } else if (typeof rawMap === "object") {
+          annots = Object.values(rawMap);
+        }
+      } else if (storage._storage) {
+        const raw = storage._storage;
+        if (raw instanceof Map) {
+          annots = Array.from(raw.values());
+        } else if (typeof raw === "object") {
+          annots = Object.values(raw);
+        }
+      }
+
+      // Filtrer les entrées supprimées
+      annots = annots.filter(a => a && !a.deleted);
+
+      if (annots.length === 0) {
+        if (showFeedback) {
+          showToast("Aucune nouvelle annotation ou surlignage à enregistrer.", "info");
+        }
+        return;
+      }
+
+      if (saveAnnotationsBtn) {
+        saveAnnotationsBtn.disabled = true;
+        const span = saveAnnotationsBtn.querySelector("span");
+        if (span) span.textContent = "Sauvegarde...";
+      }
+
+      const response = await fetch(`/api/documents/${currentActiveDocId}/annotations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ annotations: annots })
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || "Erreur lors de la sauvegarde.");
+      }
+
+      const resData = await response.json();
+      if (showFeedback) {
+        showToast(`${resData.count || annots.length} annotation(s) enregistrée(s) sur le serveur !`, "success");
+      }
+    } catch (err) {
+      console.error("Erreur saveAnnotationsToServer:", err);
+      if (showFeedback) {
+        showToast("Erreur lors de l'enregistrement des annotations : " + err.message, "error");
+      }
+    } finally {
+      if (saveAnnotationsBtn) {
+        saveAnnotationsBtn.disabled = false;
+        const span = saveAnnotationsBtn.querySelector("span");
+        if (span) span.textContent = "Sauvegarder";
+      }
+    }
+  }
 
   // =========================================================================
   // Split View & Lecteur PDF

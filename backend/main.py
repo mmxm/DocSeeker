@@ -1,7 +1,7 @@
 import os
 import re
 import shutil
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Query
 from fastapi.responses import FileResponse, StreamingResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -55,6 +55,12 @@ class FolderUpdate(BaseModel):
 
 class DocumentMove(BaseModel):
     folder_id: Optional[int] = None
+
+class DocumentUpdate(BaseModel):
+    title: Optional[str] = None
+
+class AnnotationsPayload(BaseModel):
+    annotations: List[Dict[str, Any]]
 
 @app.get("/api/folders")
 def list_folders(parent_id: Optional[str] = Query(None)):
@@ -213,6 +219,145 @@ def batch_move_documents(payload: BatchDocumentMove):
     conn.close()
 
     return {"status": "success", "moved_count": len(payload.doc_ids), "folder_id": payload.folder_id}
+
+@app.patch("/api/documents/{doc_id}")
+def rename_document(doc_id: int, payload: DocumentUpdate):
+    """Renomme un document."""
+    if not payload.title or not payload.title.strip():
+        raise HTTPException(status_code=400, detail="Le titre ne peut pas être vide.")
+
+    import unicodedata
+    new_title = unicodedata.normalize("NFC", payload.title.strip())
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE documents SET title = ? WHERE id = ?", (new_title, doc_id))
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Document introuvable.")
+    conn.commit()
+    conn.close()
+    return {"id": doc_id, "title": new_title, "message": "Document renommé avec succès."}
+
+def _apply_annotations_to_pdf(pdf_path: str, annotations: List[Dict[str, Any]]):
+    """
+    Applique les annotations directement sur le fichier PDF local via PyMuPDF.
+    Sauvegarde incrémentale instantanée sans ré-upload de PDF.
+    """
+    import pymupdf
+    try:
+        doc = pymupdf.open(pdf_path)
+        modified = False
+
+        for a in annotations:
+            page_index = a.get("pageIndex")
+            if page_index is None or page_index < 0 or page_index >= len(doc):
+                continue
+            page = doc[page_index]
+            annot_type = a.get("annotationType") or a.get("annotationEditorType")
+
+            # 9: Highlight (Surlignage)
+            if annot_type == 9:
+                rect = a.get("rect")
+                if rect and len(rect) == 4:
+                    annot = page.add_highlight_annot(pymupdf.Rect(rect[0], rect[1], rect[2], rect[3]))
+                    color = a.get("color")
+                    if color and len(color) == 3:
+                        annot.set_colors(stroke=(color[0]/255.0 if color[0] > 1 else color[0],
+                                                 color[1]/255.0 if color[1] > 1 else color[1],
+                                                 color[2]/255.0 if color[2] > 1 else color[2]))
+                    annot.update()
+                    modified = True
+
+            # 3: FreeText (Texte libre)
+            elif annot_type == 3:
+                rect = a.get("rect")
+                val = a.get("value")
+                if rect and len(rect) == 4 and val:
+                    annot = page.add_freetext_annot(
+                        pymupdf.Rect(rect[0], rect[1], rect[2], rect[3]),
+                        str(val),
+                        fontsize=a.get("fontSize", 12)
+                    )
+                    annot.update()
+                    modified = True
+
+            # 15: Ink (Tracé libre au stylet)
+            elif annot_type == 15:
+                paths = a.get("paths") or a.get("lines")
+                if paths:
+                    try:
+                        annot = page.add_ink_annot(paths)
+                        annot.update()
+                        modified = True
+                    except Exception:
+                        pass
+
+        if modified:
+            try:
+                doc.save(pdf_path, incremental=True, encryption=pymupdf.PDF_ENCRYPT_KEEP)
+            except Exception:
+                tmp_path = pdf_path + ".tmp"
+                doc.save(tmp_path)
+                doc.close()
+                os.replace(tmp_path, pdf_path)
+                return
+        doc.close()
+    except Exception as e:
+        print(f"[PDF Annotations] Erreur PyMuPDF: {e}")
+
+@app.post("/api/documents/{doc_id}/annotations")
+def save_annotations(doc_id: int, payload: AnnotationsPayload):
+    """
+    Sauvegarde légère des annotations (surlignages, dessins, notes textuelles)
+    sans retélécharger l'intégralité du PDF.
+    """
+    import json
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, filename FROM documents WHERE id = ?", (doc_id,))
+    doc = cursor.fetchone()
+    if not doc:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Document introuvable.")
+
+    raw_json = json.dumps(payload.annotations)
+    cursor.execute("""
+        INSERT INTO document_annotations (doc_id, annotations_json, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(doc_id) DO UPDATE SET
+            annotations_json = excluded.annotations_json,
+            updated_at = CURRENT_TIMESTAMP;
+    """, (doc_id, raw_json))
+    conn.commit()
+    conn.close()
+
+    # Appliquer directement dans le fichier PDF local sur le serveur
+    try:
+        from backend.indexer import DOCUMENTS_DIR
+        pdf_path = os.path.join(DOCUMENTS_DIR, doc["filename"])
+        if os.path.exists(pdf_path) and payload.annotations:
+            _apply_annotations_to_pdf(pdf_path, payload.annotations)
+    except Exception as e:
+        print(f"[Annotations] Erreur lors de l'application sur le PDF : {e}")
+
+    return {"status": "success", "count": len(payload.annotations)}
+
+@app.get("/api/documents/{doc_id}/annotations")
+def get_annotations(doc_id: int):
+    """Renvoie les annotations enregistrées pour ce document."""
+    import json
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT annotations_json, updated_at FROM document_annotations WHERE doc_id = ?", (doc_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return {"annotations": [], "updated_at": None}
+    try:
+        annots = json.loads(row["annotations_json"])
+    except Exception:
+        annots = []
+    return {"annotations": annots, "updated_at": row["updated_at"]}
 
 @app.post("/api/documents/{doc_id}/reindex")
 def reindex_single_document(doc_id: int):
