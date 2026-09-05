@@ -616,13 +616,20 @@ def stream_pdf(doc_id: int, range: Optional[str] = Header(None)):
         raise HTTPException(status_code=404, detail="Fichier PDF manquant sur le disque.")
 
     file_size = os.path.getsize(file_path)
+    mtime = int(os.path.getmtime(file_path))
+    etag = f'"{doc_id}-{file_size}-{mtime}"'
+    cache_headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
+        "ETag": etag
+    }
 
-    # Si aucun en-tête Range, réponse standard 200 OK avec Accept-Ranges
+    # Si aucun en-tête Range, réponse standard 200 OK avec Accept-Ranges et mise en cache
     if not range:
         return FileResponse(
             file_path, 
             media_type="application/pdf", 
-            headers={"Accept-Ranges": "bytes"}
+            headers=cache_headers
         )
 
     # Parsing du Range: bytes=start-end
@@ -631,7 +638,7 @@ def stream_pdf(doc_id: int, range: Optional[str] = Header(None)):
         return FileResponse(
             file_path, 
             media_type="application/pdf", 
-            headers={"Accept-Ranges": "bytes"}
+            headers=cache_headers
         )
 
     start = int(match.group(1))
@@ -662,7 +669,9 @@ def stream_pdf(doc_id: int, range: Optional[str] = Header(None)):
         "Content-Range": f"bytes {start}-{end}/{file_size}",
         "Accept-Ranges": "bytes",
         "Content-Length": str(chunk_size),
-        "Content-Type": "application/pdf"
+        "Content-Type": "application/pdf",
+        "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
+        "ETag": etag
     }
 
     return StreamingResponse(iter_file_chunk(), status_code=206, headers=headers)

@@ -1739,6 +1739,13 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       if (app) delete app._annotationStorageModified;
 
+      // Invalider le cache du navigateur pour ce PDF spécifique afin de recharger la version modifiée
+      if ("caches" in window) {
+        caches.open("docfast-pdf-v1").then(cache => {
+          cache.delete(`/api/pdf/${currentActiveDocId}`);
+        }).catch(() => {});
+      }
+
       // Mettre à jour updated_at localement
       const docItem = currentLoadedDocs.find(d => d.id === currentActiveDocId);
       if (docItem) {
@@ -1754,14 +1761,6 @@ document.addEventListener("DOMContentLoaded", () => {
       if (showFeedback) {
         showToast("✓ Modifications enregistrées avec succès dans le PDF !", "success", 4000);
       }
-
-      setTimeout(() => {
-        if (btn) {
-          btn.style.backgroundColor = "";
-          btn.style.borderColor = "";
-          if (span) span.textContent = origText;
-        }
-      }, 2500);
 
     } catch (err) {
       console.error("[Annotations] Erreur saveAnnotationsToServer:", err);
@@ -1793,6 +1792,60 @@ document.addEventListener("DOMContentLoaded", () => {
   // Exposer pour les appels directs depuis l'iframe PDF.js
   window.saveAnnotationsToServer = saveAnnotationsToServer;
 
+  function resetSaveButtonState() {
+    if (saveAnnotationsBtn) {
+      saveAnnotationsBtn.style.backgroundColor = "";
+      saveAnnotationsBtn.style.borderColor = "";
+      const span = saveAnnotationsBtn.querySelector("span");
+      if (span) span.textContent = "Sauvegarder";
+    }
+  }
+
+  function markAnnotationsUnsaved() {
+    if (saveAnnotationsBtn) {
+      saveAnnotationsBtn.style.backgroundColor = "";
+      saveAnnotationsBtn.style.borderColor = "";
+      const span = saveAnnotationsBtn.querySelector("span");
+      if (span && span.textContent !== "Sauvegarder *") {
+        span.textContent = "Sauvegarder *";
+      }
+    }
+  }
+
+  function hookAnnotationStorageModified() {
+    try {
+      const win = pdfFrame ? pdfFrame.contentWindow : null;
+      if (!win) return;
+      const app = win.PDFViewerApplication;
+      if (!app || !app.pdfDocument) return;
+      const storage = app.pdfDocument.annotationStorage;
+      if (storage) {
+        storage.onSetModified = () => {
+          markAnnotationsUnsaved();
+        };
+      }
+    } catch (e) {
+      console.warn("[Hook Modified]", e);
+    }
+  }
+
+  // Cache dans le CacheStorage du navigateur pour réouverture instantanée et support hors-ligne
+  async function cacheDocumentPdf(docId) {
+    if (!("caches" in window)) return;
+    try {
+      const cache = await caches.open("docfast-pdf-v1");
+      const url = `/api/pdf/${docId}`;
+      const match = await cache.match(url);
+      if (!match) {
+        fetch(url).then(res => {
+          if (res.ok) cache.put(url, res.clone());
+        }).catch(() => {});
+      }
+    } catch (e) {
+      console.warn("[CacheStorage]", e);
+    }
+  }
+
   // =========================================================================
   // Split View & Lecteur PDF
   // =========================================================================
@@ -1801,6 +1854,9 @@ document.addEventListener("DOMContentLoaded", () => {
     currentActiveDocId = docId;
     currentActiveDocTitle = docTitle;
     currentDocOriginalOccurrences = occurrences;
+
+    resetSaveButtonState();
+    cacheDocumentPdf(docId);
 
     docSearchInput.value = "";
     clearDocSearchBtn.style.display = "none";
@@ -1819,6 +1875,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (isSameDoc && pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
       goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
+      hookAnnotationStorageModified();
     } else {
       const pdfStreamUrl = `/api/pdf/${docId}`;
       let viewerUrl = `/pdfjs/web/viewer.html?file=${encodeURIComponent(pdfStreamUrl)}#page=${targetPage}`;
@@ -1830,6 +1887,7 @@ document.addEventListener("DOMContentLoaded", () => {
       pdfFrame.onload = () => {
         setTimeout(() => {
           goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
+          hookAnnotationStorageModified();
         }, 400);
       };
     }
@@ -1891,11 +1949,30 @@ document.addEventListener("DOMContentLoaded", () => {
 
           docViewer.querySelectorAll(".active-occ-overlay").forEach(el => el.remove());
 
+          // Vérifier si une recherche active est en cours
+          const hasActiveSearch = Boolean(
+            (currentSearchQuery && currentSearchQuery.trim()) ||
+            (docSearchInput && docSearchInput.value.trim())
+          );
+
+          // Si pas de recherche ou pas de coordonnées valides : NE PAS afficher de cadre bleu
+          if (!hasActiveSearch || !rect || !Array.isArray(rect) || rect.length !== 4) {
+            if (yRatio && yRatio > 0) {
+              const top = pageDiv.clientHeight * yRatio;
+              const targetScrollTop = pageDiv.offsetTop + top - (container.clientHeight / 2);
+              container.scrollTo({
+                top: Math.max(0, targetScrollTop),
+                behavior: "smooth"
+              });
+            }
+            return;
+          }
+
           let left = 20, top = 100, width = 120, height = 24;
 
           const pageView = (app.pdfViewer.getPageView && app.pdfViewer.getPageView(pageNumber - 1)) ? app.pdfViewer.getPageView(pageNumber - 1) : null;
           
-          if (pageView && pageView.viewport && rect && rect.length === 4) {
+          if (pageView && pageView.viewport) {
             try {
               const [x0, y0, x1, y1] = rect;
               const pageHeightPts = pageView.viewport.rawDims ? pageView.viewport.rawDims.pageHeight : 842.0;
@@ -1915,15 +1992,13 @@ document.addEventListener("DOMContentLoaded", () => {
               width = ((rect[2] - rect[0]) * scaleX) + 8;
               height = ((rect[3] - rect[1]) * scaleY) + 6;
             }
-          } else if (rect && rect.length === 4) {
+          } else {
             const scaleX = pageDiv.clientWidth / 595.0;
             const scaleY = pageDiv.clientHeight / 842.0;
             left = (rect[0] * scaleX) - 4;
             top = (rect[1] * scaleY) - 3;
             width = ((rect[2] - rect[0]) * scaleX) + 8;
             height = ((rect[3] - rect[1]) * scaleY) + 6;
-          } else {
-            top = (yRatio && yRatio > 0) ? (pageDiv.clientHeight * yRatio) : 100;
           }
 
           const overlay = docViewer.createElement("div");
