@@ -132,7 +132,7 @@ Pour visualiser les bugs sous forme d'interface visuelle :
    git-bug bug label new <ID_DU_BUG> status:valide-qa
 
    # 2. Clôturer officiellement l'issue
-   git-bug bug status <ID_DU_BUG> closed
+   git-bug bug status close <ID_DU_BUG>
 
    # 3. Commentaire de clôture
    git-bug bug comment new <ID_DU_BUG> -m "Vérifié et validé par QA : tests au vert et non-régression confirmée."
