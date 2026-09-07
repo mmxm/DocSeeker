@@ -6,7 +6,7 @@ from backend.crop_service import get_query_hash, find_occurrences_on_page
 class TestSearchEngine(unittest.TestCase):
     def test_sanitize_fts_query(self):
         self.assertEqual(sanitize_fts_query("hémorragie délivrance!"), ["hémorragie", "délivrance"])
-        self.assertEqual(sanitize_fts_query("a"), [])
+        self.assertEqual(sanitize_fts_query("a"), ["a"])
         self.assertEqual(sanitize_fts_query("grossesse extra-utérine"), ["grossesse", "extra", "utérine"])
 
     def test_query_hash_consistency(self):

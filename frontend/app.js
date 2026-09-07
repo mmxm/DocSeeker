@@ -59,6 +59,26 @@ document.addEventListener("DOMContentLoaded", () => {
   const splitResizer = document.getElementById("splitResizer");
   const toggleSelectionModeBtn = document.getElementById("toggleSelectionModeBtn");
 
+  // Recherche Interne au Document (Header Viewer & Tiroir Mobile)
+  const viewerDocSearchToggleBtn = document.getElementById("viewerDocSearchToggleBtn");
+  const viewerDocSearchWrapper = document.getElementById("viewerDocSearchWrapper");
+  const viewerDocSearchInput = document.getElementById("viewerDocSearchInput");
+  const viewerDocSearchClearBtn = document.getElementById("viewerDocSearchClearBtn");
+  const viewerDocSearchResultCount = document.getElementById("viewerDocSearchResultCount");
+  const viewerDocSearchCloseBtn = document.getElementById("viewerDocSearchCloseBtn");
+
+  // Stepper d'occurrences (Navigation directe Suivant / Précédent)
+  const occurrenceStepper = document.getElementById("occurrenceStepper");
+  const occurrenceCounter = document.getElementById("occurrenceCounter");
+  const prevOccBtn = document.getElementById("prevOccBtn");
+  const nextOccBtn = document.getElementById("nextOccBtn");
+  const searchStepperMini = document.getElementById("searchStepperMini");
+  const searchPrevBtn = document.getElementById("searchPrevBtn");
+  const searchNextBtn = document.getElementById("searchNextBtn");
+
+  let currentActiveOccurrences = [];
+  let currentActiveOccurrenceIndex = -1;
+
   // Tiroir Mobile d'extraits
   const mobileDrawerOverlay = document.getElementById("mobileDrawerOverlay");
   const mobileOccurrencesDrawer = document.getElementById("mobileOccurrencesDrawer");
@@ -66,6 +86,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const drawerDocTitle = document.getElementById("drawerDocTitle");
   const drawerDocCount = document.getElementById("drawerDocCount");
   const drawerOccurrencesList = document.getElementById("drawerOccurrencesList");
+  const drawerDocSearchInput = document.getElementById("drawerDocSearchInput");
+  const drawerDocSearchClearBtn = document.getElementById("drawerDocSearchClearBtn");
 
   // Menu Contextuel Universel
   const cardContextMenu = document.getElementById("cardContextMenu");
@@ -368,7 +390,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    occurrences.forEach((occ) => {
+    occurrences.forEach((occ, index) => {
       const item = document.createElement("div");
       const isActive = (occ.page_number === activePage);
       item.className = `vertical-occ-card ${isActive ? 'active' : ''}`;
@@ -383,6 +405,8 @@ document.addEventListener("DOMContentLoaded", () => {
       `;
       item.addEventListener("click", () => {
         closeMobileOccurrencesDrawer();
+        currentActiveOccurrenceIndex = index;
+        updateOccurrenceStepperUI();
         openDocumentInSplitView(docId, docTitle, occ.page_number, occurrences, occ.rect, occ.y_ratio || 0);
       });
       drawerOccurrencesList.appendChild(item);
@@ -539,15 +563,38 @@ document.addEventListener("DOMContentLoaded", () => {
         e.preventDefault();
         pasteClipboard();
       }
-    } else if (isCmdOrCtrl && e.key.toLowerCase() === "a") {
-      // Tout sélectionner dans la vue actuelle
-      if (currentLoadedDocs.length > 0) {
+    } else if (isCmdOrCtrl && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      if (workspace.classList.contains("split-active")) {
+        if (viewerDocSearchWrapper) {
+          viewerDocSearchWrapper.style.display = "flex";
+          if (viewerDocSearchInput) {
+            viewerDocSearchInput.focus();
+            viewerDocSearchInput.select();
+          }
+        } else if (docSearchInput) {
+          docSearchInput.focus();
+          docSearchInput.select();
+        }
+      } else {
+        if (searchInput) {
+          searchInput.focus();
+          searchInput.select();
+        }
+      }
+    } else if (e.key === "F3" || (e.altKey && (e.key === "ArrowDown" || e.key === "ArrowUp"))) {
+      if (workspace.classList.contains("split-active")) {
         e.preventDefault();
-        currentLoadedDocs.forEach(d => selectedDocIds.add(d.id));
-        updateSelectionUI();
+        if (e.shiftKey || e.key === "ArrowUp") {
+          goToPrevOccurrence();
+        } else {
+          goToNextOccurrence();
+        }
       }
     } else if (e.key === "Escape") {
-      if (selectedDocIds.size > 0) {
+      if (viewerDocSearchWrapper && viewerDocSearchWrapper.style.display === "flex") {
+        viewerDocSearchWrapper.style.display = "none";
+      } else if (selectedDocIds.size > 0) {
         clearSelection();
       }
     }
@@ -651,6 +698,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function closeSplitViewer() {
     workspace.classList.remove("split-active");
+    document.body.classList.remove("doc-open");
+    const appEl = document.getElementById("app");
+    if (appEl) appEl.classList.remove("doc-open");
+    if (viewerDocSearchWrapper) viewerDocSearchWrapper.style.display = "none";
+    syncDocSearchInputs("");
+    currentActiveOccurrences = [];
+    currentActiveOccurrenceIndex = -1;
+    updateOccurrenceStepperUI();
     pdfFrame.src = "about:blank";
     currentActiveDocId = null;
     showGeneralResultsView();
@@ -675,29 +730,226 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
-  // Recherche Interne au Document (Split View)
+  // Recherche Interne au Document (Split View, Header Viewer, Tiroir Mobile)
   // =========================================================================
-  docSearchInput.addEventListener("input", (e) => {
-    const val = e.target.value.trim();
-    clearDocSearchBtn.style.display = val ? "flex" : "none";
-    clearTimeout(docSearchDebounceTimer);
-    docSearchDebounceTimer = setTimeout(() => {
-      performDocSearch(val);
-    }, 250);
+  function syncDocSearchInputs(val) {
+    if (docSearchInput && docSearchInput.value !== val) docSearchInput.value = val;
+    if (viewerDocSearchInput && viewerDocSearchInput.value !== val) viewerDocSearchInput.value = val;
+    if (drawerDocSearchInput && drawerDocSearchInput.value !== val) drawerDocSearchInput.value = val;
+
+    const hasVal = Boolean(val && val.length > 0);
+    if (clearDocSearchBtn) clearDocSearchBtn.style.display = hasVal ? "flex" : "none";
+    if (viewerDocSearchClearBtn) viewerDocSearchClearBtn.style.display = hasVal ? "flex" : "none";
+    if (drawerDocSearchClearBtn) drawerDocSearchClearBtn.style.display = hasVal ? "flex" : "none";
+  }
+
+  if (docSearchInput) {
+    docSearchInput.addEventListener("input", (e) => {
+      const val = e.target.value.trim();
+      syncDocSearchInputs(val);
+      clearTimeout(docSearchDebounceTimer);
+      docSearchDebounceTimer = setTimeout(() => {
+        performDocSearch(val);
+      }, 250);
+    });
+  }
+
+  if (clearDocSearchBtn) {
+    clearDocSearchBtn.addEventListener("click", () => {
+      performDocSearch("");
+    });
+  }
+
+  // Écouteurs pour le Header Viewer (Mobile & Desktop)
+  if (viewerDocSearchToggleBtn && viewerDocSearchWrapper) {
+    viewerDocSearchToggleBtn.addEventListener("click", () => {
+      const isHidden = (viewerDocSearchWrapper.style.display === "none" || !viewerDocSearchWrapper.style.display);
+      if (isHidden) {
+        viewerDocSearchWrapper.style.display = "flex";
+        if (viewerDocSearchInput) {
+          viewerDocSearchInput.focus();
+          if (currentSearchQuery && !viewerDocSearchInput.value) {
+            syncDocSearchInputs(currentSearchQuery);
+          }
+        }
+      } else {
+        viewerDocSearchWrapper.style.display = "none";
+      }
+    });
+  }
+
+  if (viewerDocSearchCloseBtn && viewerDocSearchWrapper) {
+    viewerDocSearchCloseBtn.addEventListener("click", () => {
+      viewerDocSearchWrapper.style.display = "none";
+    });
+  }
+
+  if (viewerDocSearchInput) {
+    viewerDocSearchInput.addEventListener("input", (e) => {
+      const val = e.target.value.trim();
+      syncDocSearchInputs(val);
+      clearTimeout(docSearchDebounceTimer);
+      docSearchDebounceTimer = setTimeout(() => {
+        performDocSearch(val);
+      }, 250);
+    });
+  }
+
+  if (viewerDocSearchClearBtn) {
+    viewerDocSearchClearBtn.addEventListener("click", () => {
+      performDocSearch("");
+    });
+  }
+
+  // Écouteurs pour le Tiroir Mobile d'extraits
+  if (drawerDocSearchInput) {
+    drawerDocSearchInput.addEventListener("input", (e) => {
+      const val = e.target.value.trim();
+      syncDocSearchInputs(val);
+      clearTimeout(docSearchDebounceTimer);
+      docSearchDebounceTimer = setTimeout(() => {
+        performDocSearch(val);
+      }, 250);
+    });
+  }
+
+  if (drawerDocSearchClearBtn) {
+    drawerDocSearchClearBtn.addEventListener("click", () => {
+      performDocSearch("");
+    });
+  }
+
+  // =========================================================================
+  // Stepper d'Occurrences (Suivant / Précédent & Raccourcis Clavier)
+  // =========================================================================
+  function updateOccurrenceStepperUI() {
+    const total = currentActiveOccurrences ? currentActiveOccurrences.length : 0;
+    if (!occurrenceStepper) return;
+
+    if (total === 0) {
+      occurrenceStepper.style.display = "none";
+      if (searchStepperMini) searchStepperMini.style.display = "none";
+      return;
+    }
+
+    occurrenceStepper.style.display = "inline-flex";
+    if (searchStepperMini) searchStepperMini.style.display = "inline-flex";
+
+    const currentDisplayIndex = currentActiveOccurrenceIndex >= 0 ? currentActiveOccurrenceIndex + 1 : 1;
+    const text = `${currentDisplayIndex} / ${total}`;
+
+    if (occurrenceCounter) occurrenceCounter.textContent = text;
+    if (prevOccBtn) prevOccBtn.disabled = total <= 1;
+    if (nextOccBtn) nextOccBtn.disabled = total <= 1;
+    if (searchPrevBtn) searchPrevBtn.disabled = total <= 1;
+    if (searchNextBtn) searchNextBtn.disabled = total <= 1;
+  }
+
+  function jumpToOccurrenceByIndex(index) {
+    if (!currentActiveOccurrences || currentActiveOccurrences.length === 0) return;
+    if (index < 0) index = currentActiveOccurrences.length - 1;
+    if (index >= currentActiveOccurrences.length) index = 0;
+
+    currentActiveOccurrenceIndex = index;
+    const occ = currentActiveOccurrences[index];
+
+    updateOccurrenceStepperUI();
+
+    // Mettre à jour la sélection visuelle dans la liste latérale
+    document.querySelectorAll(".vertical-occ-card").forEach((el, idx) => {
+      const isCardActive = (idx === index);
+      el.classList.toggle("active", isCardActive);
+      if (isCardActive) {
+        el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    });
+
+    // Mettre à jour la sélection visuelle dans le tiroir mobile
+    if (drawerOccurrencesList) {
+      drawerOccurrencesList.querySelectorAll(".vertical-occ-card").forEach((el, idx) => {
+        const isCardActive = (idx === index);
+        el.classList.toggle("active", isCardActive);
+        if (isCardActive) {
+          el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
+      });
+    }
+
+    if (occ) {
+      if (viewerPageBadge) {
+        viewerPageBadge.textContent = `Page ${occ.page_number}`;
+      }
+      goToPageAndScrollToOccurrence(occ.page_number, occ.rect, occ.y_ratio);
+    }
+  }
+
+  function goToNextOccurrence() {
+    jumpToOccurrenceByIndex(currentActiveOccurrenceIndex + 1);
+  }
+
+  function goToPrevOccurrence() {
+    jumpToOccurrenceByIndex(currentActiveOccurrenceIndex - 1);
+  }
+
+  if (prevOccBtn) prevOccBtn.addEventListener("click", goToPrevOccurrence);
+  if (nextOccBtn) nextOccBtn.addEventListener("click", goToNextOccurrence);
+  if (searchPrevBtn) searchPrevBtn.addEventListener("click", goToPrevOccurrence);
+  if (searchNextBtn) searchNextBtn.addEventListener("click", goToNextOccurrence);
+
+  // Support de la touche Entrée dans les champs de recherche du document
+  [viewerDocSearchInput, docSearchInput, drawerDocSearchInput].forEach(inp => {
+    if (inp) {
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          if (e.shiftKey) {
+            goToPrevOccurrence();
+          } else {
+            goToNextOccurrence();
+          }
+        }
+      });
+    }
   });
 
-  clearDocSearchBtn.addEventListener("click", () => {
-    docSearchInput.value = "";
-    clearDocSearchBtn.style.display = "none";
-    docDetailCount.textContent = `${currentDocOriginalOccurrences.length} occurrence${currentDocOriginalOccurrences.length > 1 ? 's' : ''} dans ce document`;
-    renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentDocOriginalOccurrences);
-    updateViewerSearchHighlight(currentSearchQuery);
+  // Raccourcis clavier globaux : F3 / Shift+F3 et Alt+Flèche
+  window.addEventListener("keydown", (e) => {
+    if (!workspace.classList.contains("split-active")) return;
+    if (e.key === "F3") {
+      e.preventDefault();
+      if (e.shiftKey) {
+        goToPrevOccurrence();
+      } else {
+        goToNextOccurrence();
+      }
+    } else if (e.altKey && e.key === "ArrowDown") {
+      e.preventDefault();
+      goToNextOccurrence();
+    } else if (e.altKey && e.key === "ArrowUp") {
+      e.preventDefault();
+      goToPrevOccurrence();
+    }
   });
 
   async function performDocSearch(query) {
+    syncDocSearchInputs(query);
+
     if (!query) {
-      docDetailCount.textContent = `${currentDocOriginalOccurrences.length} occurrence${currentDocOriginalOccurrences.length > 1 ? 's' : ''} dans ce document`;
+      const origCount = currentDocOriginalOccurrences ? currentDocOriginalOccurrences.length : 0;
+      const countText = `${origCount} occurrence${origCount > 1 ? 's' : ''} dans ce document`;
+      const pillText = `${origCount} extrait${origCount > 1 ? 's' : ''}`;
+
+      if (docDetailCount) docDetailCount.textContent = countText;
+      if (viewerDocSearchResultCount) viewerDocSearchResultCount.textContent = "";
+      if (mobileOccurrencesCountText) mobileOccurrencesCountText.textContent = pillText;
+      if (drawerDocCount) drawerDocCount.textContent = pillText;
+
+      currentActiveOccurrences = currentDocOriginalOccurrences || [];
+      currentActiveOccurrenceIndex = currentActiveOccurrences.length > 0 ? 0 : -1;
+      updateOccurrenceStepperUI();
+
       renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentDocOriginalOccurrences);
+      renderDrawerOccurrences(currentActiveDocId, currentActiveDocTitle, currentDocOriginalOccurrences);
       updateViewerSearchHighlight(currentSearchQuery);
       return;
     }
@@ -707,8 +959,20 @@ document.addEventListener("DOMContentLoaded", () => {
       const data = await res.json();
       const occs = data.occurrences || [];
 
-      docDetailCount.textContent = `${occs.length} résultat${occs.length > 1 ? 's' : ''} pour "${query}"`;
+      const resultLabel = `${occs.length} résultat${occs.length > 1 ? 's' : ''}`;
+      const pillLabel = `${occs.length} extrait${occs.length > 1 ? 's' : ''}`;
+
+      if (docDetailCount) docDetailCount.textContent = `${resultLabel} pour "${query}"`;
+      if (viewerDocSearchResultCount) viewerDocSearchResultCount.textContent = resultLabel;
+      if (mobileOccurrencesCountText) mobileOccurrencesCountText.textContent = pillLabel;
+      if (drawerDocCount) drawerDocCount.textContent = pillLabel;
+
+      currentActiveOccurrences = occs;
+      currentActiveOccurrenceIndex = occs.length > 0 ? 0 : -1;
+      updateOccurrenceStepperUI();
+
       renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, occs);
+      renderDrawerOccurrences(currentActiveDocId, currentActiveDocTitle, occs);
       updateViewerSearchHighlight(query);
 
       if (occs.length > 0) {
@@ -908,7 +1172,7 @@ document.addEventListener("DOMContentLoaded", () => {
           </svg>
         </div>
         <div class="folder-info">
-          <div class="folder-name" title="${folder.name}">${folder.name}</div>
+          <div class="folder-name" title="${escapeHtml(folder.name)}">${escapeHtml(folder.name)}</div>
           <div class="folder-meta">${folder.doc_count || 0} document${(folder.doc_count || 0) > 1 ? 's' : ''}</div>
         </div>
         <div class="folder-actions">
@@ -1360,6 +1624,11 @@ document.addEventListener("DOMContentLoaded", () => {
     foldersSection.style.display = "none";
     showGeneralResultsView();
 
+    // Sur mobile : fermer le visualiseur pour que l'utilisateur voie immédiatement la liste des résultats de recherche
+    if (window.innerWidth <= 768 && workspace.classList.contains("split-active")) {
+      closeSplitViewer();
+    }
+
     const isTitlesOnly = filterTitlesOnly.checked;
     const isFolderOnly = filterCurrentFolderOnly.checked && currentFolderId !== null;
 
@@ -1748,7 +2017,7 @@ document.addEventListener("DOMContentLoaded", () => {
           <svg width="17" height="17" viewBox="0 0 24 24" fill="#3b82f6" stroke="#3b82f6" stroke-width="1">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
           </svg>
-          <span style="font-weight: 600;" title="${f.fullPath}">${f.name}</span>
+          <span style="font-weight: 600;" title="${escapeHtml(f.fullPath)}">${escapeHtml(f.name)}</span>
         </div>
         <span class="folder-select-badge" style="font-size: 11px; padding: 2px 7px; border-radius: 5px; background: #f1f5f9; color: #64748b; font-weight: 600; border: 1px solid #cbd5e1;">${isCurrent ? 'Actuel' : (f.doc_count ? `${f.doc_count} doc.` : '0 doc.')}</span>
       `;
@@ -2152,10 +2421,26 @@ document.addEventListener("DOMContentLoaded", () => {
       window.history.pushState({ view: "split" }, "");
     }
 
-    if (docSearchInput) docSearchInput.value = "";
-    if (clearDocSearchBtn) clearDocSearchBtn.style.display = "none";
-
     workspace.classList.add("split-active");
+    document.body.classList.add("doc-open");
+    const appEl = document.getElementById("app");
+    if (appEl) appEl.classList.add("doc-open");
+
+    // Réinitialiser / synchroniser la recherche interne
+    syncDocSearchInputs(currentSearchQuery || "");
+    if (viewerDocSearchWrapper) viewerDocSearchWrapper.style.display = "none";
+    if (viewerDocSearchResultCount) {
+      viewerDocSearchResultCount.textContent = currentSearchQuery ? `${occurrences.length} résultat${occurrences.length > 1 ? 's' : ''}` : "";
+    }
+
+    currentActiveOccurrences = occurrences || [];
+    let initialIdx = 0;
+    if (targetPage && occurrences && occurrences.length > 0) {
+      const foundIdx = occurrences.findIndex(o => o.page_number === targetPage);
+      if (foundIdx !== -1) initialIdx = foundIdx;
+    }
+    currentActiveOccurrenceIndex = currentActiveOccurrences.length > 0 ? initialIdx : -1;
+    updateOccurrenceStepperUI();
 
     generalView.style.display = "none";
     docDetailView.style.display = "block";
@@ -2207,7 +2492,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    occurrences.forEach((occ) => {
+    occurrences.forEach((occ, index) => {
       const card = document.createElement("div");
       const isActive = (occ.page_number === activePage);
       card.className = `vertical-occ-card ${isActive ? 'active' : ''}`;
@@ -2220,13 +2505,15 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
         <div class="vertical-occ-footer">
           <span class="vertical-occ-page">Page ${occ.page_number}</span>
-          <span class="vertical-occ-snippet" title="${occ.text_snippet}">${occ.text_snippet || ''}</span>
+          <span class="vertical-occ-snippet" title="${escapeHtml(occ.text_snippet || '')}">${escapeHtml(occ.text_snippet || '')}</span>
         </div>
       `;
 
       card.addEventListener("click", () => {
         document.querySelectorAll(".vertical-occ-card.active").forEach(el => el.classList.remove("active"));
         card.classList.add("active");
+        currentActiveOccurrenceIndex = index;
+        updateOccurrenceStepperUI();
         viewerPageBadge.textContent = `Page ${occ.page_number}`;
         goToPageAndScrollToOccurrence(occ.page_number, occ.rect, occ.y_ratio);
       });

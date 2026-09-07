@@ -4,6 +4,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.coverage
+htmlcov/
 
 # Données locales & Cache
 data/
@@ -12,3 +14,11 @@ data/
 # IDE & Editeurs
 .vscode/
 .idea/
+.DS_Store
+
+# Environnement et Secrets
+.env
+
+# Sauvegardes
+backups/
+*.tar.gz

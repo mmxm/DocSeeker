@@ -1,0 +1,70 @@
+# ==============================================================================
+# DocFastExplorer - Caddyfile (Reverse Proxy, SSL Automatique & Authentification)
+# ==============================================================================
+
+{$DOMAIN:localhost} {
+    # --------------------------------------------------------------------------
+    # En-têtes HTTP de Sécurité
+    # --------------------------------------------------------------------------
+    header {
+        # Protection contre le MIME-sniffing
+        X-Content-Type-Options "nosniff"
+
+        # Empêche le clickjacking tout en autorisant l'affichage de notre viewer interne
+        X-Frame-Options "SAMEORIGIN"
+
+        # Protection des informations de provenance (Referrer)
+        Referrer-Policy "strict-origin-when-cross-origin"
+
+        # Désactivation des fonctionnalités sensibles du navigateur inutilisées
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+
+        # HSTS (activé pour forcer le chiffrement de bout en bout)
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+
+        # Masque le header d'identification du serveur Caddy
+        -Server
+    }
+
+    # --------------------------------------------------------------------------
+    # Limitation de la taille maximale des requêtes (téléversement PDF max 150 Mo)
+    # --------------------------------------------------------------------------
+    request_body {
+        max_size 150MB
+    }
+
+    # --------------------------------------------------------------------------
+    # Authentification HTTP Basic Auth (Compte unique sécurisé)
+    # Note: L'utilisateur et le hash bcrypt sont injectés via variables d'environnement
+    # Pour générer un hash : caddy hash-password --plaintext "mon_mot_de_passe"
+    # --------------------------------------------------------------------------
+    basic_auth {
+        {$BASIC_AUTH_USER:admin} {$BASIC_AUTH_PASSWORD_HASH:$2a$14$Zkx19XLiW6VYouLHR5NmfOFU0z2GTNmpkT/5qqR7hx4L49SSTucOG}
+    }
+
+    # --------------------------------------------------------------------------
+    # Proxy vers l'application FastAPI
+    # --------------------------------------------------------------------------
+    reverse_proxy app:8000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # --------------------------------------------------------------------------
+    # Compression dynamique (Gzip / Zstandard)
+    # --------------------------------------------------------------------------
+    encode zstd gzip
+
+    # --------------------------------------------------------------------------
+    # Journalisation des accès
+    # --------------------------------------------------------------------------
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 10MB
+            roll_keep 5
+        }
+        format json
+    }
+}

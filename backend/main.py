@@ -33,14 +33,29 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DocFastExplorer API", lifespan=lifespan)
 
+MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", 150 * 1024 * 1024))  # 150 Mo max par défaut
+
 app.add_middleware(GZipMiddleware, minimum_size=1000)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+if allowed_origins_env:
+    origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
+else:
+    # Par défaut : pas d'allow_credentials avec wildcard pour éviter les fuites CSRF/CORS
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
 
@@ -61,6 +76,17 @@ class DocumentUpdate(BaseModel):
 
 class AnnotationsPayload(BaseModel):
     annotations: List[Dict[str, Any]]
+
+@app.get("/api/health")
+def health_check():
+    """Endpoint de diagnostic pour Docker, Caddy et monitoring."""
+    try:
+        conn = get_db_connection()
+        conn.execute("SELECT 1;").fetchone()
+        conn.close()
+        return {"status": "ok", "service": "DocFastExplorer"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail="Service indisponible (Base de données inaccessible).")
 
 @app.get("/api/folders")
 def list_folders(parent_id: Optional[str] = Query(None)):
@@ -110,14 +136,21 @@ def create_folder(payload: FolderCreate):
         raise HTTPException(status_code=400, detail="Le nom du dossier ne peut pas être vide.")
 
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO folders (name, parent_id, color)
-        VALUES (?, ?, ?)
-    """, (clean_name, payload.parent_id, payload.color or "#3b82f6"))
-    folder_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        if payload.parent_id is not None:
+            cursor.execute("SELECT id FROM folders WHERE id = ?", (payload.parent_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=400, detail="Dossier parent introuvable.")
+
+        cursor.execute("""
+            INSERT INTO folders (name, parent_id, color)
+            VALUES (?, ?, ?)
+        """, (clean_name, payload.parent_id, payload.color or "#3b82f6"))
+        folder_id = cursor.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
 
     return {
         "status": "success",
@@ -140,18 +173,17 @@ def update_folder(folder_id: int, payload: FolderUpdate):
         conn.close()
         raise HTTPException(status_code=404, detail="Dossier introuvable.")
 
-    updates = []
-    params = []
-    if payload.name is not None and payload.name.strip():
-        updates.append("name = ?")
-        params.append(payload.name.strip())
-    if payload.color is not None:
-        updates.append("color = ?")
-        params.append(payload.color)
+    has_name = payload.name is not None and bool(payload.name.strip())
+    has_color = payload.color is not None
 
-    if updates:
-        params.append(folder_id)
-        cursor.execute(f"UPDATE folders SET {', '.join(updates)} WHERE id = ?", params)
+    if has_name and has_color:
+        cursor.execute("UPDATE folders SET name = ?, color = ? WHERE id = ?", (payload.name.strip(), payload.color, folder_id))
+        conn.commit()
+    elif has_name:
+        cursor.execute("UPDATE folders SET name = ? WHERE id = ?", (payload.name.strip(), folder_id))
+        conn.commit()
+    elif has_color:
+        cursor.execute("UPDATE folders SET color = ? WHERE id = ?", (payload.color, folder_id))
         conn.commit()
 
     conn.close()
@@ -161,12 +193,16 @@ def update_folder(folder_id: int, payload: FolderUpdate):
 def delete_folder(folder_id: int):
     """Supprime un dossier et replace ses documents à la racine."""
     conn = get_db_connection()
-    cursor = conn.cursor()
-    # Replacer les documents dans la racine
-    cursor.execute("UPDATE documents SET folder_id = NULL WHERE folder_id = ?", (folder_id,))
-    cursor.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM folders WHERE id = ?", (folder_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Dossier introuvable.")
+        cursor.execute("UPDATE documents SET folder_id = NULL WHERE folder_id = ?", (folder_id,))
+        cursor.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+        conn.commit()
+    finally:
+        conn.close()
     return {"status": "success", "message": "Dossier supprimé."}
 
 @app.patch("/api/documents/{doc_id}/move")
@@ -202,23 +238,25 @@ def batch_move_documents(payload: BatchDocumentMove):
         return {"status": "success", "moved_count": 0}
 
     conn = get_db_connection()
-    cursor = conn.cursor()
+    try:
+        cursor = conn.cursor()
 
-    if payload.folder_id is not None:
-        cursor.execute("SELECT id FROM folders WHERE id = ?", (payload.folder_id,))
-        if not cursor.fetchone():
-            conn.close()
-            raise HTTPException(status_code=400, detail="Dossier cible introuvable.")
+        if payload.folder_id is not None:
+            cursor.execute("SELECT id FROM folders WHERE id = ?", (payload.folder_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=400, detail="Dossier cible introuvable.")
 
-    placeholders = ",".join(["?"] * len(payload.doc_ids))
-    cursor.execute(
-        f"UPDATE documents SET folder_id = ? WHERE id IN ({placeholders})",
-        [payload.folder_id] + payload.doc_ids
-    )
-    conn.commit()
-    conn.close()
+        placeholders = ",".join(["?"] * len(payload.doc_ids))
+        cursor.execute(
+            f"UPDATE documents SET folder_id = ? WHERE id IN ({placeholders})",  # nosec B608
+            [payload.folder_id] + payload.doc_ids
+        )
+        moved_count = cursor.rowcount
+        conn.commit()
+    finally:
+        conn.close()
 
-    return {"status": "success", "moved_count": len(payload.doc_ids), "folder_id": payload.folder_id}
+    return {"status": "success", "moved_count": moved_count, "folder_id": payload.folder_id}
 
 @app.patch("/api/documents/{doc_id}")
 def rename_document(doc_id: int, payload: DocumentUpdate):
@@ -329,11 +367,8 @@ async def save_pdf_document(doc_id: int, request: Request):
     """
     Reçoit le fichier PDF mis à jour avec les annotations directement cuites par PDF.js (saveDocument),
     garantissant une fidélité 100% native (surélévation de texte, tracés, notes, suppressions).
+    Sécurisé avec limite de taille de flux et vérification du format PDF natif (%PDF-).
     """
-    pdf_bytes = await request.body()
-    if not pdf_bytes or len(pdf_bytes) < 20:
-        raise HTTPException(status_code=400, detail="Contenu PDF invalide ou vide.")
-    
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id, filename FROM documents WHERE id = ?", (doc_id,))
@@ -341,19 +376,43 @@ async def save_pdf_document(doc_id: int, request: Request):
     if not doc:
         conn.close()
         raise HTTPException(status_code=404, detail="Document introuvable.")
-    
+
     filename = doc["filename"]
     pdf_path = os.path.join(DOCUMENTS_DIR, filename)
     tmp_path = pdf_path + ".tmp"
+
+    total_bytes = 0
+    first_chunk = True
     try:
         with open(tmp_path, "wb") as f:
-            f.write(pdf_bytes)
+            async for chunk in request.stream():
+                if first_chunk:
+                    if len(chunk) < 5 or b"%PDF-" not in chunk[:1024]:
+                        raise HTTPException(status_code=400, detail="Contenu PDF invalide : signature de fichier manquante.")
+                    first_chunk = False
+                total_bytes += len(chunk)
+                if total_bytes > MAX_UPLOAD_SIZE:
+                    raise HTTPException(status_code=413, detail=f"Le document PDF dépasse la taille maximale autorisée ({MAX_UPLOAD_SIZE // (1024*1024)} Mo).")
+                f.write(chunk)
+
+        if total_bytes < 20:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            conn.close()
+            raise HTTPException(status_code=400, detail="Contenu PDF invalide ou vide.")
+
         os.replace(tmp_path, pdf_path)
+    except HTTPException:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        conn.close()
+        raise
     except Exception as e:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
         conn.close()
-        raise HTTPException(status_code=500, detail=f"Erreur lors de l'enregistrement du PDF : {str(e)}")
+        print(f"[Security/SavePDF] Erreur interne : {e}")
+        raise HTTPException(status_code=500, detail="Erreur interne lors de l'enregistrement du fichier PDF.")
     
     from backend.indexer import compute_file_hash
     file_hash = compute_file_hash(pdf_path)
@@ -361,7 +420,7 @@ async def save_pdf_document(doc_id: int, request: Request):
     conn.commit()
     conn.close()
     
-    return {"status": "success", "size": len(pdf_bytes)}
+    return {"status": "success", "size": total_bytes}
 
 @app.post("/api/documents/{doc_id}/annotations")
 def save_annotations(doc_id: int, payload: AnnotationsPayload):
@@ -474,18 +533,65 @@ def list_documents(folder_id: Optional[str] = Query(None)):
 
 @app.post("/api/upload")
 async def upload_pdf(file: UploadFile = File(...), title: Optional[str] = Form(None), folder_id: Optional[int] = Form(None)):
-    """Reçoit un fichier PDF, vérifie s'il est en doublon strict, et l'indexe."""
-    if not file.filename.lower().endswith(".pdf"):
+    """Reçoit un fichier PDF, vérifie sa signature et sa taille, s'assure de l'absence de doublon strict, et l'indexe."""
+    # Validation préalable du dossier cible si spécifié
+    if folder_id is not None:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM folders WHERE id = ?", (folder_id,))
+        row_folder = cursor.fetchone()
+        conn.close()
+        if not row_folder:
+            raise HTTPException(status_code=400, detail="Dossier cible introuvable.")
+
+    raw_filename = file.filename or "document.pdf"
+    if not raw_filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Seuls les fichiers PDF sont acceptés.")
 
-    original_filename = file.filename
-    safe_filename = re.sub(r'[/\\:\0]', ' ', original_filename).strip()
-    dest_path = os.path.join(DOCUMENTS_DIR, safe_filename)
+    # Sanitisation rigoureuse du nom de fichier pour éliminer toute traversée de répertoire
+    clean_raw = raw_filename.replace("\\", "/")
+    base_name = os.path.basename(clean_raw)
+    safe_filename = re.sub(r'[/\\:\0]', ' ', base_name).strip()
+    safe_filename = re.sub(r'\.{2,}', '', safe_filename)  # Éliminer toute séquence de traversée ..
+    safe_filename = re.sub(r'^\.+', '', safe_filename).strip()  # Empêcher les fichiers cachés
+    if not safe_filename or not safe_filename.lower().endswith(".pdf"):
+        safe_filename = f"document_{os.urandom(4).hex()}.pdf"
 
-    # Sauvegarde temporaire pour vérification du hash SHA-256
+    dest_path = os.path.join(DOCUMENTS_DIR, safe_filename)
     temp_path = dest_path + ".tmp"
-    with open(temp_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+
+    # Sauvegarde temporaire par flux contrôlé (vérification signature magique + taille maximale)
+    total_bytes = 0
+    first_chunk = True
+    try:
+        with open(temp_path, "wb") as buffer:
+            while True:
+                chunk = await file.read(64 * 1024)
+                if not chunk:
+                    break
+                if first_chunk:
+                    if len(chunk) < 5 or b"%PDF-" not in chunk[:1024]:
+                        raise HTTPException(status_code=400, detail="Format invalide : le fichier téléversé n'est pas un document PDF valide (signature manquante).")
+                    first_chunk = False
+                total_bytes += len(chunk)
+                if total_bytes > MAX_UPLOAD_SIZE:
+                    raise HTTPException(status_code=413, detail=f"Le fichier dépasse la taille maximale autorisée ({MAX_UPLOAD_SIZE // (1024*1024)} Mo).")
+                buffer.write(chunk)
+
+        if total_bytes < 20:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise HTTPException(status_code=400, detail="Fichier PDF vide ou trop court.")
+
+    except HTTPException:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
+    except Exception as e:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        print(f"[Security/Upload] Erreur interne : {e}")
+        raise HTTPException(status_code=500, detail="Erreur lors de la réception du fichier.")
 
     from backend.indexer import compute_file_hash, find_duplicate_by_hash
     file_hash = compute_file_hash(temp_path)
@@ -516,6 +622,7 @@ async def upload_pdf(file: UploadFile = File(...), title: Optional[str] = Form(N
 
     shutil.move(temp_path, dest_path)
 
+    doc_info = None
     try:
         doc_info = index_pdf_file(dest_path, safe_filename, custom_title=title)
         
@@ -532,9 +639,18 @@ async def upload_pdf(file: UploadFile = File(...), title: Optional[str] = Form(N
         doc_info["pdf_url"] = f"/api/pdf/{doc_info['id']}"
         return {"status": "success", "document": doc_info}
     except Exception as e:
-        if os.path.exists(dest_path):
-            os.remove(dest_path)
-        raise HTTPException(status_code=500, detail=f"Erreur lors de l'indexation : {str(e)}")
+        if doc_info and "id" in doc_info:
+            try:
+                remove_document(doc_info["id"])
+            except Exception:
+                pass
+        elif os.path.exists(dest_path):
+            try:
+                os.remove(dest_path)
+            except Exception:
+                pass
+        print(f"[Security/Indexer] Erreur lors de l'indexation : {e}")
+        raise HTTPException(status_code=500, detail="Erreur lors de l'indexation du document.")
 
 @app.delete("/api/documents/{doc_id}")
 def delete_pdf(doc_id: int):
@@ -563,6 +679,36 @@ def get_cover(doc_id: int):
         return FileResponse(cover_webp, media_type="image/webp", headers=cache_headers)
     if os.path.exists(cover_jpg):
         return FileResponse(cover_jpg, media_type="image/jpeg", headers=cache_headers)
+
+    # Auto-régénération à la volée si le document physique existe toujours
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT filename FROM documents WHERE id = ?", (doc_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        pdf_path = os.path.join(DOCUMENTS_DIR, row["filename"])
+        if os.path.exists(pdf_path):
+            try:
+                import pymupdf
+                doc = pymupdf.open(pdf_path)
+                if len(doc) > 0:
+                    first_page = doc[0]
+                    scale = 180 / first_page.rect.width if first_page.rect.width > 0 else 1.0
+                    pix = first_page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
+                    try:
+                        pix.pil_save(cover_webp, format="WEBP", quality=80)
+                        doc.close()
+                        return FileResponse(cover_webp, media_type="image/webp", headers=cache_headers)
+                    except Exception:
+                        pix.save(cover_jpg)
+                        doc.close()
+                        return FileResponse(cover_jpg, media_type="image/jpeg", headers=cache_headers)
+                doc.close()
+            except Exception:
+                pass
+
     raise HTTPException(status_code=404, detail="Couverture non disponible.")
 
 @app.get("/api/crop/{doc_id}/{page}/{occ_id}")
@@ -570,8 +716,16 @@ def get_crop(doc_id: int, page: int, occ_id: int, h: Optional[str] = Query(None)
     """Renvoie la vignette cropée, générée à la volée (Lazy Crop) si nécessaire."""
     from backend.crop_service import get_or_generate_crop_on_demand
     
+    # Validation stricte du hash de requête (caractères hexadécimaux uniquement, sinon rejet immédiat)
+    safe_h = ""
+    if h is not None:
+        cleaned = h.strip()
+        if cleaned:
+            if not re.match(r'^[a-f0-9]{1,32}$', cleaned, re.IGNORECASE):
+                raise HTTPException(status_code=400, detail="Paramètre de hachage de requête invalide.")
+            safe_h = cleaned.lower()
     terms_decoded = terms or ""
-    crop_path = get_or_generate_crop_on_demand(doc_id, page, occ_id, h or "", terms_decoded)
+    crop_path = get_or_generate_crop_on_demand(doc_id, page, occ_id, safe_h, terms_decoded)
     
     # Cache court/aucun pour les requêtes de recherche très spécifiques (selon demande utilisateur)
     nocache_headers = {"Cache-Control": "no-cache, must-revalidate"}
@@ -580,19 +734,28 @@ def get_crop(doc_id: int, page: int, occ_id: int, h: Optional[str] = Query(None)
         media_type = "image/webp" if crop_path.endswith(".webp") else "image/jpeg"
         return FileResponse(crop_path, media_type=media_type, headers=nocache_headers)
 
-    doc_cache_dir = os.path.join(CACHE_DIR, f"doc_{doc_id}")
+    doc_cache_dir = os.path.abspath(os.path.join(CACHE_DIR, f"doc_{doc_id}"))
     if os.path.exists(doc_cache_dir):
         for fname in os.listdir(doc_cache_dir):
-            if fname.startswith(f"p{page}_occ{occ_id}"):
-                fpath = os.path.join(doc_cache_dir, fname)
-                media_type = "image/webp" if fname.endswith(".webp") else "image/jpeg"
-                return FileResponse(fpath, media_type=media_type, headers=nocache_headers)
+            if fname.startswith(f"p{page}_occ{occ_id}_") or fname.startswith(f"p{page}_occ{occ_id}."):
+                fpath = os.path.abspath(os.path.join(doc_cache_dir, fname))
+                if fpath.startswith(doc_cache_dir + os.sep) and os.path.exists(fpath):
+                    media_type = "image/webp" if fname.endswith(".webp") else "image/jpeg"
+                    return FileResponse(fpath, media_type=media_type, headers=nocache_headers)
 
     raise HTTPException(status_code=404, detail="Vignette non trouvée.")
 
 @app.get("/api/doc-search")
 def doc_search(doc_id: int = Query(...), q: str = Query(..., min_length=1)):
     """Recherche ciblée au sein d'un document spécifique."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM documents WHERE id = ?", (doc_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Document introuvable.")
+
     from backend.search_engine import search_within_document
     return search_within_document(doc_id, q)
 
@@ -644,7 +807,7 @@ def stream_pdf(doc_id: int, range: Optional[str] = Header(None)):
     start = int(match.group(1))
     end = int(match.group(2)) if match.group(2) else file_size - 1
 
-    if start >= file_size:
+    if start > end or start >= file_size:
         return Response(
             status_code=416, 
             headers={"Content-Range": f"bytes */{file_size}"}

@@ -84,7 +84,7 @@ def index_pdf_file(file_path: str, original_filename: str, custom_title: Optiona
         cursor.execute("DELETE FROM pages_fts WHERE doc_id = ?", (doc_id,))
         cursor.execute("""
             UPDATE documents 
-            SET title = ?, file_hash = ?, total_pages = ?, file_size = ?, created_at = CURRENT_TIMESTAMP 
+            SET title = ?, file_hash = ?, total_pages = ?, file_size = ?, updated_at = CURRENT_TIMESTAMP 
             WHERE id = ?
         """, (title, file_hash, total_pages, file_size, doc_id))
     else:
@@ -170,13 +170,14 @@ def remove_document(doc_id: int) -> bool:
         except OSError:
             pass
 
-    # Supprimer la couverture
-    cover_path = os.path.join(COVERS_DIR, f"{doc_id}.jpg")
-    if os.path.exists(cover_path):
-        try:
-            os.remove(cover_path)
-        except OSError:
-            pass
+    # Supprimer la couverture (.jpg et .webp)
+    for ext in [".jpg", ".webp"]:
+        cp = os.path.join(COVERS_DIR, f"{doc_id}{ext}")
+        if os.path.exists(cp):
+            try:
+                os.remove(cp)
+            except OSError:
+                pass
 
     # Nettoyer les crops en cache pour ce document
     doc_cache_dir = os.path.join(CACHE_DIR, f"doc_{doc_id}")

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css?v=4.2">
+  <link rel="stylesheet" href="/style.css?v=4.6">
 </head>
 <body class="light-theme">
   <div id="app" class="app-layout">
@@ -24,7 +24,10 @@
           </svg>
         </div>
         <div class="brand-text">
-          <span class="brand-title">DocFastExplorer</span>
+          <span class="brand-title">
+            <span class="brand-title-full">DocFastExplorer</span>
+            <span class="brand-title-short">DocFast</span>
+          </span>
           <span class="brand-subtitle">Recherche Visuelle PDF</span>
         </div>
       </div>
@@ -114,13 +117,13 @@
           <span class="btn-label-responsive">Nouveau dossier</span>
         </button>
 
-        <button id="openUploadBtn" class="btn btn-primary" title="Importer un nouveau document PDF">
+        <button id="openUploadBtn" class="btn btn-primary btn-icon-text" title="Importer des documents PDF">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
             <polyline points="17 8 12 3 7 8"></polyline>
             <line x1="12" y1="3" x2="12" y2="15"></line>
           </svg>
-          <span>Importer PDF</span>
+          <span class="btn-label-responsive">Importer</span>
         </button>
       </div>
     </header>
@@ -267,14 +270,36 @@
                 <line x1="19" y1="12" x2="5" y2="12"></line>
                 <polyline points="12 19 5 12 12 5"></polyline>
               </svg>
-              <span class="back-text">Résultats</span>
             </button>
 
-            <span class="viewer-doc-badge" id="viewerPageBadge">Page 1</span>
-            <h3 class="viewer-doc-title" id="viewerDocTitle">Nom du document</h3>
+            <span class="viewer-doc-badge" id="viewerPageBadge">p. 1</span>
+            <h3 class="viewer-doc-title" id="viewerDocTitle" title="Nom du document">Nom du document</h3>
           </div>
 
           <div class="viewer-actions">
+            <!-- Stepper de navigation rapide entre occurrences -->
+            <div class="occurrence-stepper" id="occurrenceStepper" style="display: none;" title="Naviguer entre les occurrences du document">
+              <button id="prevOccBtn" class="btn btn-icon btn-stepper" title="Occurrence précédente (Maj+Entrée)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="18 15 12 9 6 15"></polyline>
+                </svg>
+              </button>
+              <span id="occurrenceCounter" class="occurrence-counter">0 / 0</span>
+              <button id="nextOccBtn" class="btn btn-icon btn-stepper" title="Occurrence suivante (Entrée)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+              </button>
+            </div>
+
+            <!-- Bouton recherche interne au document (Mobile & Desktop) -->
+            <button id="viewerDocSearchToggleBtn" class="btn btn-icon" title="Rechercher dans ce document (Ctrl/Cmd+F)">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+            </button>
+
             <!-- Bouton tiroir mobile pour feuilleter les occurrences -->
             <button id="mobileOccurrencesBtn" class="btn btn-secondary btn-occurrences-pill" title="Afficher les extraits de ce document">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
@@ -282,7 +307,7 @@
                 <line x1="3" y1="9" x2="21" y2="9"></line>
                 <line x1="9" y1="21" x2="9" y2="9"></line>
               </svg>
-              <span id="mobileOccurrencesCountText">Extraits</span>
+              <span id="mobileOccurrencesCountText" class="occurrences-count-badge">0</span>
             </button>
 
             <!-- Bouton réduire/agrandir la liste latérale (Desktop) -->
@@ -293,13 +318,13 @@
               </svg>
             </button>
 
-            <button id="saveAnnotationsBtn" class="btn btn-primary btn-save-annotations" title="Sauvegarder les annotations et surlignages sur le serveur">
+            <button id="saveAnnotationsBtn" class="btn btn-primary btn-save-annotations" title="Sauvegarder les annotations (Cmd+S)">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
                 <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
                 <polyline points="17 21 17 13 7 13 7 21"></polyline>
                 <polyline points="7 3 7 8 15 8"></polyline>
               </svg>
-              <span>Sauvegarder</span>
+              <span class="btn-save-label">Sauvegarder</span>
             </button>
 
             <button id="closeViewerBtn" class="btn btn-icon" title="Fermer la vue latérale (Échap)">
@@ -310,6 +335,29 @@
             </button>
           </div>
         </div>
+
+        <!-- Barre de recherche interne au document (déroulante) -->
+        <div id="viewerDocSearchWrapper" class="viewer-doc-search-bar" style="display: none;">
+          <div class="viewer-search-inner">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="viewerDocSearchInput" placeholder="Rechercher dans ce document..." autocomplete="off" />
+            <button id="viewerDocSearchClearBtn" class="clear-btn" style="display: none;">&times;</button>
+          </div>
+          <span id="viewerDocSearchResultCount" class="viewer-search-count"></span>
+          <div class="search-stepper-mini" id="searchStepperMini" style="display: none;">
+            <button id="searchPrevBtn" class="btn btn-icon btn-stepper-mini" title="Résultat précédent (Maj+Entrée)">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"></polyline></svg>
+            </button>
+            <button id="searchNextBtn" class="btn btn-icon btn-stepper-mini" title="Résultat suivant (Entrée)">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </button>
+          </div>
+          <button id="viewerDocSearchCloseBtn" class="btn btn-icon btn-sm" title="Fermer la recherche">&times;</button>
+        </div>
+
         <div class="viewer-body">
           <iframe id="pdfFrame" class="pdf-iframe" src="about:blank" frameborder="0"></iframe>
         </div>
@@ -471,6 +519,14 @@
           </div>
           <button id="closeDrawerBtn" class="btn btn-icon btn-close-drawer" title="Fermer le tiroir">&times;</button>
         </div>
+        <div class="drawer-search-wrapper">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="text" id="drawerDocSearchInput" placeholder="Rechercher dans ce document..." autocomplete="off" />
+          <button id="drawerDocSearchClearBtn" class="clear-btn" style="display: none;">&times;</button>
+        </div>
       </div>
       <div id="drawerOccurrencesList" class="drawer-occurrences-list"></div>
     </div>
@@ -513,6 +569,6 @@
 
   </div>
 
-  <script src="/app.js?v=4.2"></script>
+  <script src="/app.js?v=4.6"></script>
 </body>
 </html>

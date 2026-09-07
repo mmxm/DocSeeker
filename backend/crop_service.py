@@ -38,7 +38,7 @@ def match_word(norm_w: str, term: str) -> bool:
 def get_query_hash(query_terms: List[str]) -> str:
     """Calcule une empreinte courte et stable des termes de recherche."""
     norm_terms = sorted([normalize_text(t) for t in query_terms if len(t.strip()) > 1])
-    return hashlib.md5("_".join(norm_terms).encode("utf-8")).hexdigest()[:8]
+    return hashlib.md5(f"v3_{'_'.join(norm_terms)}".encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
 
 def find_occurrences_on_page(words_data: List[List[Any]], query_terms: List[str], page_height: float = 842.0) -> List[Dict[str, Any]]:
     """
@@ -67,13 +67,16 @@ def find_occurrences_on_page(words_data: List[List[Any]], query_terms: List[str]
     if not matched_words:
         return []
 
-    # Regrouper les mots contigus ou proches sur la même ligne
+    # Regrouper uniquement les mots contigus d'une même expression sur la MÊME ligne
     occurrences = []
     current_occ = [matched_words[0]]
 
     for next_w in matched_words[1:]:
         prev_w = current_occ[-1]
-        if next_w["block_no"] == prev_w["block_no"] and abs(next_w["line_no"] - prev_w["line_no"]) <= 1:
+        # Même bloc, strictement même ligne, et écart horizontal restreint (< 25pt)
+        if (next_w["block_no"] == prev_w["block_no"] and 
+            next_w["line_no"] == prev_w["line_no"] and 
+            0 <= (next_w["rect"][0] - prev_w["rect"][2]) < 25):
             current_occ.append(next_w)
         else:
             occurrences.append(current_occ)
@@ -105,6 +108,7 @@ def find_occurrences_on_page(words_data: List[List[Any]], query_terms: List[str]
             "highlight_rects": [w["rect"] for w in group],
             "text": occ_text,
             "distinct_terms_count": matched_distinct_terms,
+            "matched_terms": list(set(w["matched_term"] for w in group)),
             "query_hash": query_hash
         })
 
@@ -148,9 +152,9 @@ def generate_crop_image(doc_id: int, filename: str, page_number: int, occ_data: 
     occ_center_x = (x0 + x1) / 2
     occ_center_y = (y0 + y1) / 2
 
-    # Format paysage Goodnotes ~340x130pt
-    CROP_WIDTH = 340
-    CROP_HEIGHT = 130
+    # Format paysage Goodnotes optimisé pour une lisibilité maximale (~300x120pt)
+    CROP_WIDTH = 300
+    CROP_HEIGHT = 120
 
     crop_x0 = max(page_rect.x0, occ_center_x - CROP_WIDTH / 2)
     crop_x1 = min(page_rect.x1, crop_x0 + CROP_WIDTH)
@@ -199,15 +203,28 @@ def generate_crop_image(doc_id: int, filename: str, page_number: int, occ_data: 
 
 def get_or_generate_crop_on_demand(doc_id: int, page_number: int, occ_id: int, query_hash: str, terms_str: str = "") -> str:
     """Génère la vignette à la demande (Lazy Crop) si elle n'est pas encore en cache."""
-    doc_cache_dir = os.path.join(CACHE_DIR, f"doc_{doc_id}")
+    # Sanitisation stricte de query_hash pour empêcher toute tentative de Path Traversal
+    safe_hash = query_hash.strip() if query_hash else ""
+    if safe_hash and not re.match(r'^[a-f0-9]{1,32}$', safe_hash):
+        safe_hash = ""
+
+    doc_cache_dir = os.path.abspath(os.path.join(CACHE_DIR, f"doc_{doc_id}"))
     os.makedirs(doc_cache_dir, exist_ok=True)
     
-    crop_filename = f"p{page_number}_occ{occ_id}_{query_hash}.webp" if query_hash else f"p{page_number}_occ{occ_id}.webp"
-    crop_path = os.path.join(doc_cache_dir, crop_filename)
+    crop_filename = f"p{page_number}_occ{occ_id}_{safe_hash}.webp" if safe_hash else f"p{page_number}_occ{occ_id}.webp"
+    crop_path = os.path.abspath(os.path.join(doc_cache_dir, crop_filename))
+    
+    # Vérification de sécurité supplémentaire : confinement strict dans le répertoire de cache
+    if not crop_path.startswith(doc_cache_dir + os.sep):
+        return ""
+
     if os.path.exists(crop_path):
         return crop_path
 
-    crop_jpg = os.path.join(doc_cache_dir, f"p{page_number}_occ{occ_id}_{query_hash}.jpg" if query_hash else f"p{page_number}_occ{occ_id}.jpg")
+    crop_jpg = os.path.abspath(os.path.join(doc_cache_dir, f"p{page_number}_occ{occ_id}_{safe_hash}.jpg" if safe_hash else f"p{page_number}_occ{occ_id}.jpg"))
+    if not crop_jpg.startswith(doc_cache_dir + os.sep):
+        return ""
+
     if os.path.exists(crop_jpg):
         return crop_jpg
 

@@ -10,7 +10,7 @@ MAX_OCCURRENCES_PER_DOC = 25
 def sanitize_fts_query(query: str) -> List[str]:
     """Nettoie la requête pour extraire les mots alphanumériques."""
     cleaned = re.sub(r'[^\w\s]', ' ', query, flags=re.UNICODE)
-    words = [w.strip() for w in cleaned.split() if len(w.strip()) > 1]
+    words = [w.strip() for w in cleaned.split() if w.strip()]
     return words
 
 def get_folder_and_subfolder_ids(folder_id: int) -> List[int]:
@@ -51,7 +51,10 @@ def search_titles(query: str, folder_id: Optional[int] = None) -> Dict[str, Any]
         norm_title = normalize_text(r["title"] or "")
         norm_filename = normalize_text(r["filename"] or "")
 
-        matches = [t for t in norm_terms if (t in norm_title or t in norm_filename)]
+        matches = [
+            t for t in norm_terms
+            if re.search(rf"(?<!\w){re.escape(t)}(?!\w)", norm_title) or re.search(rf"(?<!\w){re.escape(t)}(?!\w)", norm_filename)
+        ]
         if not matches:
             continue
 
@@ -192,6 +195,7 @@ def search_documents(query: str, titles_only: bool = False, folder_id: Optional[
                     "crop_url": crop_url,
                     "text_snippet": occ["text"],
                     "distinct_terms_count": occ.get("distinct_terms_count", 1),
+                    "matched_terms": occ.get("matched_terms", []),
                     "y_ratio": occ.get("y_ratio", 0.0),
                     "y_pos": occ.get("y_pos", 0.0),
                     "rect": occ.get("rect", [0, 0, 0, 0]),
@@ -201,7 +205,15 @@ def search_documents(query: str, titles_only: bool = False, folder_id: Optional[
         doc_info["total_occurrences"] = len(all_occurrences)
         total_matches_count += len(all_occurrences)
 
-        # 1. Ruban horizontal (vue générale) : ordonner par pertinence et plafonner aux 10 meilleurs
+        # Vérifier si l'ensemble des termes de la recherche est présent à travers le document
+        doc_matched_terms = set()
+        for o in all_occurrences:
+            for mt in o.get("matched_terms", []):
+                doc_matched_terms.add(mt)
+        if len(terms) > 1 and len(doc_matched_terms) >= len(terms):
+            doc_info["matched_all_terms"] = True
+
+        # 1. Ruban horizontal (vue générale) : ordonner par pertinence et plafonner aux meilleurs
         relevant_ribbon = sorted(
             all_occurrences,
             key=lambda x: (-x["distinct_terms_count"], x["bm25_score"], x["page_number"])

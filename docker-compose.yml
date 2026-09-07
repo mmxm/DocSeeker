@@ -1,0 +1,61 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: docfastexplorer_app
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MAX_UPLOAD_SIZE_BYTES=157286400 # 150 Mo
+      # En production sous proxy unique, CORS restrictif
+      - ALLOWED_ORIGINS=
+    volumes:
+      # Persistance de la base SQLite et des documents/vignettes
+      - ./data:/app/data
+      - ./backend:/app/backend
+      - ./frontend:/app/frontend
+    networks:
+      - internal_net
+    # Le port 8000 n'est PAS exposé sur l'hôte, uniquement accessible par Caddy
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: docfastexplorer_proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # Support HTTP/3 (QUIC)
+    env_file:
+      - .env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - internal_net
+
+networks:
+  internal_net:
+    driver: bridge
+
+volumes:
+  caddy_data:
+    name: docfast_caddy_data
+  caddy_config:
+    name: docfast_caddy_config
+  caddy_logs:
+    name: docfast_caddy_logs
