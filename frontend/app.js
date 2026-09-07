@@ -1,5 +1,20 @@
 document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
+  // Helper Réseau Sécurisé (Immunité WHATWG contre URL credentials)
+  // =========================================================================
+  function cleanOrigin() {
+    return window.location.protocol + "//" + window.location.host;
+  }
+
+  function apiFetch(input, init) {
+    let cleanInput = input;
+    if (typeof input === "string" && input.startsWith("/")) {
+      cleanInput = cleanOrigin() + input;
+    }
+    return fetch(cleanInput, init);
+  }
+
+  // =========================================================================
   // Éléments DOM
   // =========================================================================
   const searchInput = document.getElementById("searchInput");
@@ -449,7 +464,10 @@ document.addEventListener("DOMContentLoaded", () => {
       iconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`;
     }
 
-    toast.innerHTML = `${iconSvg}<span>${message}</span>`;
+    toast.innerHTML = iconSvg;
+    const msgSpan = document.createElement("span");
+    msgSpan.textContent = message;
+    toast.appendChild(msgSpan);
     toastContainer.appendChild(toast);
 
     setTimeout(() => {
@@ -534,11 +552,16 @@ document.addEventListener("DOMContentLoaded", () => {
     clearSelection();
 
     try {
+      const delOpts = { method: "DELETE" };
       for (const id of idsToDelete) {
-        await fetch(`/api/documents/${id}`, { method: "DELETE" });
+        await apiFetch(`/api/documents/${id}`, delOpts);
       }
       showToast(`${count} document(s) supprimé(s).`, "info");
-      loadFoldersAndDocuments();
+      if (currentSearchQuery) {
+        performSearch(currentSearchQuery);
+      } else {
+        loadFoldersAndDocuments();
+      }
     } catch (err) {
       console.error(err);
       showToast("Erreur lors de la suppression par lot.", "error");
@@ -835,7 +858,7 @@ document.addEventListener("DOMContentLoaded", () => {
     occurrenceStepper.style.display = "inline-flex";
     if (searchStepperMini) searchStepperMini.style.display = "inline-flex";
 
-    const currentDisplayIndex = currentActiveOccurrenceIndex >= 0 ? currentActiveOccurrenceIndex + 1 : 1;
+    const currentDisplayIndex = currentActiveOccurrenceIndex >= 0 ? currentActiveOccurrenceIndex + 1 : 0;
     const text = `${currentDisplayIndex} / ${total}`;
 
     if (occurrenceCounter) occurrenceCounter.textContent = text;
@@ -1801,7 +1824,7 @@ document.addEventListener("DOMContentLoaded", () => {
   saveFolderBtn.addEventListener("click", async () => {
     const name = folderNameInput.value.trim();
     if (!name) {
-      alert("Veuillez saisir un nom pour le dossier.");
+      showToast("Veuillez saisir un nom pour le dossier.", "warning");
       folderNameInput.focus();
       return;
     }
@@ -2115,6 +2138,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function handleRenameDocument() {
+    // Synchronisation de l'état : rawLoadedDocs et lastSearchResultsData
     if (!docIdToRename) return;
     const newTitle = renameDocInput.value.trim();
     if (!newTitle) {
@@ -2125,7 +2149,7 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       if (confirmRenameDocBtn) confirmRenameDocBtn.disabled = true;
 
-      const res = await fetch(`/api/documents/${docIdToRename}`, {
+      const res = await apiFetch(`/api/documents/${docIdToRename}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: newTitle })
@@ -2140,6 +2164,14 @@ document.addEventListener("DOMContentLoaded", () => {
       const docItem = currentLoadedDocs.find(d => d.id === docIdToRename);
       if (docItem) {
         docItem.title = newTitle;
+      }
+      if (Array.isArray(rawLoadedDocs)) {
+        const rawItem = rawLoadedDocs.find(d => d.id === docIdToRename);
+        if (rawItem) rawItem.title = newTitle;
+      }
+      if (lastSearchResultsData && Array.isArray(lastSearchResultsData.results)) {
+        const searchItem = lastSearchResultsData.results.find(d => d.id === docIdToRename);
+        if (searchItem) searchItem.title = newTitle;
       }
 
       // Mettre à jour dans le DOM si présent
@@ -2710,7 +2742,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function handleFileUpload(file) {
     if (!file.name.toLowerCase().endsWith(".pdf")) {
-      alert("Veuillez sélectionner un fichier PDF valide.");
+      showToast("Veuillez sélectionner un fichier PDF valide.", "warning");
       return;
     }
 
