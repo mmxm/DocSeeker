@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
     from backend.pipeline import pipeline
     pipeline.start()
     yield
-    pipeline.stop(wait=False)
+    pipeline.stop(wait=True)
 
 app = FastAPI(title="DocSeeker API", lifespan=lifespan)
 

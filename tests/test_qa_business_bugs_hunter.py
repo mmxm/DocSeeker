@@ -190,14 +190,19 @@ class TestQABusinessBugsHunter(unittest.TestCase):
         [Conformité RFC 7233 / 9110] Une requête avec Header 'Range: bytes=500-200'
         (start > end) doit renvoyer 416 Range Not Satisfiable et non 206 avec Content-Length négatif.
         """
-        # Trouver un document existant
+        # Trouver un document existant avec fichier physique présent sur le disque
         conn = get_db_connection()
-        row = conn.execute("SELECT id FROM documents LIMIT 1").fetchone()
+        rows = conn.execute("SELECT id, filename FROM documents WHERE status = 'ready'").fetchall()
         conn.close()
 
-        if row:
-            doc_id = row["id"]
-            response = self.client.get(f"/api/pdf/{doc_id}", headers={"Range": "bytes=500-200"})
+        valid_doc_id = None
+        for r in rows:
+            if os.path.exists(os.path.join(DOCUMENTS_DIR, r["filename"])):
+                valid_doc_id = r["id"]
+                break
+
+        if valid_doc_id is not None:
+            response = self.client.get(f"/api/pdf/{valid_doc_id}", headers={"Range": "bytes=500-200"})
             self.assertEqual(
                 response.status_code,
                 416,

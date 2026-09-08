@@ -28,7 +28,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Test Suite (114 tests)
+      - name: Run Test Suite (128 tests)
         run: |
           PYTHONPATH=. pytest tests/ -v
 

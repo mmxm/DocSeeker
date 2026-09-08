@@ -28,8 +28,15 @@ class IndexingPipeline:
         """Démarre le worker thread en arrière-plan et récupère les tâches orphelines."""
         with self._lock:
             if self._worker_thread is not None and self._worker_thread.is_alive():
-                return
+                if not self._stop_event.is_set():
+                    return
+                # Si le worker était en cours d'arrêt, attendre qu'il se termine avant de le relancer
+                self._worker_thread.join(timeout=3.0)
+
             self._stop_event.clear()
+            # Nettoyer les reliquats d'arrêt dans la file (ex: sentinelle None)
+            with self._queue.mutex:
+                self._queue.queue.clear()
             self._worker_thread = threading.Thread(target=self._worker_loop, name="IndexingPipelineWorker", daemon=True)
             self._worker_thread.start()
             logger.info("[Pipeline] Worker d'indexation démarré.")

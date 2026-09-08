@@ -1,6 +1,7 @@
 import os
 import io
 import time
+import uuid
 import unittest
 import pymupdf
 from fastapi.testclient import TestClient
@@ -24,6 +25,7 @@ class TestIndexingPipeline(unittest.TestCase):
         cls.client = TestClient(app)
         pipeline.start()
         cls.cleanup_doc_ids = []
+        cls.cleanup_files = []
 
     @classmethod
     def tearDownClass(cls):
@@ -33,6 +35,15 @@ class TestIndexingPipeline(unittest.TestCase):
                 remove_document(did)
             except Exception:
                 pass
+        for fpath in cls.cleanup_files:
+            try:
+                if os.path.exists(fpath):
+                    os.remove(fpath)
+            except Exception:
+                pass
+
+    def setUp(self):
+        pipeline.start()
 
     def test_pipeline_status_endpoint(self):
         """Vérifie que l'endpoint /api/pipeline/status renvoie la structure attendue."""
@@ -48,11 +59,12 @@ class TestIndexingPipeline(unittest.TestCase):
     def test_async_upload_returns_immediately_and_indexes_in_background(self):
         """Vérifie qu'avec sync=false, l'upload est instantané (queued) et l'indexation se fait en tâche de fond."""
         pdf_bytes = create_pdf_bytes("Contenu spécifique pour tester le pipeline asynchrone xylophone.", title="Pipeline Doc Xylophone")
+        unique_name = f"pipeline_async_{uuid.uuid4().hex[:8]}.pdf"
         
         # 1. Upload avec sync=false
         res = self.client.post(
             "/api/upload?sync=false",
-            files={"file": ("pipeline_async_test.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+            files={"file": (unique_name, io.BytesIO(pdf_bytes), "application/pdf")},
             data={"title": "Pipeline Doc Xylophone"}
         )
         self.assertEqual(res.status_code, 200)
@@ -87,18 +99,19 @@ class TestIndexingPipeline(unittest.TestCase):
 
     def test_pipeline_recovers_pending_documents(self):
         """Vérifie que recover_pending détecte et ré-enfile les documents orphelins."""
-        # Créer un faux document en statut pending directement en DB
+        unique_name = f"orphan_{uuid.uuid4().hex[:8]}.pdf"
         pdf_bytes = create_pdf_bytes("Contenu pour reprise après interruption.", title="Doc Orphelin")
-        doc_path = os.path.join("data", "documents", "orphan_test.pdf")
+        doc_path = os.path.join("data", "documents", unique_name)
         with open(doc_path, "wb") as f:
             f.write(pdf_bytes)
+        self.__class__.cleanup_files.append(doc_path)
 
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO documents (filename, title, file_hash, status, total_pages, file_size)
-            VALUES ('orphan_test.pdf', 'Doc Orphelin', 'fakehash123', 'pending', 0, 1024)
-        """)
+            VALUES (?, 'Doc Orphelin', ?, 'pending', 0, 1024)
+        """, (unique_name, f"fakehash_{uuid.uuid4().hex[:16]}"))
         orphan_id = cursor.lastrowid
         conn.commit()
         conn.close()
@@ -115,12 +128,13 @@ class TestIndexingPipeline(unittest.TestCase):
 
     def test_pipeline_handles_missing_file_gracefully(self):
         """Vérifie que si un fichier physique est absent, le document passe en 'failed' sans bloquer le pipeline."""
+        unique_ghost_name = f"ghost_{uuid.uuid4().hex[:8]}.pdf"
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO documents (filename, title, file_hash, status, total_pages, file_size)
-            VALUES ('fichier_inexistant_fantome.pdf', 'Doc Fantôme', 'fakehashghost', 'pending', 0, 1024)
-        """)
+            VALUES (?, 'Doc Fantôme', ?, 'pending', 0, 1024)
+        """, (unique_ghost_name, f"fakehash_{uuid.uuid4().hex[:16]}"))
         ghost_id = cursor.lastrowid
         conn.commit()
         conn.close()
@@ -143,10 +157,11 @@ class TestIndexingPipeline(unittest.TestCase):
         """Vérifie l'importation massive asynchrone : upload rapide de 3 documents traités séquentiellement par le pipeline."""
         batch_ids = []
         for i in range(3):
-            pdf_bytes = create_pdf_bytes(f"Contenu exclusif lot asynchrone numéro {i} pour test zèbre.", title=f"Doc Lot Async {i}")
+            unique_name = f"batch_{uuid.uuid4().hex[:8]}_{i}.pdf"
+            pdf_bytes = create_pdf_bytes(f"Texte du document de lot numéro {i} pour recherche zèbre.", title=f"Doc Lot Async {i}")
             res = self.client.post(
                 "/api/upload?sync=false",
-                files={"file": (f"batch_async_{i}.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+                files={"file": (unique_name, io.BytesIO(pdf_bytes), "application/pdf")},
                 data={"title": f"Doc Lot Async {i}"}
             )
             self.assertEqual(res.status_code, 200)
@@ -235,6 +250,7 @@ class TestIndexingPipeline(unittest.TestCase):
     def test_pre_upload_hash_check_avoids_redundant_upload(self):
         """Simule le comportement du client : pré-calcul SHA-256, test d'existence, puis évitement de l'upload."""
         import hashlib
+        unique_name = f"anti_doublon_{uuid.uuid4().hex[:8]}.pdf"
         pdf_bytes = create_pdf_bytes("Document pour test d'évitement d'upload inutile.", title="Doc Anti Doublon Client")
         file_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
 
@@ -245,7 +261,7 @@ class TestIndexingPipeline(unittest.TestCase):
         # 2. Upload initial du document
         up_res = self.client.post(
             "/api/upload?sync=true",
-            files={"file": ("anti_doublon_test.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+            files={"file": (unique_name, io.BytesIO(pdf_bytes), "application/pdf")},
             data={"title": "Doc Anti Doublon Client"}
         )
         self.assertEqual(up_res.status_code, 200)
