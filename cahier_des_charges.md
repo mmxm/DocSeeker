@@ -1,11 +1,11 @@
 # CAHIER DES CHARGES TECHNIQUE & FONCTIONNEL
-## Projet : DocFastExplorer (Moteur de recherche documentaire & visualiseur visuel PDF)
+## Projet : DocSeeker (Moteur de recherche documentaire & visualiseur visuel PDF)
 
 ---
 
 ## 1. Synthèse et Vision du Projet
 
-L'objectif de **DocFastExplorer** est de concevoir une application web légère, ultra-rapide et ergonomique permettant de rechercher des mots-clés dans un fonds documentaire volumineux de documents PDF, avec une expérience utilisateur calquée sur l'exploration visuelle de **Goodnotes** :
+L'objectif de **DocSeeker** est de concevoir une application web légère, ultra-rapide et ergonomique permettant de rechercher des mots-clés dans un fonds documentaire volumineux de documents PDF, avec une expérience utilisateur calquée sur l'exploration visuelle de **Goodnotes** :
 - **Expérience visuelle "Goodnotes"** : Au lieu d'une simple liste de lignes de texte brut (snippets textuels classiques), chaque occurrence est présentée sous la forme d'une **vignette graphique cropée et zoomée** exactement sur le mot-clé recherché et son paragraphe contextuel, avec le mot **surligné en couleur** et le **numéro de page**.
 - **Classement intelligent par pertinence** : Les documents les plus pertinents (contenant l'ensemble des termes recherchés, forte densité et proximité des mots-clés) remontent automatiquement en tête de liste.
 - **Exhaustivité organisée par document** : Pour chaque document pertinent, **toutes les occurrences** sont accessibles sous forme de ruban horizontal défilant de vignettes.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# DocFastExplorer - Script de Sauvegarde Automatique à Chaud
+# DocSeeker - Script de Sauvegarde Automatique à Chaud
 # Sauvegarde la base SQLite via l'API d'intégrité .backup et synchronise les PDF
 # ==============================================================================
 
@@ -18,7 +18,7 @@ CURRENT_BACKUP_DIR="${BACKUP_ROOT}/${TIMESTAMP}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
 
 echo "=========================================================="
-echo "  Démarrage de la sauvegarde DocFastExplorer : ${TIMESTAMP}"
+echo "  Démarrage de la sauvegarde DocSeeker : ${TIMESTAMP}"
 echo "=========================================================="
 
 mkdir -p "${CURRENT_BACKUP_DIR}"

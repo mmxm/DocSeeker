@@ -45,7 +45,7 @@ class TestUnitDatabase(unittest.TestCase):
 
             # Vérifier la taille du cache
             cursor.execute("PRAGMA cache_size;")
-            self.assertEqual(cursor.fetchone()[0], -64000)
+            self.assertEqual(cursor.fetchone()[0], -16000)
         finally:
             conn.close()
 

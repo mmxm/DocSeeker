@@ -29,55 +29,98 @@ def get_folder_and_subfolder_ids(folder_id: int) -> List[int]:
     conn.close()
     return ids
 
+def term_matches_text(term: str, text: str) -> bool:
+    """
+    Vérifie si un terme de recherche correspond à un mot dans le texte (titre ou nom de fichier).
+    - Respecte les frontières de mots pour éviter la pollution par sous-chaînes aléatoires
+      (ex: 'car' ne doit PAS matcher 'brancardier').
+    - Supporte le préfixe pour la recherche progressive et la dérivation (ex: 'complica' ou 'complication'
+      matche 'complications').
+    - Supporte la correspondance singulier/pluriel en français (ex: requête 'complications'
+      matche un titre contenant 'complication').
+    - Pour les termes très courts (<= 2 caractères, ex: 'en', 'de', 'B', '1'), exige une frontière
+      stricte de mot entier pour éviter les faux positifs massifs sur les préfixes de 1-2 lettres.
+    """
+    if not term or not text:
+        return False
+
+    # Fast path C : Si ni le terme ni ses stems potentiels ne sont présents dans le texte, rejet immédiat
+    # sans exécuter d'expression régulière coûteuse avec assertions lookaround.
+    is_candidate = (term in text)
+    if not is_candidate and len(term) > 3 and term.endswith(('s', 'x')):
+        is_candidate = (term[:-1] in text)
+    if not is_candidate and len(term) > 4 and term.endswith("aux"):
+        is_candidate = ((term[:-3] + "al") in text)
+    if not is_candidate:
+        return False
+
+    if len(term) <= 2:
+        return bool(re.search(rf"(?<!\w){re.escape(term)}(?!\w)", text))
+    if re.search(rf"(?<!\w){re.escape(term)}", text):
+        return True
+    if term.endswith(('s', 'x')) and len(term) > 3:
+        stem = term[:-1]
+        if re.search(rf"(?<!\w){re.escape(stem)}(?!\w)", text):
+            return True
+        if term.endswith("aux") and len(term) > 4:
+            stem_al = term[:-3] + "al"
+            if re.search(rf"(?<!\w){re.escape(stem_al)}(?!\w)", text):
+                return True
+    return False
+
 def search_titles(query: str, folder_id: Optional[int] = None) -> Dict[str, Any]:
-    """Recherche rapide filtrée uniquement dans les titres et noms de fichiers."""
+    """
+    Recherche instantanée ciblée uniquement sur les titres et noms de fichiers.
+    Ultra-rapide (0-5ms) car elle s'exécute directement sur les métadonnées de la table documents.
+    """
     terms = sanitize_fts_query(query)
     if not terms:
         return {"query": query, "query_hash": "", "total_documents": 0, "total_occurrences": 0, "results": []}
 
-    norm_terms = [normalize_text(t) for t in terms]
     allowed_folder_ids = set(get_folder_and_subfolder_ids(folder_id)) if folder_id is not None else None
 
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id, filename, title, folder_id, total_pages, created_at, COALESCE(updated_at, created_at) AS updated_at FROM documents")
-    rows = cursor.fetchall()
+    all_docs = cursor.fetchall()
     conn.close()
 
     results = []
-    for r in rows:
-        if allowed_folder_ids is not None and r["folder_id"] not in allowed_folder_ids:
-            continue
-        norm_title = normalize_text(r["title"] or "")
-        norm_filename = normalize_text(r["filename"] or "")
+    norm_terms = [normalize_text(t) for t in terms if len(t.strip()) > 0]
 
-        matches = [
-            t for t in norm_terms
-            if re.search(rf"(?<!\w){re.escape(t)}(?!\w)", norm_title) or re.search(rf"(?<!\w){re.escape(t)}(?!\w)", norm_filename)
-        ]
-        if not matches:
+    for doc in all_docs:
+        if allowed_folder_ids is not None and doc["folder_id"] not in allowed_folder_ids:
             continue
 
-        matched_all = len(matches) == len(norm_terms)
-        score = 1000.0 if matched_all else (len(matches) * 100.0)
+        title_norm = normalize_text(doc["title"] or "")
+        filename_norm = normalize_text(doc["filename"] or "")
 
-        results.append({
-            "id": r["id"],
-            "filename": r["filename"],
-            "title": r["title"],
-            "folder_id": r["folder_id"],
-            "total_pages": r["total_pages"],
-            "created_at": r["created_at"],
-            "updated_at": r["updated_at"],
-            "cover_url": f"/api/cover/{r['id']}",
-            "vignettes": [],
-            "occurrences_by_page": [],
-            "total_occurrences": 0,
-            "matched_all_terms": matched_all,
-            "relevance_score": score
-        })
+        # Vérifier si tous les termes matchent le titre ou le nom de fichier
+        matched_terms = 0
+        for term in norm_terms:
+            if term_matches_text(term, title_norm) or term_matches_text(term, filename_norm):
+                matched_terms += 1
+
+        # On ne retient que les documents dont le titre satisfait TOUS les termes recherchés
+        if matched_terms == len(norm_terms):
+            results.append({
+                "id": doc["id"],
+                "filename": doc["filename"],
+                "title": doc["title"],
+                "folder_id": doc["folder_id"],
+                "total_pages": doc["total_pages"],
+                "created_at": doc["created_at"],
+                "updated_at": doc["updated_at"],
+                "cover_url": f"/api/cover/{doc['id']}",
+                "vignettes": [],
+                "occurrences_by_page": [],
+                "total_occurrences": 0,
+                "relevance_score": 5000.0 + (100.0 if any(t == title_norm for t in norm_terms) else 0.0),
+                "matched_all_terms": True
+            })
 
     results.sort(key=lambda d: d["relevance_score"], reverse=True)
+
     return {
         "query": query,
         "query_hash": get_query_hash(terms),
@@ -163,45 +206,43 @@ def search_documents(query: str, titles_only: bool = False, folder_id: Optional[
                 "created_at": r["created_at"],
                 "updated_at": r["updated_at"],
                 "cover_url": f"/api/cover/{doc_id}",
-                "pages_data": [],
+                "all_occurrences": [],
                 "best_bm25": r["bm25_score"],
                 "matched_all_terms": doc_id in matched_doc_ids_and,
                 "total_occurrences": 0
             }
-        doc_groups[doc_id]["pages_data"].append(r)
         if r["bm25_score"] < doc_groups[doc_id]["best_bm25"]:
             doc_groups[doc_id]["best_bm25"] = r["bm25_score"]
+
+        # Traiter la page immédiatement au fil de l'eau pour libérer les gros blocs words_json
+        page_num = r["page_number"]
+        try:
+            words_data = json.loads(r["words_json"])
+        except Exception:
+            words_data = []
+
+        occs = find_occurrences_on_page(words_data, terms)
+        for occ in occs:
+            # Lazy URL : générée à la volée par le navigateur
+            crop_url = f"/api/crop/{doc_id}/{page_num}/{occ['occ_id']}?h={query_hash}&terms={encoded_terms}"
+            doc_groups[doc_id]["all_occurrences"].append({
+                "page_number": page_num,
+                "occ_id": occ["occ_id"],
+                "crop_url": crop_url,
+                "text_snippet": occ["text"],
+                "distinct_terms_count": occ.get("distinct_terms_count", 1),
+                "matched_terms": occ.get("matched_terms", []),
+                "y_ratio": occ.get("y_ratio", 0.0),
+                "y_pos": occ.get("y_pos", 0.0),
+                "rect": occ.get("rect", [0, 0, 0, 0]),
+                "bm25_score": r["bm25_score"]
+            })
 
     final_results = []
     total_matches_count = 0
 
     for doc_id, doc_info in doc_groups.items():
-        all_occurrences = []
-
-        for p_row in doc_info["pages_data"]:
-            page_num = p_row["page_number"]
-            try:
-                words_data = json.loads(p_row["words_json"])
-            except Exception:
-                words_data = []
-
-            occs = find_occurrences_on_page(words_data, terms)
-            for occ in occs:
-                # Lazy URL : générée à la volée par le navigateur
-                crop_url = f"/api/crop/{doc_id}/{page_num}/{occ['occ_id']}?h={query_hash}&terms={encoded_terms}"
-                all_occurrences.append({
-                    "page_number": page_num,
-                    "occ_id": occ["occ_id"],
-                    "crop_url": crop_url,
-                    "text_snippet": occ["text"],
-                    "distinct_terms_count": occ.get("distinct_terms_count", 1),
-                    "matched_terms": occ.get("matched_terms", []),
-                    "y_ratio": occ.get("y_ratio", 0.0),
-                    "y_pos": occ.get("y_pos", 0.0),
-                    "rect": occ.get("rect", [0, 0, 0, 0]),
-                    "bm25_score": p_row["bm25_score"]
-                })
-
+        all_occurrences = doc_info.pop("all_occurrences")
         doc_info["total_occurrences"] = len(all_occurrences)
         total_matches_count += len(all_occurrences)
 
@@ -232,7 +273,6 @@ def search_documents(query: str, titles_only: bool = False, folder_id: Optional[
         relevance_score += abs(doc_info["best_bm25"]) * 100.0
 
         doc_info["relevance_score"] = round(relevance_score, 2)
-        del doc_info["pages_data"]
         final_results.append(doc_info)
 
     # Tri des documents : les plus pertinents en tête

@@ -9,6 +9,9 @@ from backend.database import get_db_connection, normalize_text
 DOCUMENTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "documents")
 CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "cache_crops")
 
+_RE_PUNCT_BOUNDARIES = re.compile(r'^\W+|\W+$')
+_RE_WORD_TOKENS = re.compile(r'\w+')
+
 def match_word(norm_w: str, term: str) -> bool:
     """
     Vérifie si un mot extrait du PDF correspond à un terme de recherche,
@@ -16,15 +19,20 @@ def match_word(norm_w: str, term: str) -> bool:
     """
     if not norm_w or not term:
         return False
-    # 1. Correspondance exacte ou préfixe direct
+    # 1. Correspondance exacte ou préfixe direct (le cas de 95%+ des correspondances)
     if norm_w == term or norm_w.startswith(term):
         return True
+    # Fast path : si le mot est purement alphanumérique et ne commence pas par term,
+    # seule une sous-chaîne >= 4 caractères peut matcher
+    if norm_w.isalnum():
+        return bool(len(term) >= 4 and term in norm_w)
+
     # 2. Nettoyage de la ponctuation entourant le mot (ex: "(geu)" -> "geu", "mot;" -> "mot")
-    clean_w = re.sub(r'^\W+|\W+$', '', norm_w)
+    clean_w = _RE_PUNCT_BOUNDARIES.sub('', norm_w)
     if clean_w == term or clean_w.startswith(term):
         return True
     # 3. Décomposition en sous-mots alphanumériques (ex: "(geu)", "l'uterus", "geu/fiv")
-    sub_tokens = re.findall(r'\w+', norm_w)
+    sub_tokens = _RE_WORD_TOKENS.findall(norm_w)
     for sub in sub_tokens:
         if sub == term or sub.startswith(term):
             return True
@@ -38,7 +46,7 @@ def match_word(norm_w: str, term: str) -> bool:
 def get_query_hash(query_terms: List[str]) -> str:
     """Calcule une empreinte courte et stable des termes de recherche."""
     norm_terms = sorted([normalize_text(t) for t in query_terms if len(t.strip()) > 1])
-    return hashlib.md5(f"v3_{'_'.join(norm_terms)}".encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
+    return hashlib.md5(f"v4_{'_'.join(norm_terms)}".encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
 
 def find_occurrences_on_page(words_data: List[List[Any]], query_terms: List[str], page_height: float = 842.0) -> List[Dict[str, Any]]:
     """
@@ -178,7 +186,19 @@ def generate_crop_image(doc_id: int, filename: str, page_number: int, occ_data: 
             norm_w = normalize_text(w[4])
             for term in norm_terms:
                 if match_word(norm_w, term):
-                    all_highlights.append(w_rect)
+                    if len(term) < len(norm_w) and (norm_w.startswith(term) or term in norm_w):
+                        # Sous-rectangle précis pour surligner uniquement la partie tronquée recherchée
+                        sub_rects = page.search_for(term, clip=w_rect)
+                        if not sub_rects:
+                            sub_rects = page.search_for(w[4][:len(term)], clip=w_rect)
+                        if sub_rects:
+                            all_highlights.extend(sub_rects)
+                        else:
+                            ratio = min(1.0, len(term) / max(len(norm_w), 1))
+                            approx_rect = pymupdf.Rect(w_rect.x0, w_rect.y0, w_rect.x0 + w_rect.width * ratio, w_rect.y1)
+                            all_highlights.append(approx_rect)
+                    else:
+                        all_highlights.append(w_rect)
                     break
 
     if not all_highlights:
@@ -187,18 +207,21 @@ def generate_crop_image(doc_id: int, filename: str, page_number: int, occ_data: 
 
     shape = page.new_shape()
     for hl_rect in all_highlights:
-        expanded = pymupdf.Rect(hl_rect.x0 - 1, hl_rect.y0 - 1, hl_rect.x1 + 1, hl_rect.y1 + 1)
+        expanded = pymupdf.Rect(hl_rect.x0 - 0.5, hl_rect.y0 - 0.5, hl_rect.x1, hl_rect.y1 + 0.5)
         shape.draw_rect(expanded)
     shape.finish(fill=(1.0, 0.88, 0.2), fill_opacity=0.5, stroke_opacity=0)
     shape.commit()
 
     pix = page.get_pixmap(clip=clip_rect, dpi=144, alpha=False)
     try:
-        pix.pil_save(crop_path, format="WEBP", quality=80)
-    except Exception:
-        pix.save(crop_path)
+        try:
+            pix.pil_save(crop_path, format="WEBP", quality=80)
+        except Exception:
+            pix.save(crop_path)
+    finally:
+        del pix
+        doc.close()
 
-    doc.close()
     return crop_path
 
 def get_or_generate_crop_on_demand(doc_id: int, page_number: int, occ_id: int, query_hash: str, terms_str: str = "") -> str:

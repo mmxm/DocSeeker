@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>DocFastExplorer - Recherche Visuelle dans vos PDF</title>
+  <title>DocSeeker - Recherche Visuelle dans vos PDF</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css?v=4.6">
+  <link rel="stylesheet" href="/style.css?v=4.8">
 </head>
 <body class="light-theme">
   <div id="app" class="app-layout">
@@ -25,8 +25,8 @@
         </div>
         <div class="brand-text">
           <span class="brand-title">
-            <span class="brand-title-full">DocFastExplorer</span>
-            <span class="brand-title-short">DocFast</span>
+            <span class="brand-title-full">DocSeeker</span>
+            <span class="brand-title-short">DocSeeker</span>
           </span>
           <span class="brand-subtitle">Recherche Visuelle PDF</span>
         </div>
@@ -368,7 +368,7 @@
     <div id="uploadModal" class="modal-overlay" style="display: none;">
       <div class="modal-card">
         <div class="modal-header">
-          <h3>Importer un document PDF</h3>
+          <h3>Importer des documents PDF</h3>
           <button id="closeUploadModalBtn" class="modal-close-btn">&times;</button>
         </div>
         <div class="modal-body">
@@ -378,13 +378,13 @@
               <polyline points="17 8 12 3 7 8"></polyline>
               <line x1="12" y1="3" x2="12" y2="15"></line>
             </svg>
-            <p class="dropzone-text"><strong>Glissez-déposez</strong> votre fichier PDF ici</p>
-            <p class="dropzone-sub">ou cliquez pour parcourir vos dossiers</p>
-            <input type="file" id="fileInput" accept="application/pdf" style="display: none;" />
+            <p class="dropzone-text"><strong>Glissez-déposez</strong> vos fichiers PDF ici</p>
+            <p class="dropzone-sub">ou cliquez pour sélectionner un ou plusieurs documents</p>
+            <input type="file" id="fileInput" accept="application/pdf" multiple style="display: none;" />
           </div>
 
-          <div class="form-group" style="margin-top: 16px;">
-            <label for="docTitleInput">Titre personnalisé (optionnel) :</label>
+          <div id="singleTitleGroup" class="form-group" style="margin-top: 16px;">
+            <label for="docTitleInput">Titre personnalisé (optionnel pour un seul fichier) :</label>
             <input type="text" id="docTitleInput" class="form-control" placeholder="Laisser vide pour utiliser le nom du fichier..." />
           </div>
 
@@ -517,7 +517,12 @@
             <h4 id="drawerDocTitle" class="drawer-title">Extraits du document</h4>
             <span id="drawerDocCount" class="drawer-subtitle">0 extrait</span>
           </div>
-          <button id="closeDrawerBtn" class="btn btn-icon btn-close-drawer" title="Fermer le tiroir">&times;</button>
+          <button id="closeDrawerBtn" class="btn btn-icon btn-close-drawer" title="Fermer le tiroir" aria-label="Fermer le tiroir">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
         </div>
         <div class="drawer-search-wrapper">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
@@ -525,7 +530,12 @@
             <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
           </svg>
           <input type="text" id="drawerDocSearchInput" placeholder="Rechercher dans ce document..." autocomplete="off" />
-          <button id="drawerDocSearchClearBtn" class="clear-btn" style="display: none;">&times;</button>
+          <button id="drawerDocSearchClearBtn" class="clear-btn" style="display: none;" aria-label="Effacer la recherche">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
         </div>
       </div>
       <div id="drawerOccurrencesList" class="drawer-occurrences-list"></div>
@@ -569,6 +579,6 @@
 
   </div>
 
-  <script src="/app.js?v=4.6"></script>
+  <script src="/app.js?v=4.9"></script>
 </body>
 </html>

@@ -258,5 +258,99 @@ class TestQABusinessBugsHunter(unittest.TestCase):
                 except OSError:
                     pass
 
+    # ----------------------------------------------------------------------
+    # BUG 22 : Échec de la recherche par titre sur singulier / pluriel et préfixes
+    # ----------------------------------------------------------------------
+    def test_bug_search_titles_singular_plural_and_prefix(self):
+        """
+        [Métier Recherche] search_titles avec le filtre 'Titres uniquement' ne doit pas
+        échouer lorsqu'un utilisateur cherche au singulier un mot présent au pluriel dans le titre
+        (ex: 'complication' vs 'complications'), ni vice-versa (ex: 'examens' vs 'examen'),
+        ni lors de la frappe progressive de préfixe (ex: 'complica').
+        Tout en respectant les frontières de mot pour ne pas réintroduire le Bug 10 ('car' vs 'brancardier').
+        """
+        doc1_id = None
+        doc2_id = None
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Document 1 avec mot au pluriel dans le titre : "Principales Complications de la Grossesse"
+            p1 = os.path.join(tmpdir, "doc_complications.pdf")
+            d1 = pymupdf.open()
+            page1 = d1.new_page()
+            page1.insert_text((50, 100), "Contenu médical complications")
+            d1.save(p1)
+            d1.close()
+
+            # Document 2 avec mot au singulier dans le titre : "Examen Clinique de l'Enfant"
+            p2 = os.path.join(tmpdir, "doc_examen.pdf")
+            d2 = pymupdf.open()
+            page2 = d2.new_page()
+            page2.insert_text((50, 100), "Contenu pédiatrie examen")
+            d2.save(p2)
+            d2.close()
+
+            dest1 = os.path.join(DOCUMENTS_DIR, "doc_complications.pdf")
+            dest2 = os.path.join(DOCUMENTS_DIR, "doc_examen.pdf")
+            shutil.copy(p1, dest1)
+            shutil.copy(p2, dest2)
+
+            try:
+                res1 = index_pdf_file(dest1, "doc_complications.pdf", custom_title="Principales Complications de la Grossesse")
+                doc1_id = res1["id"]
+                res2 = index_pdf_file(dest2, "doc_examen.pdf", custom_title="Examen Clinique de l'Enfant")
+                doc2_id = res2["id"]
+
+                # 1. Recherche au singulier ('complication') doit trouver le titre au pluriel ('Complications')
+                res_sing = search_titles("complication")
+                ids_sing = [r["id"] for r in res_sing["results"]]
+                self.assertIn(
+                    doc1_id,
+                    ids_sing,
+                    "La recherche au singulier 'complication' n'a pas trouvé le titre contenant 'Complications' !"
+                )
+
+                # 2. Recherche au pluriel ('complications') doit trouver le document
+                res_plur = search_titles("complications")
+                ids_plur = [r["id"] for r in res_plur["results"]]
+                self.assertIn(
+                    doc1_id,
+                    ids_plur,
+                    "La recherche au pluriel 'complications' n'a pas trouvé le titre contenant 'Complications' !"
+                )
+
+                # 3. Recherche par préfixe ('complica') doit trouver le document
+                res_pref = search_titles("complica")
+                ids_pref = [r["id"] for r in res_pref["results"]]
+                self.assertIn(
+                    doc1_id,
+                    ids_pref,
+                    "La recherche progressive 'complica' n'a pas trouvé le titre contenant 'Complications' !"
+                )
+
+                # 4. Recherche au pluriel ('examens') doit trouver le titre au singulier ('Examen Clinique')
+                res_inv = search_titles("examens")
+                ids_inv = [r["id"] for r in res_inv["results"]]
+                self.assertIn(
+                    doc2_id,
+                    ids_inv,
+                    "La recherche au pluriel 'examens' n'a pas trouvé le titre au singulier 'Examen Clinique' !"
+                )
+
+                # 5. Via l'API REST endpoint /api/search?q=...&titles_only=true
+                api_res_sing = self.client.get("/api/search?q=complication&titles_only=true")
+                self.assertEqual(api_res_sing.status_code, 200)
+                api_ids_sing = [r["id"] for r in api_res_sing.json()["results"]]
+                self.assertIn(doc1_id, api_ids_sing)
+
+                api_res_plur = self.client.get("/api/search?q=complications&titles_only=true")
+                self.assertEqual(api_res_plur.status_code, 200)
+                api_ids_plur = [r["id"] for r in api_res_plur.json()["results"]]
+                self.assertIn(doc1_id, api_ids_plur)
+
+            finally:
+                if doc1_id is not None:
+                    remove_document(doc1_id)
+                if doc2_id is not None:
+                    remove_document(doc2_id)
+
 if __name__ == "__main__":
     unittest.main()

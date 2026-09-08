@@ -131,5 +131,132 @@ class TestQAErgonomicsAndUXBugs(unittest.TestCase):
             f"Des appels bloquants alert() ont été trouvés dans app.js : {alert_calls}"
         )
 
+    # ----------------------------------------------------------------------
+    # BUG 21 : Écrasement vertical des cartes d'extraits dans le tiroir mobile
+    # ----------------------------------------------------------------------
+    def test_bug_21_mobile_drawer_occurrences_cards_collapsed_by_flex_shrink(self):
+        """
+        [Affichage Mobile/CSS] Dans le tiroir coulissant mobile (.drawer-occurrences-list),
+        les cartes .vertical-occ-card sont écrasées à 2px de haut car flex-shrink vaut 1
+        par défaut dans un conteneur flex vertical.
+        .vertical-occ-card et ses composants (.vertical-occ-img-wrapper, .vertical-occ-footer)
+        doivent impérativement avoir flex-shrink: 0, et .drawer-occurrences-list doit avoir
+        min-height: 0 pour assurer un défilement complet et fluide.
+        De plus, openMobileOccurrencesDrawer() doit centrer automatiquement la carte active.
+        """
+        # Vérifier que .vertical-occ-card a bien flex-shrink: 0
+        card_match = re.search(r'\.vertical-occ-card\s*\{([^}]+)\}', self.style_css)
+        self.assertIsNotNone(card_match, "Règle CSS .vertical-occ-card introuvable.")
+        card_css = card_match.group(1)
+        self.assertIn(
+            "flex-shrink: 0",
+            card_css,
+            ".vertical-occ-card ne possède pas 'flex-shrink: 0', provoquant l'écrasement à 2px de haut dans le tiroir mobile !"
+        )
+
+        # Vérifier que .drawer-occurrences-list a min-height: 0
+        drawer_list_match = re.search(r'\.drawer-occurrences-list\s*\{([^}]+)\}', self.style_css)
+        self.assertIsNotNone(drawer_list_match, "Règle CSS .drawer-occurrences-list introuvable.")
+        drawer_list_css = drawer_list_match.group(1)
+        self.assertIn(
+            "min-height: 0",
+            drawer_list_css,
+            ".drawer-occurrences-list doit définir 'min-height: 0' pour permettre le défilement vertical complet en flexbox."
+        )
+
+        # Vérifier l'auto-centrage de la carte active dans openMobileOccurrencesDrawer
+        drawer_open_block = re.search(r'function\s+openMobileOccurrencesDrawer\(\)\s*\{([\s\S]*?)\}', self.app_js)
+        self.assertIsNotNone(drawer_open_block, "Fonction openMobileOccurrencesDrawer introuvable.")
+        self.assertIn(
+            "scrollIntoView",
+            drawer_open_block.group(1),
+            "openMobileOccurrencesDrawer() doit auto-défiler vers l'extrait actif (.vertical-occ-card.active) lors de son ouverture."
+        )
+
+    # ----------------------------------------------------------------------
+    # BUG 22 : Débordement vertical du conteneur de recherche en vue mobile
+    # ----------------------------------------------------------------------
+    def test_bug_22_mobile_search_container_height_overflow(self):
+        """
+        [Affichage Mobile / Layout]
+        Sur desktop, .search-container a été défini avec height: 34px pour
+        aligner la recherche en une seule ligne.
+        En responsive mobile (@media (max-width: 768px)), .search-container
+        bascule en flex-direction: column (pour empiler l'input de 40px et la barre
+        de filtres de 28px).
+        Cependant, la règle mobile omet d'écraser la hauteur fixe 'height: 34px'
+        par 'height: auto', bloquant le conteneur à 34px alors que son contenu
+        mesure 74px. Les filtres et statistiques débordent verticalement et
+        chevauchent l'en-tête de résultats en dessous.
+        """
+        mobile_media = re.search(r'@media\s*\(max-width:\s*768px\)\s*\{([\s\S]*?)\n\}', self.style_css)
+        self.assertIsNotNone(mobile_media, "Bloc @media (max-width: 768px) introuvable dans style.css")
+        media_content = mobile_media.group(1)
+
+        search_container_match = re.search(r'\.search-container\s*\{([^}]+)\}', media_content)
+        self.assertIsNotNone(search_container_match, "Règle .search-container introuvable dans @media (max-width: 768px)")
+        search_container_rules = search_container_match.group(1)
+
+        self.assertTrue(
+            "height: auto" in search_container_rules or "height:auto" in search_container_rules,
+            "En vue mobile (<768px), .search-container doit impérativement redéfinir 'height: auto' pour annuler le 'height: 34px' desktop et éviter que la barre de filtres ne déborde verticalement de 40px !"
+        )
+
+    # ----------------------------------------------------------------------
+    # BUG 23 : Absence de scroll automatique sur l'occurrence active en Split View Desktop
+    # ----------------------------------------------------------------------
+    def test_bug_23_desktop_split_view_active_occurrence_auto_scroll(self):
+        """
+        [UX / Ergonomie Desktop]
+        Lors de l'ouverture d'un document en vue scindée (openDocumentInSplitView),
+        renderVerticalOccurrences génère la liste des occurrences et active la carte
+        cible avec la classe 'active' (.vertical-occ-card.active).
+        Cependant, contrairement au tiroir mobile, renderVerticalOccurrences ne fait
+        aucun scrollIntoView() sur cette carte active. Si l'utilisateur clique sur une
+        occurrence en page 25 (ex: occurrence 28/30), le panneau latéral gauche reste
+        figé en haut (page 1), masquant complètement la carte active sélectionnée.
+        """
+        render_occ_block = re.search(r'function\s+renderVerticalOccurrences\([^)]*\)\s*\{([\s\S]*?)\n  \}', self.app_js)
+        self.assertIsNotNone(render_occ_block, "Fonction renderVerticalOccurrences introuvable dans app.js")
+        self.assertIn(
+            "scrollIntoView",
+            render_occ_block.group(1),
+            "renderVerticalOccurrences() doit exécuter un scrollIntoView() sur la carte active initiale pour assurer la cohérence visuelle avec le visualiseur."
+        )
+
+    # ----------------------------------------------------------------------
+    # BUG 24 : Alignement et rendu des deux croix dans le tiroir mobile
+    # ----------------------------------------------------------------------
+    def test_bug_24_drawer_search_wrapper_relative_position_and_close_icons(self):
+        """
+        [Visuel / Ergonomie Mobile]
+        Dans le tiroir mobile (#mobileOccurrencesDrawer) :
+        1. .drawer-search-wrapper doit posséder 'position: relative' pour que le bouton
+           d'effacement .clear-btn (#drawerDocSearchClearBtn) soit correctement calé à l'intérieur
+           du champ de recherche, et ne s'échappe pas à droite sur la bordure extérieure du tiroir.
+        2. Le bouton de fermeture du tiroir (#closeDrawerBtn) doit utiliser une icône SVG
+           vectorielle soignée (au lieu de l'entité texte brute '&times;' décentrée).
+        """
+        # 1. Vérifier position: relative sur .drawer-search-wrapper
+        wrapper_match = re.search(r'\.drawer-search-wrapper\s*\{([^}]+)\}', self.style_css)
+        self.assertIsNotNone(wrapper_match, "Règle .drawer-search-wrapper introuvable dans style.css")
+        wrapper_css = wrapper_match.group(1)
+        self.assertIn(
+            "position: relative",
+            wrapper_css,
+            ".drawer-search-wrapper doit avoir 'position: relative' pour que le bouton .clear-btn soit contenu dans le champ et non projeté sur la bordure extérieure du tiroir."
+        )
+
+        # 2. Vérifier l'icône SVG pour closeDrawerBtn
+        with open("frontend/index.html", "r", encoding="utf-8") as f:
+            html_content = f.read()
+        close_btn_match = re.search(r'<button\s+id="closeDrawerBtn"[^>]*>([\s\S]*?)</button>', html_content)
+        self.assertIsNotNone(close_btn_match, "Bouton #closeDrawerBtn introuvable dans index.html")
+        self.assertIn(
+            "<svg",
+            close_btn_match.group(1),
+            "#closeDrawerBtn doit utiliser une icône SVG vectorielle au lieu du caractère texte brut '&times;'."
+        )
+
 if __name__ == "__main__":
     unittest.main()

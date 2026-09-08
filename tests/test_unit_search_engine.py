@@ -132,6 +132,19 @@ class TestUnitSearchEngine(unittest.TestCase):
             res_no_match = search_titles("delivrance", folder_id=self.isolated_folder_id)
             self.assertEqual(res_no_match["total_documents"], 0)
 
+            # 5. Recherche singulier / pluriel / préfixe dans les titres (ex: 'complication' vs 'Complications Delivrance')
+            res_singular = search_titles("complication")
+            self.assertGreaterEqual(res_singular["total_documents"], 1)
+            self.assertEqual(res_singular["results"][0]["id"], self.doc2_id)
+
+            res_plural = search_titles("complications")
+            self.assertGreaterEqual(res_plural["total_documents"], 1)
+            self.assertEqual(res_plural["results"][0]["id"], self.doc2_id)
+
+            res_prefix = search_titles("complica")
+            self.assertGreaterEqual(res_prefix["total_documents"], 1)
+            self.assertEqual(res_prefix["results"][0]["id"], self.doc2_id)
+
     def test_search_documents_ranking_and_filters(self):
         with patch("backend.database.DB_PATH", self.db_path):
             # 1. Recherche multi-termes : doc2 contient "hémorragie" et "délivrance" (AND match -> prioritaire)

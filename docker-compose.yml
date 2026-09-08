@@ -1,20 +1,28 @@
 services:
   app:
+    image: docseeker-app:${DOCSEEKER_VERSION:-1.0.0}
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: docfastexplorer_app
+    container_name: docseeker_app
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
-      - MAX_UPLOAD_SIZE_BYTES=157286400 # 150 Mo
+      - PYTHONPATH=/app
+      - MALLOC_ARENA_MAX=2
+      # UID / GID Synology (par défaut 1026:100 sur DSM) pour éviter toute erreur de permission
+      - PUID=${PUID:-1026}
+      - PGID=${PGID:-100}
+      # Limite de téléversement (500 Mo = 524288000 octets)
+      - MAX_UPLOAD_SIZE_BYTES=${MAX_UPLOAD_SIZE_BYTES:-524288000}
       # En production sous proxy unique, CORS restrictif
       - ALLOWED_ORIGINS=
+    # Limites de ressources pour préserver la RAM de l'hôte (ajusté pour supporter les PDF jusqu'à 500 Mo)
+    mem_limit: 1024m
+    mem_reservation: 256m
     volumes:
       # Persistance de la base SQLite et des documents/vignettes
       - ./data:/app/data
-      - ./backend:/app/backend
-      - ./frontend:/app/frontend
     networks:
       - internal_net
     # Le port 8000 n'est PAS exposé sur l'hôte, uniquement accessible par Caddy
@@ -29,14 +37,15 @@ services:
 
   caddy:
     image: caddy:2.8-alpine
-    container_name: docfastexplorer_proxy
+    container_name: docseeker_proxy
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp" # Support HTTP/3 (QUIC)
-    env_file:
-      - .env
+      - "${HOST_HTTP_PORT:-8080}:80"
+      - "${HOST_HTTPS_PORT:-8443}:443"
+      - "${HOST_HTTPS_PORT:-8443}:443/udp" # Support HTTP/3 (QUIC)
+    environment:
+      - BASIC_AUTH_USER=elwood
+      - BASIC_AUTH_PASSWORD_HASH=$$2a$$14$$tE6yxeeGVDxfwBob6bpg3.dI4Z4fvOOAXLcl2VIL.Fu0otS2wp2Q6
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -54,8 +63,8 @@ networks:
 
 volumes:
   caddy_data:
-    name: docfast_caddy_data
+    name: docseeker_caddy_data
   caddy_config:
-    name: docfast_caddy_config
+    name: docseeker_caddy_config
   caddy_logs:
-    name: docfast_caddy_logs
+    name: docseeker_caddy_logs

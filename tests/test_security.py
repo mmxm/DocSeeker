@@ -14,7 +14,7 @@ class TestSecurity(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data.get("status"), "ok")
-        self.assertEqual(data.get("service"), "DocFastExplorer")
+        self.assertEqual(data.get("service"), "DocSeeker")
 
     def test_path_traversal_on_crop_endpoint(self):
         """Vérifie que les tentatives de Path Traversal sur le paramètre hash sont bloquées avec HTTP 400."""

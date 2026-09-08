@@ -1,8 +1,14 @@
 # ==============================================================================
-# DocFastExplorer - Caddyfile (Reverse Proxy, SSL Automatique & Authentification)
+# DocSeeker - Caddyfile (Reverse Proxy, SSL Automatique & Authentification)
 # ==============================================================================
 
-{$DOMAIN:localhost} {
+# Désactive les redirections automatiques HTTPS de Caddy car c'est le Reverse Proxy Synology
+# qui gère le HTTPS et les certificats SSL en amont.
+{
+    auto_https off
+}
+
+:80 {
     # --------------------------------------------------------------------------
     # En-têtes HTTP de Sécurité
     # --------------------------------------------------------------------------
@@ -19,18 +25,15 @@
         # Désactivation des fonctionnalités sensibles du navigateur inutilisées
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
 
-        # HSTS (activé pour forcer le chiffrement de bout en bout)
-        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-
         # Masque le header d'identification du serveur Caddy
         -Server
     }
 
     # --------------------------------------------------------------------------
-    # Limitation de la taille maximale des requêtes (téléversement PDF max 150 Mo)
+    # Limitation de la taille maximale des requêtes (téléversement PDF max 500 Mo)
     # --------------------------------------------------------------------------
     request_body {
-        max_size 150MB
+        max_size 500MB
     }
 
     # --------------------------------------------------------------------------
@@ -39,18 +42,14 @@
     # Pour générer un hash : caddy hash-password --plaintext "mon_mot_de_passe"
     # --------------------------------------------------------------------------
     basic_auth {
-        {$BASIC_AUTH_USER:admin} {$BASIC_AUTH_PASSWORD_HASH:$2a$14$Zkx19XLiW6VYouLHR5NmfOFU0z2GTNmpkT/5qqR7hx4L49SSTucOG}
+        {$BASIC_AUTH_USER} "{$BASIC_AUTH_PASSWORD_HASH}"
     }
 
     # --------------------------------------------------------------------------
     # Proxy vers l'application FastAPI
     # --------------------------------------------------------------------------
-    reverse_proxy app:8000 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-    }
+    reverse_proxy app:8000
+
 
     # --------------------------------------------------------------------------
     # Compression dynamique (Gzip / Zstandard)

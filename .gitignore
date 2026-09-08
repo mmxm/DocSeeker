@@ -19,6 +19,8 @@ data/
 # Environnement et Secrets
 .env
 
-# Sauvegardes
+# Sauvegardes et Paquets
 backups/
 *.tar.gz
+dist/
+*.zip

@@ -1,6 +1,6 @@
-# Guide de Gestion des Bugs avec `git-bug` — DocFastExplorer
+# Guide de Gestion des Bugs avec `git-bug` — DocSeeker
 
-Le suivi des anomalies et régressions de **DocFastExplorer** est géré directement via [**`git-bug`**](https://github.com/git-bug/git-bug), un outil de bug tracking 100% décentralisé, offline et embarqué dans le dépôt Git.
+Le suivi des anomalies et régressions de **DocSeeker** est géré directement via [**`git-bug`**](https://github.com/git-bug/git-bug), un outil de bug tracking 100% décentralisé, offline et embarqué dans le dépôt Git.
 
 Les bugs sont stockés dans les objets internes Git (`refs/bugs/`) et ne polluent pas l'arbre des fichiers source.
 

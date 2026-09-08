@@ -108,6 +108,7 @@ def index_pdf_file(file_path: str, original_filename: str, custom_title: Optiona
             pass
         cover_path = os.path.join(COVERS_DIR, f"{doc_id}.jpg")
         cover_pix.save(cover_path)
+        del cover_pix
 
     # Parcourir les pages et indexer texte + coordonnées
     for page_idx in range(total_pages):
@@ -136,6 +137,9 @@ def index_pdf_file(file_path: str, original_filename: str, custom_title: Optiona
     conn.commit()
     conn.close()
     doc.close()
+    del doc
+    import gc
+    gc.collect()
 
     return {
         "id": doc_id,

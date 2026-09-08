@@ -9,6 +9,9 @@ def normalize_text(text: str) -> str:
     """Supprime les accents et convertit en minuscules pour comparaison uniforme."""
     if not text:
         return ""
+    # Fast path ultra-rapide en C pour les chaînes ASCII pures (> 85% des mots)
+    if text.isascii():
+        return text.lower()
     nfkd = unicodedata.normalize("NFD", text)
     return "".join(c for c in nfkd if unicodedata.category(c) != "Mn").lower()
 
@@ -19,7 +22,12 @@ def get_db_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
     conn.execute("PRAGMA synchronous = NORMAL;")
-    conn.execute("PRAGMA cache_size = -64000;")
+    # Lecture zéro-copie via cache noyau (réduit l'usage CPU et évite les copies mémoire)
+    conn.execute("PRAGMA mmap_size = 268435456;")
+    # Tri et tables temporaires FTS en mémoire (évite les I/O disque inutiles)
+    conn.execute("PRAGMA temp_store = MEMORY;")
+    # Cache SQLite allégé (16 Mo au lieu de 64 Mo) pour économiser la RAM tout en maintenant des perfs maximales
+    conn.execute("PRAGMA cache_size = -16000;")
     return conn
 
 def init_db():
@@ -37,6 +45,7 @@ def init_db():
         FOREIGN KEY(parent_id) REFERENCES folders(id) ON DELETE CASCADE
     );
     """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_folders_parent_id ON folders(parent_id);")
 
     # Table des documents avec file_hash et folder_id
     cursor.execute("""

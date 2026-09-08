@@ -26,14 +26,16 @@ async def lifespan(app: FastAPI):
         from backend.indexer import scan_and_sync_documents
         res = scan_and_sync_documents()
         if res["added"] > 0:
-            print(f"[DocFastExplorer] {res['added']} nouveau(x) document(s) synchronisé(s) au démarrage.")
+            print(f"[DocSeeker] {res['added']} nouveau(x) document(s) synchronisé(s) au démarrage.")
     except Exception as e:
-        print(f"[DocFastExplorer] Erreur lors de la synchronisation au démarrage : {e}")
+        print(f"[DocSeeker] Erreur lors de la synchronisation au démarrage : {e}")
     yield
 
-app = FastAPI(title="DocFastExplorer API", lifespan=lifespan)
+app = FastAPI(title="DocSeeker API", lifespan=lifespan)
 
-MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", 150 * 1024 * 1024))  # 150 Mo max par défaut
+DOCSEEKER_VERSION = os.getenv("DOCSEEKER_VERSION", "1.0.0")
+GIT_COMMIT = os.getenv("GIT_COMMIT", "dev")
+MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", 500 * 1024 * 1024))  # 500 Mo max par défaut
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
@@ -84,9 +86,22 @@ def health_check():
         conn = get_db_connection()
         conn.execute("SELECT 1;").fetchone()
         conn.close()
-        return {"status": "ok", "service": "DocFastExplorer"}
+        return {
+            "status": "ok",
+            "service": "DocSeeker",
+            "version": DOCSEEKER_VERSION,
+            "commit": GIT_COMMIT
+        }
     except Exception as e:
         raise HTTPException(status_code=503, detail="Service indisponible (Base de données inaccessible).")
+
+@app.get("/api/version")
+def get_version():
+    """Renvoie la version applicative et le hash du commit Git actif."""
+    return {
+        "version": DOCSEEKER_VERSION,
+        "commit": GIT_COMMIT
+    }
 
 @app.get("/api/folders")
 def list_folders(parent_id: Optional[str] = Query(None)):
@@ -279,7 +294,7 @@ def rename_document(doc_id: int, payload: DocumentUpdate):
 def _apply_annotations_to_pdf(pdf_path: str, annotations: List[Dict[str, Any]]):
     """
     Applique les annotations directement sur le fichier PDF local via PyMuPDF.
-    Nettoie d'abord les anciennes annotations DocFastExplorer / fitz pour refléter fidèlement
+    Nettoie d'abord les anciennes annotations DocSeeker / DocFastExplorer / fitz pour refléter fidèlement
     les suppressions effectuées par l'utilisateur.
     """
     import pymupdf
@@ -287,12 +302,12 @@ def _apply_annotations_to_pdf(pdf_path: str, annotations: List[Dict[str, Any]]):
         doc = pymupdf.open(pdf_path)
         modified = False
 
-        # 1. Supprimer les annotations précédemment ajoutées par DocFastExplorer (ou fitz)
+        # 1. Supprimer les annotations précédemment ajoutées par DocSeeker / DocFastExplorer (ou fitz)
         for page in doc:
             for annot in list(page.annots()):
                 aid = annot.info.get("id", "")
                 subj = annot.info.get("subject", "")
-                if aid.startswith("fitz-") or subj == "DocFastExplorer":
+                if aid.startswith("fitz-") or subj in ("DocFastExplorer", "DocSeeker"):
                     page.delete_annot(annot)
                     modified = True
 
@@ -309,7 +324,7 @@ def _apply_annotations_to_pdf(pdf_path: str, annotations: List[Dict[str, Any]]):
                 rect = a.get("rect")
                 if rect and len(rect) == 4:
                     annot = page.add_highlight_annot(pymupdf.Rect(rect[0], rect[1], rect[2], rect[3]))
-                    annot.set_info(subject="DocFastExplorer")
+                    annot.set_info(subject="DocSeeker")
                     color = a.get("color")
                     if color and len(color) == 3:
                         annot.set_colors(stroke=(color[0]/255.0 if color[0] > 1 else color[0],
@@ -328,7 +343,7 @@ def _apply_annotations_to_pdf(pdf_path: str, annotations: List[Dict[str, Any]]):
                         str(val),
                         fontsize=a.get("fontSize", 12)
                     )
-                    annot.set_info(subject="DocFastExplorer")
+                    annot.set_info(subject="DocSeeker")
                     annot.update()
                     modified = True
 
@@ -341,7 +356,7 @@ def _apply_annotations_to_pdf(pdf_path: str, annotations: List[Dict[str, Any]]):
                             paths = paths.get("lines") or paths.get("points")
                         if paths:
                             annot = page.add_ink_annot(paths)
-                            annot.set_info(subject="DocFastExplorer")
+                            annot.set_info(subject="DocSeeker")
                             annot.update()
                             modified = True
                     except Exception as e:

@@ -377,6 +377,12 @@ document.addEventListener("DOMContentLoaded", () => {
     if (mobileDrawerOverlay && mobileOccurrencesDrawer) {
       mobileDrawerOverlay.style.display = "block";
       mobileOccurrencesDrawer.style.display = "flex";
+      setTimeout(() => {
+        const activeCard = drawerOccurrencesList ? drawerOccurrencesList.querySelector(".vertical-occ-card.active") : null;
+        if (activeCard) {
+          activeCard.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
+      }, 100);
     }
   }
 
@@ -415,7 +421,7 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
         <div class="vertical-occ-footer">
           <span class="vertical-occ-page">Page ${occ.page_number}</span>
-          <span class="vertical-occ-snippet">${escapeHtml(occ.text_snippet || '')}</span>
+          <span class="vertical-occ-snippet">${currentSearchQuery ? highlightTitle(occ.text_snippet || '', currentSearchQuery) : escapeHtml(occ.text_snippet || '')}</span>
         </div>
       `;
       item.addEventListener("click", () => {
@@ -1364,7 +1370,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!title) return "";
     if (!query || !query.trim()) return escapeHtml(title);
 
-    const rawTerms = query.trim().split(/\s+/).filter(t => t.length >= 2);
+    const rawTerms = query.trim().split(/\s+/).filter(t => t.length >= 1);
     if (rawTerms.length === 0) return escapeHtml(title);
 
     const accentMap = {
@@ -1377,13 +1383,30 @@ document.addEventListener("DOMContentLoaded", () => {
       'n': '[nñNÑ]'
     };
 
-    const regexParts = rawTerms.map(term => {
-      const normalized = term.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-      const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return escaped.split('').map(ch => accentMap[ch] || `[${ch.toUpperCase()}${ch.toLowerCase()}]`).join('');
+    const patterns = [];
+    rawTerms.forEach(term => {
+      const variants = [term];
+      if ((term.endsWith('s') || term.endsWith('x')) && term.length > 3) {
+        variants.push(term.slice(0, -1));
+      }
+      variants.forEach(v => {
+        const normalized = v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regexStr = escaped.split('').map(ch => accentMap[ch] || `[${ch.toUpperCase()}${ch.toLowerCase()}]`).join('');
+        if (v.length <= 2) {
+          patterns.push(`(?<!\\w)${regexStr}(?!\\w)`);
+        } else {
+          patterns.push(`(?<!\\w)${regexStr}`);
+        }
+      });
     });
 
-    const pattern = new RegExp(`(${regexParts.join('|')})`, 'gi');
+    if (patterns.length === 0) return escapeHtml(title);
+
+    // Trier par longueur décroissante pour privilégier la variante la plus longue (ex: 'complications' avant 'complication')
+    patterns.sort((a, b) => b.length - a.length);
+
+    const pattern = new RegExp(`(${patterns.join('|')})`, 'gi');
     let lastIndex = 0;
     let result = '';
     let match;
@@ -2331,7 +2354,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // Invalider le cache du navigateur pour ce PDF spécifique afin de recharger la version modifiée
       if ("caches" in window) {
-        caches.open("docfast-pdf-v1").then(cache => {
+        caches.open("docseeker-pdf-v1").then(cache => {
           cache.delete(`/api/pdf/${currentActiveDocId}`);
         }).catch(() => {});
       }
@@ -2423,7 +2446,7 @@ document.addEventListener("DOMContentLoaded", () => {
   async function cacheDocumentPdf(docId) {
     if (!("caches" in window)) return;
     try {
-      const cache = await caches.open("docfast-pdf-v1");
+      const cache = await caches.open("docseeker-pdf-v1");
       const url = `/api/pdf/${docId}`;
       const match = await cache.match(url);
       if (!match) {
@@ -2537,7 +2560,7 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
         <div class="vertical-occ-footer">
           <span class="vertical-occ-page">Page ${occ.page_number}</span>
-          <span class="vertical-occ-snippet" title="${escapeHtml(occ.text_snippet || '')}">${escapeHtml(occ.text_snippet || '')}</span>
+          <span class="vertical-occ-snippet" title="${escapeHtml(occ.text_snippet || '')}">${currentSearchQuery ? highlightTitle(occ.text_snippet || '', currentSearchQuery) : escapeHtml(occ.text_snippet || '')}</span>
         </div>
       `;
 
@@ -2552,6 +2575,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       docOccurrencesList.appendChild(card);
     });
+
+    const activeCard = docOccurrencesList.querySelector(".vertical-occ-card.active");
+    if (activeCard) {
+      activeCard.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
   }
 
   function goToPageAndScrollToOccurrence(pageNumber, rect = null, yRatio = 0.0) {
@@ -2702,6 +2730,8 @@ document.addEventListener("DOMContentLoaded", () => {
     uploadProgressBar.style.backgroundColor = "var(--accent)";
     fileInput.value = "";
     docTitleInput.value = "";
+    const singleTitleGroup = document.getElementById("singleTitleGroup");
+    if (singleTitleGroup) singleTitleGroup.style.display = "block";
   });
 
   closeUploadModalBtn.addEventListener("click", () => uploadModal.style.display = "none");
@@ -2730,79 +2760,152 @@ document.addEventListener("DOMContentLoaded", () => {
     e.preventDefault();
     dropZone.classList.remove("dragover");
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleFileUpload(e.dataTransfer.files[0]);
+      handleFilesUpload(e.dataTransfer.files);
     }
   });
 
   fileInput.addEventListener("change", () => {
     if (fileInput.files && fileInput.files.length > 0) {
-      handleFileUpload(fileInput.files[0]);
+      handleFilesUpload(fileInput.files);
     }
   });
 
-  async function handleFileUpload(file) {
-    if (!file.name.toLowerCase().endsWith(".pdf")) {
-      showToast("Veuillez sélectionner un fichier PDF valide.", "warning");
+  // Support du glisser-déposer de PDF n'importe où sur la fenêtre
+  window.addEventListener("dragover", (e) => {
+    if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files")) {
+      e.preventDefault();
+    }
+  });
+
+  window.addEventListener("drop", (e) => {
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const hasPdfs = Array.from(e.dataTransfer.files).some(f => f.name.toLowerCase().endsWith(".pdf"));
+      if (hasPdfs) {
+        e.preventDefault();
+        uploadModal.style.display = "flex";
+        handleFilesUpload(e.dataTransfer.files);
+      }
+    }
+  });
+
+  async function handleFilesUpload(fileList) {
+    const rawFiles = Array.from(fileList || []);
+    const pdfFiles = rawFiles.filter(f => f.name.toLowerCase().endsWith(".pdf"));
+
+    if (pdfFiles.length === 0) {
+      showToast("Veuillez sélectionner au moins un fichier PDF valide.", "warning");
       return;
     }
 
     uploadProgressContainer.style.display = "block";
-    uploadProgressBar.style.width = "30%";
-    uploadStatusText.textContent = "Téléversement et calcul d'empreinte SHA-256...";
-
-    const formData = new FormData();
-    formData.append("file", file);
-    const customTitle = docTitleInput.value.trim();
-    if (customTitle) {
-      formData.append("title", customTitle);
-    }
-    if (currentFolderId) {
-      formData.append("folder_id", currentFolderId);
+    uploadProgressBar.style.backgroundColor = "var(--accent)";
+    
+    // Si plusieurs fichiers, masquer le champ de titre personnalisé unique
+    const singleTitleGroup = document.getElementById("singleTitleGroup");
+    if (pdfFiles.length > 1 && singleTitleGroup) {
+      singleTitleGroup.style.display = "none";
     }
 
-    try {
-      uploadProgressBar.style.width = "60%";
-      uploadStatusText.textContent = "Extraction du texte et indexation des mots...";
+    let successCount = 0;
+    const duplicates = [];
+    const errors = [];
+    const total = pdfFiles.length;
 
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        body: formData
-      });
+    for (let i = 0; i < total; i++) {
+      const file = pdfFiles[i];
+      const percentBase = Math.round((i / total) * 100);
+      uploadProgressBar.style.width = `${percentBase}%`;
+      uploadStatusText.textContent = total === 1 
+        ? `Téléversement et indexation : ${file.name}...` 
+        : `[${i + 1}/${total}] Indexation de ${file.name}...`;
 
-      if (res.status === 409) {
-        const conflictData = await res.json();
-        uploadModal.style.display = "none";
-        
-        const exist = conflictData.existing_doc || {};
+      const formData = new FormData();
+      formData.append("file", file);
+      if (total === 1 && docTitleInput && docTitleInput.value.trim()) {
+        formData.append("title", docTitleInput.value.trim());
+      }
+      if (currentFolderId) {
+        formData.append("folder_id", currentFolderId);
+      }
+
+      try {
+        const res = await fetch("/api/upload", {
+          method: "POST",
+          body: formData
+        });
+
+        if (res.status === 409) {
+          const conflictData = await res.json().catch(() => ({}));
+          duplicates.push({ file: file.name, info: conflictData.existing_doc });
+          continue;
+        }
+
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}));
+          errors.push({ file: file.name, error: errorData.detail || "Erreur serveur" });
+          continue;
+        }
+
+        successCount++;
+        uploadProgressBar.style.width = `${Math.round(((i + 1) / total) * 100)}%`;
+      } catch (err) {
+        console.error(`Upload error for ${file.name}:`, err);
+        errors.push({ file: file.name, error: err.message });
+      }
+    }
+
+    uploadProgressBar.style.width = "100%";
+
+    if (successCount > 0 && duplicates.length === 0 && errors.length === 0) {
+      uploadProgressBar.style.backgroundColor = "var(--success)";
+      uploadStatusText.textContent = total === 1
+        ? "Document indexé avec succès !"
+        : `${successCount} documents indexés avec succès !`;
+    } else if (successCount > 0) {
+      uploadProgressBar.style.backgroundColor = "var(--accent)";
+      uploadStatusText.textContent = `${successCount} importé(s), ${duplicates.length} doublon(s), ${errors.length} erreur(s)`;
+    } else if (duplicates.length > 0 && errors.length === 0) {
+      uploadProgressBar.style.backgroundColor = "var(--warning)";
+      uploadStatusText.textContent = total === 1 
+        ? "Ce document existe déjà dans la base !" 
+        : `${duplicates.length} document(s) déjà présent(s) (doublons ignorés)`;
+    } else {
+      uploadProgressBar.style.backgroundColor = "var(--danger)";
+      uploadStatusText.textContent = `Échec de l'import (${errors.length} erreur(s))`;
+    }
+
+    setTimeout(() => {
+      uploadModal.style.display = "none";
+      if (singleTitleGroup) singleTitleGroup.style.display = "block";
+
+      // Si un seul fichier et doublon, afficher la modale d'alerte doublon détaillée
+      if (total === 1 && duplicates.length === 1) {
+        const exist = duplicates[0].info || {};
         duplicateTitle.textContent = exist.title || "Document sans titre";
-        duplicateFilename.textContent = exist.filename || file.name;
+        duplicateFilename.textContent = exist.filename || duplicates[0].file;
         duplicateDate.textContent = exist.created_at ? new Date(exist.created_at).toLocaleString("fr-FR") : "Date inconnue";
         duplicateModal.style.display = "flex";
         return;
       }
 
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.detail || "Erreur lors de l'import");
+      // Notifications toast adaptées
+      if (successCount > 0) {
+        const dupMsg = duplicates.length > 0 ? ` (${duplicates.length} doublon(s) ignoré(s))` : "";
+        const errMsg = errors.length > 0 ? ` (${errors.length} erreur(s))` : "";
+        showToast(`${successCount} document(s) importé(s) et indexé(s) avec succès !${dupMsg}${errMsg}`, "success");
+      } else if (duplicates.length > 0 && errors.length === 0) {
+        showToast(`${duplicates.length} document(s) ignoré(s) car déjà présent(s) dans la base.`, "warning");
+      } else if (errors.length > 0) {
+        showToast(`Erreur lors de l'import de ${errors.length} document(s).`, "danger");
       }
 
-      uploadProgressBar.style.width = "100%";
-      uploadStatusText.textContent = "Indexation terminée avec succès !";
-
-      setTimeout(() => {
-        uploadModal.style.display = "none";
-        showToast(`Document indexé avec succès !`, "success");
+      if (successCount > 0) {
         if (currentSearchQuery) {
           performSearch(currentSearchQuery);
         } else {
           loadFoldersAndDocuments();
         }
-      }, 500);
-
-    } catch (err) {
-      console.error("Upload error:", err);
-      uploadStatusText.textContent = `Erreur : ${err.message}`;
-      uploadProgressBar.style.backgroundColor = "var(--danger)";
-    }
+      }
+    }, 700);
   }
 });

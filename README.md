@@ -1,6 +1,6 @@
-# DocFastExplorer 📑🔍
+# DocSeeker 📑🔍
 
-**DocFastExplorer** est une application web légère et rapide pour explorer et rechercher des mots-clés dans des documents PDF, avec une expérience utilisateur calquée sur **Goodnotes** (vignettes cropées/zoomées avec surlignage des mots trouvés) et un visualiseur en **Split View** synchronisé.
+**DocSeeker** est une application web légère et rapide pour explorer et rechercher des mots-clés dans des documents PDF, avec une expérience utilisateur calquée sur **Goodnotes** (vignettes cropées/zoomées avec surlignage des mots trouvés) et un visualiseur en **Split View** synchronisé.
 
 ---
 
