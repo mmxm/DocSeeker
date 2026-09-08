@@ -344,5 +344,5 @@ def search_within_document(doc_id: int, query: str) -> Dict[str, Any]:
         "doc_id": doc_id,
         "query": query,
         "total_occurrences": len(occurrences),
-        "occurrences": occurrences[:25] # max 25 dans le document
+        "occurrences": occurrences
     }

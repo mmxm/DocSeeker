@@ -193,5 +193,27 @@ class TestUnitSearchEngine(unittest.TestCase):
             res_empty = search_within_document(self.doc2_id, "")
             self.assertEqual(res_empty["total_occurrences"], 0)
 
+            # 4. Vérifier l'absence de coupure artificielle à 25 occurrences (ex: doc avec 35 occurrences sur 5 pages)
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO documents (filename, title, total_pages) VALUES ('multi_page_doc.pdf', 'Multi Page Doc', 5);")
+            multi_doc_id = cursor.lastrowid
+            for p in range(1, 6):
+                # 7 occurrences par page = 35 occurrences au total
+                p_words = [[10.0 * i, 10.0, 10.0 * i + 30.0, 25.0, "grossesse", 0, 0] for i in range(1, 8)]
+                text = " ".join(["grossesse"] * 7)
+                cursor.execute("INSERT INTO pages (doc_id, page_number, text_content, words_json) VALUES (?, ?, ?, ?);",
+                               (multi_doc_id, p, text, json.dumps(p_words)))
+                cursor.execute("INSERT INTO pages_fts (doc_id, page_number, text_content) VALUES (?, ?, ?);",
+                               (multi_doc_id, p, text))
+            conn.commit()
+            conn.close()
+
+            res_multi = search_within_document(multi_doc_id, "grossesse")
+            self.assertEqual(res_multi["total_occurrences"], 35)
+            self.assertEqual(len(res_multi["occurrences"]), 35, "Toutes les 35 occurrences doivent être retournées sans troncature à 25.")
+            pages = {o["page_number"] for o in res_multi["occurrences"]}
+            self.assertEqual(pages, {1, 2, 3, 4, 5}, "Les occurrences des pages 4 et 5 doivent être présentes !")
+
 if __name__ == "__main__":
     unittest.main()
