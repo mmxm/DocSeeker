@@ -1,6 +1,6 @@
 services:
   app:
-    image: ghcr.io/mmxm/docseeker-app:${DOCSEEKER_VERSION:-latest}
+    image: ghcr.io/mmxm/docseeker-app:latest
     container_name: docseeker_app
     restart: unless-stopped
     environment:
