@@ -258,5 +258,38 @@ class TestQAErgonomicsAndUXBugs(unittest.TestCase):
             "#closeDrawerBtn doit utiliser une icône SVG vectorielle au lieu du caractère texte brut '&times;'."
         )
 
+    # ----------------------------------------------------------------------
+    # BUG 25 : Préservation des espaces lors de la frappe dans la recherche de document
+    # ----------------------------------------------------------------------
+    def test_bug_25_doc_search_inputs_preserve_spaces_while_typing(self):
+        """
+        [Ergonomie / Saisie utilisateur]
+        Lors de la saisie dans les champs de recherche interne (#viewerDocSearchInput, #docSearchInput, #drawerDocSearchInput),
+        l'événement 'input' ne doit pas écraser le champ actif avec une valeur 'trim()' (ce qui supprime
+        instantanément les espaces tapés comme dans 'ECG ').
+        La synchronisation entre champs doit exclure le champ source actif (sourceInput).
+        """
+        # Vérifier que syncDocSearchInputs accepte sourceInput
+        self.assertRegex(
+            self.app_js,
+            r'function\s+syncDocSearchInputs\s*\(\s*val\s*,\s*sourceInput\s*=',
+            "syncDocSearchInputs doit accepter un argument sourceInput pour ne pas écraser le champ en cours de saisie."
+        )
+
+        # Vérifier que viewerDocSearchInput n'est pas écrasé s'il est le sourceInput
+        self.assertIn(
+            "viewerDocSearchInput !== sourceInput",
+            self.app_js,
+            "syncDocSearchInputs doit vérifier viewerDocSearchInput !== sourceInput avant d'assigner sa valeur."
+        )
+
+        # Vérifier que l'input listener transmet la valeur brute et le champ source
+        self.assertRegex(
+            self.app_js,
+            r'viewerDocSearchInput\.addEventListener\("input",\s*\(e\)\s*=>\s*\{[\s\S]*?syncDocSearchInputs\(\s*rawVal\s*,\s*viewerDocSearchInput\s*\)',
+            "L'écouteur input de viewerDocSearchInput doit synchroniser rawVal avec viewerDocSearchInput comme source."
+        )
+
 if __name__ == "__main__":
     unittest.main()
+

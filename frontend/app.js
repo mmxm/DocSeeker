@@ -834,12 +834,12 @@ document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
   // Recherche Interne au Document (Split View, Header Viewer, Tiroir Mobile)
   // =========================================================================
-  function syncDocSearchInputs(val) {
-    if (docSearchInput && docSearchInput.value !== val) docSearchInput.value = val;
-    if (viewerDocSearchInput && viewerDocSearchInput.value !== val) viewerDocSearchInput.value = val;
-    if (drawerDocSearchInput && drawerDocSearchInput.value !== val) drawerDocSearchInput.value = val;
+  function syncDocSearchInputs(val, sourceInput = null) {
+    if (docSearchInput && docSearchInput !== sourceInput && docSearchInput.value !== val) docSearchInput.value = val;
+    if (viewerDocSearchInput && viewerDocSearchInput !== sourceInput && viewerDocSearchInput.value !== val) viewerDocSearchInput.value = val;
+    if (drawerDocSearchInput && drawerDocSearchInput !== sourceInput && drawerDocSearchInput.value !== val) drawerDocSearchInput.value = val;
 
-    const hasVal = Boolean(val && val.length > 0);
+    const hasVal = Boolean(val && val.trim().length > 0);
     if (clearDocSearchBtn) clearDocSearchBtn.style.display = hasVal ? "flex" : "none";
     if (viewerDocSearchClearBtn) viewerDocSearchClearBtn.style.display = hasVal ? "flex" : "none";
     if (drawerDocSearchClearBtn) drawerDocSearchClearBtn.style.display = hasVal ? "flex" : "none";
@@ -847,18 +847,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (docSearchInput) {
     docSearchInput.addEventListener("input", (e) => {
-      const val = e.target.value.trim();
-      syncDocSearchInputs(val);
+      const rawVal = e.target.value;
+      syncDocSearchInputs(rawVal, docSearchInput);
       clearTimeout(docSearchDebounceTimer);
       docSearchDebounceTimer = setTimeout(() => {
-        performDocSearch(val);
+        performDocSearch(rawVal.trim(), false);
       }, 250);
     });
   }
 
   if (clearDocSearchBtn) {
     clearDocSearchBtn.addEventListener("click", () => {
-      performDocSearch("");
+      syncDocSearchInputs("");
+      performDocSearch("", true);
     });
   }
 
@@ -888,36 +889,38 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (viewerDocSearchInput) {
     viewerDocSearchInput.addEventListener("input", (e) => {
-      const val = e.target.value.trim();
-      syncDocSearchInputs(val);
+      const rawVal = e.target.value;
+      syncDocSearchInputs(rawVal, viewerDocSearchInput);
       clearTimeout(docSearchDebounceTimer);
       docSearchDebounceTimer = setTimeout(() => {
-        performDocSearch(val);
+        performDocSearch(rawVal.trim(), false);
       }, 250);
     });
   }
 
   if (viewerDocSearchClearBtn) {
     viewerDocSearchClearBtn.addEventListener("click", () => {
-      performDocSearch("");
+      syncDocSearchInputs("");
+      performDocSearch("", true);
     });
   }
 
   // Écouteurs pour le Tiroir Mobile d'extraits
   if (drawerDocSearchInput) {
     drawerDocSearchInput.addEventListener("input", (e) => {
-      const val = e.target.value.trim();
-      syncDocSearchInputs(val);
+      const rawVal = e.target.value;
+      syncDocSearchInputs(rawVal, drawerDocSearchInput);
       clearTimeout(docSearchDebounceTimer);
       docSearchDebounceTimer = setTimeout(() => {
-        performDocSearch(val);
+        performDocSearch(rawVal.trim(), false);
       }, 250);
     });
   }
 
   if (drawerDocSearchClearBtn) {
     drawerDocSearchClearBtn.addEventListener("click", () => {
-      performDocSearch("");
+      syncDocSearchInputs("");
+      performDocSearch("", true);
     });
   }
 
@@ -1033,8 +1036,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  async function performDocSearch(query) {
-    syncDocSearchInputs(query);
+  async function performDocSearch(query, updateInputs = true) {
+    if (updateInputs) {
+      syncDocSearchInputs(query);
+    }
 
     if (!query) {
       const origCount = currentDocOriginalOccurrences ? currentDocOriginalOccurrences.length : 0;
@@ -1093,7 +1098,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (app && app.eventBus) {
         app.eventBus.dispatch('find', {
           type: '',
-          query: query || '',
+          query: (query || '').trim(),
           phraseSearch: true,
           caseSensitive: false,
           entireWord: false,
