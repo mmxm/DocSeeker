@@ -1,6 +1,6 @@
 services:
   app:
-    image: docseeker-app:${DOCSEEKER_VERSION:-1.0.0}
+    image: ghcr.io/mmxm/docseeker-app:${DOCSEEKER_VERSION:-latest}
     build:
       context: .
       dockerfile: Dockerfile

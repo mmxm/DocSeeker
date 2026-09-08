@@ -38,8 +38,7 @@ fi
 
 # Aligner la version sur le commit Git dans le .env
 sed -i.bak "s/^DOCSEEKER_VERSION=.*/DOCSEEKER_VERSION=${VERSION}/" "${DEPLOY_DIR}/.env" && rm -f "${DEPLOY_DIR}/.env.bak"
-sed -i.bak "s/^DOCSEEKER_VERSION=.*/DOCSEEKER_VERSION=${VERSION}/" "${DEPLOY_DIR}/.env.example" && rm -f "${DEPLOY_DIR}/.env.example.bak"
-sed -i.bak "s/image: docseeker-app:.*/image: docseeker-app:\${DOCSEEKER_VERSION:-${VERSION}}/" "${DEPLOY_DIR}/docker-compose.yml" && rm -f "${DEPLOY_DIR}/docker-compose.yml.bak"
+sed -i.bak "s|image: .*docseeker-app:.*|image: ghcr.io/mmxm/docseeker-app:\${DOCSEEKER_VERSION:-latest}|" "${DEPLOY_DIR}/docker-compose.yml" && rm -f "${DEPLOY_DIR}/docker-compose.yml.bak"
 
 echo "[3/3] Création de l'archive ZIP (${ZIP_FILE})..."
 (

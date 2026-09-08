@@ -4,9 +4,20 @@ Ce guide vous explique comment déployer **DocSeeker** sur votre NAS Synology av
 
 ---
 
-## 🌟 Méthode Recommandée : Image Pré-compilée (0 build sur le NAS)
+## 🚀 Méthode 1 : Récupération Automatique via GitHub (ghcr.io - Recommandé)
 
-C'est la méthode la plus rapide et 100% fiable : l'image est compilée sur votre ordinateur en quelques secondes, puis importée directement dans Synology Container Manager. Votre NAS n'a rien à compiler !
+À chaque `git push` sur la branche `main`, l'image est automatiquement compilée, testée et publiée sur **GitHub Container Registry** (`ghcr.io/mmxm/docseeker-app:latest`).
+
+### Déploiement / Mise à jour en 1 clic sur le NAS :
+1. Sur votre NAS dans `/docker/docseeker/`, déposez `docker-compose.yml`, `Caddyfile` et `.env` (disponibles dans [docseeker.zip](file:///Users/francois/Documents/DocFastExplorer/dist/docseeker.zip)).
+2. Dans **Container Manager** > **Projet** > **Créer** (Chemin: `/docker/docseeker`).
+3. Le NAS télécharge automatiquement la dernière image `latest` depuis GitHub et démarre !
+4. **Pour les futures mises à jour :**
+   Faites un clic droit sur le projet `docseeker` dans Container Manager > **Action** > **Mettre à jour** (ou *Extraire*). Le NAS télécharge la dernière image et redémarre instantanément.
+
+---
+
+## 📦 Méthode 2 : Import Manuel d'archive (0 connexion internet requise sur le NAS)
 
 ### Étape 1 : Générer l'archive de l'image sur votre ordinateur
 Depuis le terminal de votre projet, lancez :
