@@ -1,0 +1,7 @@
+# Configuration locale de développement pour Mac (ignorée sur le NAS)
+# Docker Compose charge automatiquement ce fichier en local avec 'docker-compose.yml'.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
