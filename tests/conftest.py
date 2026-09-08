@@ -12,5 +12,8 @@ def setup_test_suite_environment():
     os.makedirs("data/covers", exist_ok=True)
     os.makedirs("data/crops", exist_ok=True)
     
+    from backend.database import init_db
+    init_db()
     # Génération et indexation des documents médicaux d'exemple pour la suite de tests
     generate()
+

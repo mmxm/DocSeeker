@@ -180,5 +180,83 @@ class TestIndexingPipeline(unittest.TestCase):
             self.assertIn("status", d)
             self.assertIn(d["status"], ["pending", "indexing", "ready", "failed"])
 
+    def test_check_hash_existing_document(self):
+        """Vérifie que /api/check-hash identifie correctement un document déjà présent."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, filename, title, file_hash, created_at FROM documents WHERE file_hash IS NOT NULL LIMIT 1")
+        row = cursor.fetchone()
+        conn.close()
+
+        self.assertIsNotNone(row, "Un document avec file_hash doit exister dans la base.")
+        doc_hash = row["file_hash"]
+
+        res = self.client.get(f"/api/check-hash/{doc_hash}")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertTrue(data["exists"])
+        self.assertIsNotNone(data["existing_doc"])
+        self.assertEqual(data["existing_doc"]["id"], row["id"])
+        self.assertEqual(data["existing_doc"]["filename"], row["filename"])
+        self.assertEqual(data["existing_doc"]["title"], row["title"])
+
+    def test_check_hash_case_insensitive(self):
+        """Vérifie que la comparaison du hash hexadécimal est insensible à la casse (majuscules acceptées)."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT file_hash FROM documents WHERE file_hash IS NOT NULL LIMIT 1")
+        row = cursor.fetchone()
+        conn.close()
+
+        doc_hash_upper = row["file_hash"].upper()
+        res = self.client.get(f"/api/check-hash/{doc_hash_upper}")
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.json()["exists"])
+
+    def test_check_hash_non_existent(self):
+        """Vérifie que /api/check-hash renvoie exists=False pour une empreinte inconnue."""
+        fake_hash = "0" * 64
+        res = self.client.get(f"/api/check-hash/{fake_hash}")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertFalse(data["exists"])
+        self.assertIsNone(data["existing_doc"])
+
+    def test_check_hash_invalid_format(self):
+        """Vérifie que les formats de hash invalides sont rejetés avec HTTP 400."""
+        # Trop court
+        res_short = self.client.get("/api/check-hash/abcd1234")
+        self.assertEqual(res_short.status_code, 400)
+
+        # Caractères non hexadécimaux
+        res_invalid_char = self.client.get(f"/api/check-hash/{'z' * 64}")
+        self.assertEqual(res_invalid_char.status_code, 400)
+
+    def test_pre_upload_hash_check_avoids_redundant_upload(self):
+        """Simule le comportement du client : pré-calcul SHA-256, test d'existence, puis évitement de l'upload."""
+        import hashlib
+        pdf_bytes = create_pdf_bytes("Document pour test d'évitement d'upload inutile.", title="Doc Anti Doublon Client")
+        file_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
+
+        # 1. Avant upload, le document n'existe pas en base
+        check_before = self.client.get(f"/api/check-hash/{file_sha256}").json()
+        self.assertFalse(check_before["exists"])
+
+        # 2. Upload initial du document
+        up_res = self.client.post(
+            "/api/upload?sync=true",
+            files={"file": ("anti_doublon_test.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+            data={"title": "Doc Anti Doublon Client"}
+        )
+        self.assertEqual(up_res.status_code, 200)
+        doc_id = up_res.json()["document"]["id"]
+        self.__class__.cleanup_doc_ids.append(doc_id)
+
+        # 3. Nouvelle tentative : le client pré-calcule le hash avant d'uploader
+        check_after = self.client.get(f"/api/check-hash/{file_sha256}").json()
+        self.assertTrue(check_after["exists"], "Le hash doit maintenant être détecté comme existant.")
+        self.assertEqual(check_after["existing_doc"]["id"], doc_id)
+        # Le client évite d'appeler POST /api/upload !
+
 if __name__ == "__main__":
     unittest.main()

@@ -2884,6 +2884,21 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  async function computeFileSha256(file) {
+    try {
+      if (!window.crypto || !window.crypto.subtle) {
+        return null;
+      }
+      const buffer = await file.arrayBuffer();
+      const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+    } catch (err) {
+      console.warn("Pré-calcul du hash SHA-256 impossible :", err);
+      return null;
+    }
+  }
+
   async function handleFilesUpload(fileList) {
     const rawFiles = Array.from(fileList || []);
     const pdfFiles = rawFiles.filter(f => f.name.toLowerCase().endsWith(".pdf"));
@@ -2911,6 +2926,28 @@ document.addEventListener("DOMContentLoaded", () => {
       const file = pdfFiles[i];
       const percentBase = Math.round((i / total) * 100);
       uploadProgressBar.style.width = `${percentBase}%`;
+      uploadStatusText.textContent = total === 1 
+        ? `Vérification de ${file.name}...` 
+        : `[${i + 1}/${total}] Vérification de ${file.name}...`;
+
+      // Pré-vérification par empreinte SHA-256 pour éviter tout transfert réseau inutile
+      const fileHash = await computeFileSha256(file);
+      if (fileHash) {
+        try {
+          const checkRes = await fetch(`/api/check-hash/${fileHash}`);
+          if (checkRes.ok) {
+            const checkData = await checkRes.json();
+            if (checkData.exists) {
+              duplicates.push({ file: file.name, info: checkData.existing_doc });
+              uploadProgressBar.style.width = `${Math.round(((i + 1) / total) * 100)}%`;
+              continue; // Document identique déjà en base : téléversement réseau évité !
+            }
+          }
+        } catch (checkErr) {
+          console.warn(`Vérification d'empreinte impossible pour ${file.name}:`, checkErr);
+        }
+      }
+
       uploadStatusText.textContent = total === 1 
         ? `Envoi de ${file.name}...` 
         : `[${i + 1}/${total}] Envoi de ${file.name}...`;

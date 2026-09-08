@@ -549,6 +549,33 @@ def list_documents(folder_id: Optional[str] = Query(None)):
 
     return {"documents": docs, "total": len(docs)}
 
+@app.get("/api/check-hash/{file_hash}")
+def check_file_hash(file_hash: str):
+    """Vérifie si un fichier ayant cette empreinte SHA-256 est déjà indexé en base pour éviter un téléversement inutile."""
+    clean_hash = file_hash.strip().lower()
+    if not re.fullmatch(r"^[a-f0-9]{64}$", clean_hash):
+        raise HTTPException(
+            status_code=400,
+            detail="Format d'empreinte SHA-256 invalide (64 caractères hexadécimaux requis)."
+        )
+
+    from backend.indexer import find_duplicate_by_hash
+    duplicate = find_duplicate_by_hash(clean_hash)
+    if duplicate:
+        return {
+            "exists": True,
+            "existing_doc": {
+                "id": duplicate["id"],
+                "filename": duplicate["filename"],
+                "title": duplicate["title"],
+                "created_at": duplicate["created_at"]
+            }
+        }
+    return {
+        "exists": False,
+        "existing_doc": None
+    }
+
 @app.post("/api/upload")
 async def upload_pdf(
     file: UploadFile = File(...), 
