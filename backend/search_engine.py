@@ -81,7 +81,7 @@ def search_titles(query: str, folder_id: Optional[int] = None) -> Dict[str, Any]
 
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, filename, title, folder_id, total_pages, created_at, COALESCE(updated_at, created_at) AS updated_at FROM documents")
+    cursor.execute("SELECT id, filename, title, folder_id, total_pages, created_at, COALESCE(updated_at, created_at) AS updated_at FROM documents WHERE COALESCE(status, 'ready') = 'ready'")
     all_docs = cursor.fetchall()
     conn.close()
 

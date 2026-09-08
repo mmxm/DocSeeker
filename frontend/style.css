@@ -2595,3 +2595,113 @@ body.light-theme {
   }
 }
 
+/* ==========================================================================
+   Pipeline d'indexation d'arrière-plan (Goodnotes-inspired)
+   ========================================================================== */
+.pipeline-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.25);
+  padding: 5px 11px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+  animation: fadeIn 0.3s ease;
+}
+
+.pipeline-badge:hover {
+  background: rgba(37, 99, 235, 0.14);
+  border-color: rgba(37, 99, 235, 0.4);
+  transform: translateY(-1px);
+}
+
+.pipeline-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--accent);
+  box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.5);
+  animation: pipelinePulse 1.8s infinite;
+}
+
+@keyframes pipelinePulse {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.7);
+  }
+  70% {
+    transform: scale(1.1);
+    box-shadow: 0 0 0 6px rgba(37, 99, 235, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+  }
+}
+
+.pipeline-icon {
+  animation: pipelineSpin 2.5s linear infinite;
+}
+
+@keyframes pipelineSpin {
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.doc-card.is-indexing .card-cover {
+  opacity: 0.85;
+  filter: contrast(0.9);
+}
+
+.doc-indexing-overlay {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(15, 23, 42, 0.78);
+  backdrop-filter: blur(4px);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  z-index: 5;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+}
+
+.doc-indexing-overlay .spin-indicator {
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid rgba(255,255,255,0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: pipelineSpin 0.9s linear infinite;
+}
+
+.doc-card.is-failed {
+  border: 1px solid rgba(239, 68, 68, 0.4) !important;
+}
+
+.doc-failed-overlay {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(220, 38, 38, 0.88);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  z-index: 5;
+}
+
+

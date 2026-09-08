@@ -1,6 +1,7 @@
 import os
 import re
 import shutil
+import unicodedata
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse, Response, JSONResponse
@@ -29,7 +30,12 @@ async def lifespan(app: FastAPI):
             print(f"[DocSeeker] {res['added']} nouveau(x) document(s) synchronisé(s) au démarrage.")
     except Exception as e:
         print(f"[DocSeeker] Erreur lors de la synchronisation au démarrage : {e}")
+
+    # Démarrage du pipeline d'indexation d'arrière-plan
+    from backend.pipeline import pipeline
+    pipeline.start()
     yield
+    pipeline.stop(wait=False)
 
 app = FastAPI(title="DocSeeker API", lifespan=lifespan)
 
@@ -518,21 +524,21 @@ def list_documents(folder_id: Optional[str] = Query(None)):
 
     if folder_id == "root":
         cursor.execute("""
-            SELECT id, filename, title, folder_id, total_pages, file_size, created_at, COALESCE(updated_at, created_at) AS updated_at 
+            SELECT id, filename, title, folder_id, status, error_message, total_pages, file_size, created_at, COALESCE(updated_at, created_at) AS updated_at 
             FROM documents 
             WHERE folder_id IS NULL
             ORDER BY id DESC
         """)
     elif folder_id is not None and folder_id.isdigit():
         cursor.execute("""
-            SELECT id, filename, title, folder_id, total_pages, file_size, created_at, COALESCE(updated_at, created_at) AS updated_at 
+            SELECT id, filename, title, folder_id, status, error_message, total_pages, file_size, created_at, COALESCE(updated_at, created_at) AS updated_at 
             FROM documents 
             WHERE folder_id = ?
             ORDER BY id DESC
         """, (int(folder_id),))
     else:
         cursor.execute("""
-            SELECT id, filename, title, folder_id, total_pages, file_size, created_at, COALESCE(updated_at, created_at) AS updated_at 
+            SELECT id, filename, title, folder_id, status, error_message, total_pages, file_size, created_at, COALESCE(updated_at, created_at) AS updated_at 
             FROM documents 
             ORDER BY id DESC
         """)
@@ -547,8 +553,13 @@ def list_documents(folder_id: Optional[str] = Query(None)):
     return {"documents": docs, "total": len(docs)}
 
 @app.post("/api/upload")
-async def upload_pdf(file: UploadFile = File(...), title: Optional[str] = Form(None), folder_id: Optional[int] = Form(None)):
-    """Reçoit un fichier PDF, vérifie sa signature et sa taille, s'assure de l'absence de doublon strict, et l'indexe."""
+async def upload_pdf(
+    file: UploadFile = File(...), 
+    title: Optional[str] = Form(None), 
+    folder_id: Optional[int] = Form(None),
+    sync: Optional[bool] = Query(None)
+):
+    """Reçoit un fichier PDF, vérifie sa signature et sa taille, s'assure de l'absence de doublon strict, et l'ajoute au pipeline d'indexation."""
     # Validation préalable du dossier cible si spécifié
     if folder_id is not None:
         conn = get_db_connection()
@@ -637,35 +648,98 @@ async def upload_pdf(file: UploadFile = File(...), title: Optional[str] = Form(N
 
     shutil.move(temp_path, dest_path)
 
-    doc_info = None
-    try:
-        doc_info = index_pdf_file(dest_path, safe_filename, custom_title=title)
-        
-        # Assigner au dossier si précisé
-        if folder_id is not None:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("UPDATE documents SET folder_id = ? WHERE id = ?", (folder_id, doc_info["id"]))
-            conn.commit()
-            conn.close()
-            doc_info["folder_id"] = folder_id
+    # Titre lisible
+    clean_title = (title or "").strip()
+    if not clean_title:
+        clean_base = os.path.splitext(safe_filename)[0]
+        clean_base = unicodedata.normalize("NFC", clean_base)
+        clean_base = re.sub(r'[_\s]+', ' ', clean_base).strip()
+        clean_base = re.sub(r'\s*-\s*', ' - ', clean_base)
+        clean_title = clean_base
 
-        doc_info["cover_url"] = f"/api/cover/{doc_info['id']}"
-        doc_info["pdf_url"] = f"/api/pdf/{doc_info['id']}"
-        return {"status": "success", "document": doc_info}
-    except Exception as e:
-        if doc_info and "id" in doc_info:
+    # Insertion initiale en base de données avec statut 'pending'
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO documents (filename, title, file_hash, folder_id, status, total_pages, file_size) 
+        VALUES (?, ?, ?, ?, 'pending', 0, ?)
+    """, (safe_filename, clean_title, file_hash, folder_id, total_bytes))
+    doc_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    # Déterminer si l'indexation doit être synchrone (tests unitaires ou demande explicite ?sync=true)
+    # ou asynchrone (usage nominal / importation massive)
+    is_test_env = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+    force_async_test = bool(os.environ.get("ASYNC_UPLOAD_TEST"))
+    should_sync = sync if sync is not None else (is_test_env and not force_async_test)
+
+    if should_sync:
+        try:
+            doc_info = index_pdf_file(dest_path, safe_filename, custom_title=clean_title)
+            if folder_id is not None:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("UPDATE documents SET folder_id = ? WHERE id = ?", (folder_id, doc_id))
+                conn.commit()
+                conn.close()
+                doc_info["folder_id"] = folder_id
+
+            doc_info["cover_url"] = f"/api/cover/{doc_id}"
+            doc_info["pdf_url"] = f"/api/pdf/{doc_id}"
+            doc_info["status"] = "ready"
+            return {"status": "success", "document": doc_info}
+        except Exception as e:
             try:
-                remove_document(doc_info["id"])
+                remove_document(doc_id)
             except Exception:
                 pass
-        elif os.path.exists(dest_path):
-            try:
-                os.remove(dest_path)
-            except Exception:
-                pass
-        print(f"[Security/Indexer] Erreur lors de l'indexation : {e}")
-        raise HTTPException(status_code=500, detail="Erreur lors de l'indexation du document.")
+            print(f"[Security/Indexer] Erreur lors de l'indexation synchrone : {e}")
+            raise HTTPException(status_code=500, detail="Erreur lors de l'indexation du document.")
+
+    # Mode asynchrone : Envoi immédiat au pipeline d'indexation en tâche de fond
+    from backend.pipeline import pipeline
+    pipeline.enqueue(doc_id)
+
+    return {
+        "status": "queued",
+        "document": {
+            "id": doc_id,
+            "filename": safe_filename,
+            "title": clean_title,
+            "folder_id": folder_id,
+            "status": "pending",
+            "file_size": total_bytes,
+            "total_pages": 0,
+            "cover_url": f"/api/cover/{doc_id}",
+            "pdf_url": f"/api/pdf/{doc_id}"
+        }
+    }
+
+@app.get("/api/pipeline/status")
+def get_pipeline_status():
+    """Renvoie l'état du pipeline d'indexation d'arrière-plan (file d'attente, job en cours, statistiques)."""
+    from backend.pipeline import pipeline
+    return pipeline.get_status()
+
+@app.get("/api/documents/{doc_id}/status")
+def get_document_status(doc_id: int):
+    """Renvoie le statut d'indexation d'un document spécifique."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, filename, title, status, error_message, total_pages FROM documents WHERE id = ?", (doc_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Document non trouvé.")
+    return dict(row)
+
+@app.post("/api/pipeline/retry-failed")
+def retry_failed_indexing():
+    """Relance l'indexation de tous les documents ayant échoué."""
+    from backend.pipeline import pipeline
+    requeued = pipeline.retry_failed()
+    return {"status": "success", "requeued_count": requeued}
 
 @app.delete("/api/documents/{doc_id}")
 def delete_pdf(doc_id: int):

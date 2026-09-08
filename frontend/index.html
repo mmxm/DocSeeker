@@ -117,6 +117,15 @@
           <span class="btn-label-responsive">Nouveau dossier</span>
         </button>
 
+        <!-- Indicateur du pipeline d'indexation en arrière-plan -->
+        <div id="pipelineStatusBadge" class="pipeline-badge" style="display: none;" title="Indexation de documents en cours en arrière-plan">
+          <span class="pipeline-pulse-dot"></span>
+          <svg class="pipeline-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
+          <span id="pipelineStatusText" class="pipeline-text">Indexation...</span>
+        </div>
+
         <button id="openUploadBtn" class="btn btn-primary btn-icon-text" title="Importer des documents PDF">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -579,6 +588,6 @@
 
   </div>
 
-  <script src="/app.js?v=4.9"></script>
+  <script src="/app.js?v=5.0"></script>
 </body>
 </html>

@@ -84,13 +84,13 @@ def index_pdf_file(file_path: str, original_filename: str, custom_title: Optiona
         cursor.execute("DELETE FROM pages_fts WHERE doc_id = ?", (doc_id,))
         cursor.execute("""
             UPDATE documents 
-            SET title = ?, file_hash = ?, total_pages = ?, file_size = ?, updated_at = CURRENT_TIMESTAMP 
+            SET title = ?, file_hash = ?, total_pages = ?, file_size = ?, status = 'ready', error_message = NULL, updated_at = CURRENT_TIMESTAMP 
             WHERE id = ?
         """, (title, file_hash, total_pages, file_size, doc_id))
     else:
         cursor.execute("""
-            INSERT INTO documents (filename, title, file_hash, total_pages, file_size) 
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO documents (filename, title, file_hash, total_pages, file_size, status, error_message) 
+            VALUES (?, ?, ?, ?, ?, 'ready', NULL)
         """, (original_filename, title, file_hash, total_pages, file_size))
         doc_id = cursor.lastrowid
 

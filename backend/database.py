@@ -47,7 +47,7 @@ def init_db():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_folders_parent_id ON folders(parent_id);")
 
-    # Table des documents avec file_hash et folder_id
+    # Table des documents avec file_hash, folder_id, status et error_message
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS documents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,6 +55,8 @@ def init_db():
         title TEXT,
         file_hash TEXT,
         folder_id INTEGER,
+        status TEXT DEFAULT 'ready',
+        error_message TEXT,
         total_pages INTEGER DEFAULT 0,
         file_size INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -63,7 +65,7 @@ def init_db():
     );
     """)
 
-    # Migration si colonne file_hash, folder_id ou updated_at manquante
+    # Migration si colonne file_hash, folder_id, updated_at, status ou error_message manquante
     cursor.execute("PRAGMA table_info(documents);")
     columns = [col["name"] for col in cursor.fetchall()]
     if "file_hash" not in columns:
@@ -75,6 +77,12 @@ def init_db():
     if "updated_at" not in columns:
         cursor.execute("ALTER TABLE documents ADD COLUMN updated_at DATETIME;")
         cursor.execute("UPDATE documents SET updated_at = created_at WHERE updated_at IS NULL;")
+    if "status" not in columns:
+        cursor.execute("ALTER TABLE documents ADD COLUMN status TEXT DEFAULT 'ready';")
+        cursor.execute("UPDATE documents SET status = 'ready' WHERE status IS NULL;")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);")
+    if "error_message" not in columns:
+        cursor.execute("ALTER TABLE documents ADD COLUMN error_message TEXT;")
 
     # Table des pages
     cursor.execute("""

@@ -123,6 +123,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const uploadProgressBar = document.getElementById("uploadProgressBar");
   const uploadStatusText = document.getElementById("uploadStatusText");
 
+  // Pipeline Badge & Background Polling
+  const pipelineStatusBadge = document.getElementById("pipelineStatusBadge");
+  const pipelineStatusText = document.getElementById("pipelineStatusText");
+  let pipelinePollingInterval = null;
+  let isPipelineActive = false;
+
   // Duplicate Modal
   const duplicateModal = document.getElementById("duplicateModal");
   const closeDuplicateModalBtn = document.getElementById("closeDuplicateModalBtn");
@@ -217,6 +223,73 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // État du menu contextuel flottant
   let activeContextMenuDoc = null;
+
+  // =========================================================================
+  // Pipeline d'Indexation en Arrière-Plan & Polling
+  // =========================================================================
+  async function checkPipelineStatus() {
+    try {
+      const res = await fetch("/api/pipeline/status");
+      if (!res.ok) return;
+      const data = await res.json();
+
+      const isProcessing = Boolean(data.is_processing || (data.queue_length > 0) || data.current_job);
+      const remaining = (data.queue_length || 0) + (data.current_job ? 1 : 0);
+
+      if (isProcessing) {
+        isPipelineActive = true;
+        if (pipelineStatusBadge) {
+          pipelineStatusBadge.style.display = "inline-flex";
+          if (pipelineStatusText) {
+            pipelineStatusText.textContent = remaining > 1 
+              ? `Indexation : ${remaining} restants...` 
+              : (data.current_job ? `Indexation de ${data.current_job.title || data.current_job.filename}...` : "Indexation...");
+          }
+        }
+      } else {
+        if (isPipelineActive) {
+          // Vient tout juste de se terminer !
+          isPipelineActive = false;
+          if (pipelineStatusBadge) {
+            pipelineStatusBadge.style.display = "inline-flex";
+            if (pipelineStatusText) {
+              pipelineStatusText.textContent = "✅ Indexation terminée";
+            }
+            setTimeout(() => {
+              if (!isPipelineActive && pipelineStatusBadge) {
+                pipelineStatusBadge.style.display = "none";
+              }
+            }, 3500);
+          }
+          // Rafraîchir les documents sans perdre le focus
+          if (!currentSearchQuery) {
+            loadFoldersAndDocuments();
+          }
+          stopPipelinePolling();
+        } else {
+          if (pipelineStatusBadge && !isPipelineActive) {
+            pipelineStatusBadge.style.display = "none";
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Erreur vérification statut pipeline:", err);
+    }
+  }
+
+  function startPipelinePolling() {
+    checkPipelineStatus();
+    if (!pipelinePollingInterval) {
+      pipelinePollingInterval = setInterval(checkPipelineStatus, 2000);
+    }
+  }
+
+  function stopPipelinePolling() {
+    if (pipelinePollingInterval) {
+      clearInterval(pipelinePollingInterval);
+      pipelinePollingInterval = null;
+    }
+  }
 
   // =========================================================================
   // Menu Contextuel Universel (•••)
@@ -1420,8 +1493,12 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function createDocCardElement(doc, isSearch = false) {
+    const isIndexing = doc.status === "pending" || doc.status === "indexing";
+    const isFailed = doc.status === "failed";
+    const statusCardClass = isIndexing ? "is-indexing" : (isFailed ? "is-failed" : "");
+
     const card = document.createElement("div");
-    card.className = `doc-card ${selectedDocIds.has(doc.id) ? 'selected' : ''}`;
+    card.className = `doc-card ${selectedDocIds.has(doc.id) ? 'selected' : ''} ${statusCardClass}`;
     card.setAttribute("draggable", "true");
     card.setAttribute("data-doc-id", doc.id);
 
@@ -1527,7 +1604,7 @@ document.addEventListener("DOMContentLoaded", () => {
         <div class="doc-meta-badges">
           ${doc.is_top_result ? `<span class="doc-badge-pill top-badge" title="Score de pertinence le plus élevé">★ Plus pertinent</span>` : ''}
           ${isSearch ? `<span class="doc-badge-pill highlight">${doc.total_occurrences} occ.</span>` : ''}
-          <span class="doc-badge-pill">${doc.total_pages} p.</span>
+          ${isIndexing ? `<span class="doc-badge-pill" style="background:rgba(37,99,235,0.1); color:var(--accent);">${doc.status === 'indexing' ? '⏳ Indexation...' : '⌛ En attente'}</span>` : `<span class="doc-badge-pill">${doc.total_pages} p.</span>`}
           
           <button class="doc-menu-trigger-btn" data-id="${doc.id}" title="Options du document (Renommer, Déplacer, Réindexer, Supprimer)" aria-label="Options">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -1539,7 +1616,18 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
       </div>
       <div class="doc-card-body">
-        <div class="doc-cover-wrapper" title="Ouvrir le document">
+        <div class="doc-cover-wrapper" title="${isIndexing ? 'Document en cours d\'indexation...' : (isFailed ? 'Échec d\'indexation' : 'Ouvrir le document')}">
+          ${isIndexing ? `
+            <div class="doc-indexing-overlay">
+              <span class="spin-indicator"></span>
+              <span>${doc.status === 'indexing' ? 'Indexation...' : 'En attente'}</span>
+            </div>
+          ` : ''}
+          ${isFailed ? `
+            <div class="doc-failed-overlay" title="${escapeHtml(doc.error_message || 'Erreur d\'indexation')}">
+              <span>Échec</span>
+            </div>
+          ` : ''}
           <img src="${doc.cover_url}" class="doc-cover-img" alt="Couverture" loading="lazy" onerror="this.src='/placeholder-cover.png'" />
         </div>
         <div class="doc-card-vignettes">
@@ -1644,6 +1732,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const openDocAction = (e) => {
       if (e.metaKey || e.ctrlKey || e.shiftKey) return;
       if (selectedDocIds.size > 0) return;
+      if (doc.status === "pending" || doc.status === "indexing") {
+        showToast("Ce document est en cours d'indexation en tâche de fond. Il sera consultable dans quelques instants.", "info");
+        return;
+      }
+      if (doc.status === "failed") {
+        showToast(`Impossible d'ouvrir ce document : ${doc.error_message || 'Échec lors de l\'indexation'}`, "danger");
+        return;
+      }
       const firstOcc = (doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0] : null;
       const firstPage = firstOcc ? firstOcc.page_number : 1;
       const firstRect = firstOcc ? firstOcc.rect : null;
@@ -2816,8 +2912,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const percentBase = Math.round((i / total) * 100);
       uploadProgressBar.style.width = `${percentBase}%`;
       uploadStatusText.textContent = total === 1 
-        ? `Téléversement et indexation : ${file.name}...` 
-        : `[${i + 1}/${total}] Indexation de ${file.name}...`;
+        ? `Envoi de ${file.name}...` 
+        : `[${i + 1}/${total}] Envoi de ${file.name}...`;
 
       const formData = new FormData();
       formData.append("file", file);
@@ -2829,7 +2925,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       try {
-        const res = await fetch("/api/upload", {
+        const res = await fetch("/api/upload?sync=false", {
           method: "POST",
           body: formData
         });
@@ -2859,11 +2955,11 @@ document.addEventListener("DOMContentLoaded", () => {
     if (successCount > 0 && duplicates.length === 0 && errors.length === 0) {
       uploadProgressBar.style.backgroundColor = "var(--success)";
       uploadStatusText.textContent = total === 1
-        ? "Document indexé avec succès !"
-        : `${successCount} documents indexés avec succès !`;
+        ? "Document téléversé ! Indexation en arrière-plan..."
+        : `${successCount} documents téléversés ! Indexation en arrière-plan...`;
     } else if (successCount > 0) {
       uploadProgressBar.style.backgroundColor = "var(--accent)";
-      uploadStatusText.textContent = `${successCount} importé(s), ${duplicates.length} doublon(s), ${errors.length} erreur(s)`;
+      uploadStatusText.textContent = `${successCount} envoyé(s), ${duplicates.length} doublon(s), ${errors.length} erreur(s)`;
     } else if (duplicates.length > 0 && errors.length === 0) {
       uploadProgressBar.style.backgroundColor = "var(--warning)";
       uploadStatusText.textContent = total === 1 
@@ -2871,7 +2967,13 @@ document.addEventListener("DOMContentLoaded", () => {
         : `${duplicates.length} document(s) déjà présent(s) (doublons ignorés)`;
     } else {
       uploadProgressBar.style.backgroundColor = "var(--danger)";
-      uploadStatusText.textContent = `Échec de l'import (${errors.length} erreur(s))`;
+      uploadStatusText.textContent = `Échec de l'envoi (${errors.length} erreur(s))`;
+    }
+
+    // Démarrer immédiatement le suivi du pipeline et rafraîchir la liste
+    if (successCount > 0) {
+      startPipelinePolling();
+      loadFoldersAndDocuments();
     }
 
     setTimeout(() => {
@@ -2892,20 +2994,15 @@ document.addEventListener("DOMContentLoaded", () => {
       if (successCount > 0) {
         const dupMsg = duplicates.length > 0 ? ` (${duplicates.length} doublon(s) ignoré(s))` : "";
         const errMsg = errors.length > 0 ? ` (${errors.length} erreur(s))` : "";
-        showToast(`${successCount} document(s) importé(s) et indexé(s) avec succès !${dupMsg}${errMsg}`, "success");
+        showToast(`${successCount} document(s) reçu(s) ! Indexation en cours en tâche de fond...${dupMsg}${errMsg}`, "success");
       } else if (duplicates.length > 0 && errors.length === 0) {
         showToast(`${duplicates.length} document(s) ignoré(s) car déjà présent(s) dans la base.`, "warning");
       } else if (errors.length > 0) {
         showToast(`Erreur lors de l'import de ${errors.length} document(s).`, "danger");
       }
-
-      if (successCount > 0) {
-        if (currentSearchQuery) {
-          performSearch(currentSearchQuery);
-        } else {
-          loadFoldersAndDocuments();
-        }
-      }
     }, 700);
   }
+
+  // Vérification initiale de l'état du pipeline au chargement de l'application
+  startPipelinePolling();
 });
