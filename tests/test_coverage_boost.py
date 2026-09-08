@@ -183,22 +183,20 @@ class TestCoverageBoost(unittest.TestCase):
             res_missing = self.client.get("/api/pdf/1")
             self.assertIn(res_missing.status_code, [404, 500])
 
-    def test_save_pdf_payload_oversized(self):
-        """Vérifie le rejet 413 lors d'un dépassement de taille sur save-pdf."""
+    def test_save_pdf_payload_too_short(self):
+        """Vérifie le rejet 400 lorsque le payload est trop court (<20 octets)."""
         docs = self.client.get("/api/documents").json().get("documents", [])
         if docs:
             doc_id = docs[0]["id"]
-            with patch("backend.main.MAX_UPLOAD_SIZE", 50): # Limite à 50 octets
-                big_payload = b"%PDF-1.4\n" + b"X" * 100
-                res = self.client.post(f"/api/documents/{doc_id}/save-pdf", content=big_payload)
-                self.assertEqual(res.status_code, 413)
+            short_payload = b"%PDF-1.4"
+            res = self.client.post(f"/api/documents/{doc_id}/save-pdf", content=short_payload)
+            self.assertEqual(res.status_code, 400)
 
-    def test_upload_payload_oversized(self):
-        """Vérifie le rejet 413 lors d'un dépassement de taille sur upload."""
-        with patch("backend.main.MAX_UPLOAD_SIZE", 50):
-            big_file = io.BytesIO(b"%PDF-1.4\n" + b"X" * 100)
-            res = self.client.post("/api/upload", files={"file": ("huge.pdf", big_file, "application/pdf")})
-            self.assertEqual(res.status_code, 413)
+    def test_upload_payload_too_short(self):
+        """Vérifie le rejet 400 lorsque le fichier PDF est trop court (<20 octets)."""
+        short_file = io.BytesIO(b"%PDF-1.4")
+        res = self.client.post("/api/upload", files={"file": ("short.pdf", short_file, "application/pdf")})
+        self.assertEqual(res.status_code, 400)
 
     def test_search_engine_fallback_json_and_or_expansion(self):
         """Teste les fallbacks JSON et branches d'expansion OR dans search_engine."""

@@ -6,7 +6,7 @@ import tempfile
 import time
 from fastapi.testclient import TestClient
 
-from backend.main import app, MAX_UPLOAD_SIZE
+from backend.main import app
 from backend.crop_service import match_word, get_or_generate_crop_on_demand
 from backend.search_engine import sanitize_fts_query, search_documents
 

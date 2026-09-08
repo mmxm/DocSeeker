@@ -30,10 +30,11 @@
     }
 
     # --------------------------------------------------------------------------
-    # Limitation de la taille maximale des requêtes (téléversement PDF max 500 Mo)
+    # Limitation de la taille maximale des requêtes (gérée uniquement par Caddy)
+    # Configurable directement dans docker-compose.yml via MAX_UPLOAD_SIZE (ex: 2GB, 500MB)
     # --------------------------------------------------------------------------
     request_body {
-        max_size 500MB
+        max_size {$MAX_UPLOAD_SIZE:2GB}
     }
 
     # --------------------------------------------------------------------------

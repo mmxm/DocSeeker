@@ -9,7 +9,7 @@ from unittest.mock import patch
 import fitz  # PyMuPDF
 from fastapi.testclient import TestClient
 
-from backend.main import app, DOCSEEKER_VERSION, GIT_COMMIT, MAX_UPLOAD_SIZE
+from backend.main import app, DOCSEEKER_VERSION, GIT_COMMIT
 from backend.database import get_db_connection
 
 
@@ -84,9 +84,15 @@ class TestBatchUploadAndVersion(unittest.TestCase):
             # Hors git ou environnement conteneur sans .git
             pass
 
-    def test_max_upload_size_configured_to_500mb(self):
-        """Vérifie que la taille maximale de téléversement est bien configurée à 500 Mo."""
-        self.assertEqual(MAX_UPLOAD_SIZE, 500 * 1024 * 1024)
+    def test_upload_size_limit_managed_exclusively_by_caddy(self):
+        """Vérifie que la limitation de taille est déléguée au reverse proxy Caddy et configurable via docker-compose."""
+        with open("Caddyfile", "r", encoding="utf-8") as f:
+            caddyfile_content = f.read()
+        self.assertIn("max_size {$MAX_UPLOAD_SIZE:2GB}", caddyfile_content)
+
+        with open("docker-compose.yml", "r", encoding="utf-8") as f:
+            compose_content = f.read()
+        self.assertIn("MAX_UPLOAD_SIZE=2GB", compose_content)
 
     # --------------------------------------------------------------------------
     # 2. Tests d'Upload par lot (Plusieurs fichiers d'un coup)
@@ -201,17 +207,16 @@ class TestBatchUploadAndVersion(unittest.TestCase):
         self.assertEqual(res.status_code, 400)
         self.assertIn("pdf", res.json().get("detail", "").lower())
 
-    def test_batch_upload_oversized_pdf_rejected_at_threshold(self):
-        """Vérifie qu'un fichier dépassant la limite de sécurité est stoppé avec HTTP 413."""
-        # On mock temporairement une petite limite pour tester sans allouer 500 Mo de RAM
-        with patch("backend.main.MAX_UPLOAD_SIZE", 200):
-            pdf_oversized = create_minimal_pdf("Ce texte va dépasser la limite de 200 octets très rapidement.")
-            res = self.client.post(
-                "/api/upload",
-                files={"file": ("Oversized.pdf", io.BytesIO(pdf_oversized), "application/pdf")}
-            )
-            self.assertEqual(res.status_code, 413)
-            self.assertIn("dépasse la taille maximale", res.json().get("detail", ""))
+    def test_backend_accepts_valid_upload_without_arbitrary_limit(self):
+        """Vérifie que l'applicatif accepte les documents valides sans limite artificielle interne."""
+        pdf_bytes = create_minimal_pdf("Document PDF valide sans rejet applicatif.")
+        res = self.client.post(
+            "/api/upload",
+            files={"file": ("Valid_Size.pdf", io.BytesIO(pdf_bytes), "application/pdf")}
+        )
+        self.assertEqual(res.status_code, 200)
+        doc_id = res.json()["document"]["id"]
+        self.__class__.created_doc_ids.append(doc_id)
 
 
 if __name__ == "__main__":

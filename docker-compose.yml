@@ -13,13 +13,11 @@ services:
       # UID / GID Synology (par défaut 1026:100 sur DSM) pour éviter toute erreur de permission
       - PUID=${PUID:-1026}
       - PGID=${PGID:-100}
-      # Limite de téléversement (500 Mo = 524288000 octets)
-      - MAX_UPLOAD_SIZE_BYTES=${MAX_UPLOAD_SIZE_BYTES:-524288000}
       # En production sous proxy unique, CORS restrictif
       - ALLOWED_ORIGINS=
-    # Limites de ressources pour préserver la RAM de l'hôte (ajusté pour supporter les PDF jusqu'à 500 Mo)
-    mem_limit: 1024m
-    mem_reservation: 256m
+    # Limites de ressources pour préserver la RAM de l'hôte (ajusté pour supporter les PDF volumineux jusqu'à 2 Go)
+    mem_limit: 2048m
+    mem_reservation: 512m
     volumes:
       # Persistance de la base SQLite et des documents/vignettes
       - ./data:/app/data
@@ -46,6 +44,8 @@ services:
     environment:
       - BASIC_AUTH_USER=elwood
       - BASIC_AUTH_PASSWORD_HASH=$$2a$$14$$tE6yxeeGVDxfwBob6bpg3.dI4Z4fvOOAXLcl2VIL.Fu0otS2wp2Q6
+      # Limite d'upload unique gérée par le proxy Caddy (modifiable directement ici : 2GB, 500MB, 1GB, etc.)
+      - MAX_UPLOAD_SIZE=2GB
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

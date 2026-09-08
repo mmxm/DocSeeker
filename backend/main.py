@@ -41,7 +41,6 @@ app = FastAPI(title="DocSeeker API", lifespan=lifespan)
 
 DOCSEEKER_VERSION = os.getenv("DOCSEEKER_VERSION", "1.0.0")
 GIT_COMMIT = os.getenv("GIT_COMMIT", "dev")
-MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", 500 * 1024 * 1024))  # 500 Mo max par défaut
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
@@ -412,8 +411,6 @@ async def save_pdf_document(doc_id: int, request: Request):
                         raise HTTPException(status_code=400, detail="Contenu PDF invalide : signature de fichier manquante.")
                     first_chunk = False
                 total_bytes += len(chunk)
-                if total_bytes > MAX_UPLOAD_SIZE:
-                    raise HTTPException(status_code=413, detail=f"Le document PDF dépasse la taille maximale autorisée ({MAX_UPLOAD_SIZE // (1024*1024)} Mo).")
                 f.write(chunk)
 
         if total_bytes < 20:
@@ -600,8 +597,6 @@ async def upload_pdf(
                         raise HTTPException(status_code=400, detail="Format invalide : le fichier téléversé n'est pas un document PDF valide (signature manquante).")
                     first_chunk = False
                 total_bytes += len(chunk)
-                if total_bytes > MAX_UPLOAD_SIZE:
-                    raise HTTPException(status_code=413, detail=f"Le fichier dépasse la taille maximale autorisée ({MAX_UPLOAD_SIZE // (1024*1024)} Mo).")
                 buffer.write(chunk)
 
         if total_bytes < 20:
