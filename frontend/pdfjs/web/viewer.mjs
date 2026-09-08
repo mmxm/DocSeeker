@@ -781,6 +781,10 @@ const defaultOptions = {
     value: "",
     kind: OptionKind.API
   },
+  withCredentials: {
+    value: true,
+    kind: OptionKind.API
+  },
   enableHWA: {
     value: true,
     kind: OptionKind.API + OptionKind.VIEWER + OptionKind.PREFERENCE
@@ -13588,7 +13592,8 @@ const PDFViewerApplication = {
     }
     if (file) {
       this.open({
-        url: file
+        url: file,
+        withCredentials: true
       });
     } else {
       this._hideViewBookmark();
@@ -13774,6 +13779,7 @@ const PDFViewerApplication = {
     const apiParams = AppOptions.getAll(OptionKind.API);
     const loadingTask = getDocument({
       ...apiParams,
+      withCredentials: true,
       ...args
     });
     this.pdfLoadingTask = loadingTask;

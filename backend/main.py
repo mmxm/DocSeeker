@@ -42,7 +42,13 @@ app = FastAPI(title="DocSeeker API", lifespan=lifespan)
 DOCSEEKER_VERSION = os.getenv("DOCSEEKER_VERSION", "1.0.0")
 GIT_COMMIT = os.getenv("GIT_COMMIT", "dev")
 
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES
+
+app.add_middleware(
+    GZipMiddleware,
+    minimum_size=1000,
+    exclude_content_types=DEFAULT_EXCLUDED_CONTENT_TYPES + ("application/pdf",)
+)
 
 allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
 if allowed_origins_env:
@@ -53,6 +59,7 @@ if allowed_origins_env:
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
+        expose_headers=["Content-Range", "Accept-Ranges", "Content-Length", "ETag"],
     )
 else:
     # Par défaut : pas d'allow_credentials avec wildcard pour éviter les fuites CSRF/CORS
@@ -62,6 +69,7 @@ else:
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
+        expose_headers=["Content-Range", "Accept-Ranges", "Content-Length", "ETag"],
     )
 
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
@@ -949,6 +957,15 @@ def stream_pdf(doc_id: int, range: Optional[str] = Header(None)):
     }
 
     return StreamingResponse(iter_file_chunk(), status_code=206, headers=headers)
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    """Fournit une icône par défaut pour éviter les erreurs 404 dans les logs du navigateur."""
+    favicon_path = os.path.join(FRONTEND_DIR, "favicon.ico")
+    if os.path.exists(favicon_path):
+        return FileResponse(favicon_path)
+    svg_icon = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#2563eb"/><path d="M8 8h10l6 6v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z" fill="#ffffff" opacity="0.9"/><path d="M18 8v6h6" fill="#93c5fd"/></svg>"""
+    return Response(content=svg_icon, media_type="image/svg+xml")
 
 class NoCacheStaticFiles(StaticFiles):
     def file_response(self, *args, **kwargs) -> Response:

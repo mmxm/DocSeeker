@@ -2565,7 +2565,7 @@ document.addEventListener("DOMContentLoaded", () => {
     currentDocOriginalOccurrences = occurrences;
 
     resetSaveButtonState();
-    cacheDocumentPdf(docId);
+    // Le streaming HTTP 206 et le cache natif HTTP du navigateur gèrent le chargement et la mise en cache de manière optimale sans collision réseau.
 
     // Support de l'historique de navigation pour le bouton retour mobile
     if (!workspace.classList.contains("split-active")) {

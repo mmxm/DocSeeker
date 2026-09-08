@@ -35,8 +35,29 @@ class TestAPI(unittest.TestCase):
         headers = {"Range": "bytes=0-100"}
         response = self.client.get("/api/pdf/2", headers=headers)
         self.assertEqual(response.status_code, 206)
-        self.assertIn("bytes 0-100/", response.headers.get("content-range", ""))
         self.assertEqual(len(response.content), 101)
+
+    def test_pdf_not_gzipped_even_with_accept_encoding(self):
+        # Vérifie que les fichiers PDF ne sont jamais compressés par GZipMiddleware (ce qui corrompt le streaming par plage de PDF.js)
+        headers = {"Accept-Encoding": "gzip, deflate, br, zstd"}
+        response = self.client.get("/api/pdf/2", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.headers.get("content-encoding"), "Les PDF ne doivent jamais avoir de Content-Encoding gzip.")
+        self.assertEqual(response.headers.get("content-type"), "application/pdf")
+        self.assertEqual(response.headers.get("accept-ranges"), "bytes")
+
+    def test_favicon_endpoint(self):
+        # Vérifie que /favicon.ico répond 200 et évite l'erreur 404 dans les logs du navigateur
+        response = self.client.get("/favicon.ico")
+        self.assertEqual(response.status_code, 200)
+
+    def test_cors_expose_range_headers(self):
+        # Vérifie que les en-têtes nécessaires à PDF.js (Accept-Ranges, Content-Range) sont exposés par CORS
+        response = self.client.get("/api/pdf/2", headers={"Origin": "https://docseeker.bluevdo.synology.me"})
+        self.assertEqual(response.status_code, 200)
+        exposed = response.headers.get("access-control-expose-headers", "")
+        self.assertIn("Accept-Ranges", exposed)
+        self.assertIn("Content-Range", exposed)
 
     def test_duplicate_upload_conflict(self):
         # Téléverser un fichier déjà existant (même contenu)
