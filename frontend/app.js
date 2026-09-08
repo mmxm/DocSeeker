@@ -811,6 +811,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Neutralisation des gestes de pincement Safari iOS sur l'interface hôte lorsque le PDF est affiché
   ['gesturestart', 'gesturechange', 'gestureend'].forEach(eventName => {
+    window.addEventListener(eventName, (e) => {
+      if (document.body.classList.contains('doc-open')) {
+        e.preventDefault();
+      }
+    }, { passive: false });
     document.addEventListener(eventName, (e) => {
       if (document.body.classList.contains('doc-open')) {
         e.preventDefault();
@@ -818,8 +823,50 @@ document.addEventListener("DOMContentLoaded", () => {
     }, { passive: false });
   });
 
+  // Empêcher Safari iOS d'activer le zoom viewport global lors d'un toucher multi-doigts sur l'app hôte
+  window.addEventListener('touchmove', (e) => {
+    if (document.body.classList.contains('doc-open') && e.touches && e.touches.length > 1) {
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  // Empêcher le double-tap zoom intempestif sur l'en-tête et les actions du visualiseur
+  let lastTouchEndTime = 0;
+  document.addEventListener('touchend', (e) => {
+    if (!document.body.classList.contains('doc-open')) return;
+    const now = Date.now();
+    if (now - lastTouchEndTime <= 300) {
+      if (e.target.closest('.viewer-header, .viewer-actions, .btn, input')) {
+        e.preventDefault();
+      }
+    }
+    lastTouchEndTime = now;
+  }, { passive: false });
+
+  // Injection et sécurisation des événements gestuels dans l'iframe du lecteur PDF
+  function hookIframePinchZoomIsolation() {
+    try {
+      const win = pdfFrame ? pdfFrame.contentWindow : null;
+      if (!win) return;
+      ['gesturestart', 'gesturechange', 'gestureend'].forEach(evt => {
+        win.addEventListener(evt, e => e.preventDefault(), { passive: false });
+        if (win.document) {
+          win.document.addEventListener(evt, e => e.preventDefault(), { passive: false });
+        }
+      });
+      win.addEventListener('touchmove', e => {
+        if (e.touches && e.touches.length > 1) {
+          e.preventDefault();
+        }
+      }, { passive: false });
+    } catch (e) {
+      console.warn("[Pinch Isolation Hook]", e);
+    }
+  }
+
   function closeSplitViewer() {
     workspace.classList.remove("split-active");
+    document.documentElement.classList.remove("doc-open");
     document.body.classList.remove("doc-open");
     const appEl = document.getElementById("app");
     if (appEl) appEl.classList.remove("doc-open");
@@ -2599,6 +2646,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     workspace.classList.add("split-active");
+    document.documentElement.classList.add("doc-open");
     document.body.classList.add("doc-open");
     const appEl = document.getElementById("app");
     if (appEl) appEl.classList.add("doc-open");
@@ -2645,6 +2693,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (isSameDoc && pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
       goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
       hookAnnotationStorageModified();
+      hookIframePinchZoomIsolation();
     } else {
       const pdfStreamUrl = `/api/pdf/${docId}`;
       let viewerUrl = `/pdfjs/web/viewer.html?file=${encodeURIComponent(pdfStreamUrl)}#page=${targetPage}`;
@@ -2654,9 +2703,11 @@ document.addEventListener("DOMContentLoaded", () => {
       pdfFrame.src = viewerUrl;
 
       pdfFrame.onload = () => {
+        hookIframePinchZoomIsolation();
         setTimeout(() => {
           goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
           hookAnnotationStorageModified();
+          hookIframePinchZoomIsolation();
         }, 400);
       };
     }

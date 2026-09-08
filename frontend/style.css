@@ -2408,9 +2408,11 @@ body.light-theme {
   }
 
   /* Sur Mobile : Alternance Plein Écran (Master-Detail) */
+  html.doc-open,
   body.doc-open {
     touch-action: pan-x pan-y;
     overscroll-behavior: none;
+    -webkit-text-size-adjust: 100%;
   }
 
   body.doc-open .app-header,

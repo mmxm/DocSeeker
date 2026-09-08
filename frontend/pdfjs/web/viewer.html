@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <!--
 Copyright 2012 Mozilla Foundation
 
@@ -23,9 +23,33 @@ See https://github.com/adobe-type-tools/cmap-resources
 <html dir="ltr" mozdisallowselectionprint>
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <meta name="google" content="notranslate">
     <title>PDF.js viewer</title>
+    <script>
+      // Polyfill AbortSignal.any pour compatibilité iOS Safari < 17.4
+      if (!AbortSignal.any) {
+        AbortSignal.any = function(signals) {
+          const controller = new AbortController();
+          for (const s of signals) {
+            if (!s) continue;
+            if (s.aborted) { controller.abort(s.reason); return controller.signal; }
+            s.addEventListener("abort", () => controller.abort(s.reason), { once: true });
+          }
+          return controller.signal;
+        };
+      }
+      // Neutraliser le zoom natif Safari iOS de la page entière pour préserver le pinch-to-zoom de PDF.js
+      ['gesturestart', 'gesturechange', 'gestureend'].forEach(function(evt) {
+        window.addEventListener(evt, function(e) { e.preventDefault(); }, { passive: false });
+        document.addEventListener(evt, function(e) { e.preventDefault(); }, { passive: false });
+      });
+      window.addEventListener("touchmove", function(e) {
+        if (e.touches && e.touches.length > 1) {
+          e.preventDefault();
+        }
+      }, { passive: false });
+    </script>
 
 <!-- This snippet is used in production (included from viewer.html) -->
 <link rel="resource" type="application/l10n" href="locale/locale.json">
