@@ -4,6 +4,20 @@ from backend.indexer import index_pdf_file
 
 SAMPLE_DATA = [
     {
+        "filename": "023 - Grossesse normale.pdf",
+        "title": "023 - Grossesse normale",
+        "pages": [
+            """COLLEGE DES ENSEIGNANTS DE GYNECOLOGIE OBSTETRIQUE
+Grossesse normale et suivi prénatal :
+Diagnostic précoce de grossesse normale, modifications physiologiques maternelles.
+Calendrier des consultations prénatales et des échographies obligatoires du premier trimestre.""",
+            """Examens biologiques et surveillance :
+Détermination du groupe sanguin et recherche des agglutinines irrégulières (RAI).
+Dépistage de la rubéole, de la toxoplasmose et de la sérologie VIH.
+Surveillance clinique : pression artérielle, prise de poids, hauteur utérine."""
+        ]
+    },
+    {
         "filename": "025_grossesse_extra_uterine.pdf",
         "title": "025 - Grossesse extra-utérine",
         "pages": [
