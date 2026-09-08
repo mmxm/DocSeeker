@@ -798,11 +798,32 @@ document.addEventListener("DOMContentLoaded", () => {
     updateSortPillLabel();
   }
 
+  // Gestion du verrouillage du zoom de l'application hôte sur mobile lors de la lecture d'un PDF
+  function setDocumentZoomLock(locked) {
+    const viewportMeta = document.querySelector('meta[name="viewport"]');
+    if (!viewportMeta) return;
+    if (locked) {
+      viewportMeta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover');
+    } else {
+      viewportMeta.setAttribute('content', 'width=device-width, initial-scale=1.0, viewport-fit=cover');
+    }
+  }
+
+  // Neutralisation des gestes de pincement Safari iOS sur l'interface hôte lorsque le PDF est affiché
+  ['gesturestart', 'gesturechange', 'gestureend'].forEach(eventName => {
+    document.addEventListener(eventName, (e) => {
+      if (document.body.classList.contains('doc-open')) {
+        e.preventDefault();
+      }
+    }, { passive: false });
+  });
+
   function closeSplitViewer() {
     workspace.classList.remove("split-active");
     document.body.classList.remove("doc-open");
     const appEl = document.getElementById("app");
     if (appEl) appEl.classList.remove("doc-open");
+    setDocumentZoomLock(false);
     if (viewerDocSearchWrapper) viewerDocSearchWrapper.style.display = "none";
     syncDocSearchInputs("");
     currentActiveOccurrences = [];
@@ -2581,6 +2602,7 @@ document.addEventListener("DOMContentLoaded", () => {
     document.body.classList.add("doc-open");
     const appEl = document.getElementById("app");
     if (appEl) appEl.classList.add("doc-open");
+    setDocumentZoomLock(true);
 
     // Réinitialiser / synchroniser la recherche interne
     syncDocSearchInputs(currentSearchQuery || "");

@@ -701,6 +701,8 @@ body.light-theme {
   background-color: #cbd5e1;
   position: relative;
   overflow: hidden;
+  touch-action: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .pdf-iframe {
@@ -708,6 +710,7 @@ body.light-theme {
   height: 100%;
   border: none;
   display: block;
+  touch-action: auto;
 }
 
 /* ==========================================================================
@@ -2405,6 +2408,11 @@ body.light-theme {
   }
 
   /* Sur Mobile : Alternance Plein Écran (Master-Detail) */
+  body.doc-open {
+    touch-action: pan-x pan-y;
+    overscroll-behavior: none;
+  }
+
   body.doc-open .app-header,
   .app-layout.doc-open .app-header,
   .app-layout:has(.main-workspace.split-active) .app-header {
@@ -2431,6 +2439,7 @@ body.light-theme {
     width: 100% !important;
     flex: 1 1 100% !important;
     height: 100% !important;
+    touch-action: pan-x pan-y;
   }
 
   .btn-back-viewer {
@@ -2463,6 +2472,7 @@ body.light-theme {
     padding: 6px 10px;
     gap: 6px;
     min-height: 46px;
+    touch-action: manipulation;
   }
 
   .viewer-actions {

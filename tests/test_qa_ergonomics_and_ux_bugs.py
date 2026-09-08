@@ -290,6 +290,32 @@ class TestQAErgonomicsAndUXBugs(unittest.TestCase):
             "L'écouteur input de viewerDocSearchInput doit synchroniser rawVal avec viewerDocSearchInput comme source."
         )
 
+    # ----------------------------------------------------------------------
+    # BUG 26 : Isolation du zoom mobile (Pinch-to-zoom réservé au PDF)
+    # ----------------------------------------------------------------------
+    def test_bug_26_mobile_pdf_zoom_isolation_and_touch_action(self):
+        """
+        [Ergonomie / Mobile UX]
+        Sur mobile, le geste de pincement (pinch-to-zoom) ne doit pas déformer ni agrandir l'application hôte
+        (header, boutons, navigation). Il doit être confiné et dédié au moteur PDF dans l'iframe.
+        1. setDocumentZoomLock() doit verrouiller dynamiquement la meta viewport (user-scalable=no).
+        2. Les événements 'gesturestart' / 'gesturechange' Safari iOS doivent être interceptés en mode doc-open.
+        3. Le CSS mobile pour body.doc-open doit définir 'touch-action: pan-x pan-y' et 'overscroll-behavior: none'.
+        4. Le corps du viewer (.viewer-body) et l'iframe (.pdf-iframe) doivent autoriser le tactile avec 'touch-action: auto'.
+        """
+        # 1. Vérifier la fonction de verrouillage viewport
+        self.assertIn("function setDocumentZoomLock(locked)", self.app_js)
+        self.assertIn("user-scalable=no", self.app_js)
+
+        # 2. Vérifier l'interception des gestes Safari
+        self.assertIn("gesturestart", self.app_js)
+
+        # 3. Vérifier le CSS touch-action et overscroll-behavior
+        self.assertIn("overscroll-behavior: none", self.style_css)
+        self.assertIn("touch-action: pan-x pan-y", self.style_css)
+        self.assertIn("touch-action: auto", self.style_css)
+
 if __name__ == "__main__":
     unittest.main()
+
 
