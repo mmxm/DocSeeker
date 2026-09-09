@@ -19,7 +19,7 @@ use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
-use crate::auth::password::hash_password;
+use crate::auth::password::{hash_password, verify_password};
 use crate::auth::rate_limit::LoginRateLimiter;
 use crate::config::Config;
 use crate::pdf::engine::PdfEngine;
@@ -68,28 +68,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = crate::auth::session::SessionManager::purge_expired_sessions(&conn);
     let db = Arc::new(Mutex::new(conn));
 
-    // Initialisation automatique du compte unique administrateur si la table est vide
+    // Initialisation ou synchronisation automatique du compte administrateur
     {
         let conn = db.lock().unwrap();
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM admin_credentials WHERE id = 1", [], |r| r.get(0))
-            .unwrap_or(0);
+        let current_hash: Option<String> = conn
+            .query_row("SELECT password_hash FROM admin_credentials WHERE id = 1", [], |r| r.get(0))
+            .ok();
 
-        if count == 0 {
-            let initial_password = config
-                .default_admin_password
-                .clone()
-                .unwrap_or_else(|| "admin1234".to_string());
+        let initial_password = config
+            .default_admin_password
+            .clone()
+            .unwrap_or_else(|| "admin1234".to_string());
 
-            let hashed = hash_password(&initial_password).expect("Échec hachage mot de passe initial");
+        let needs_update = match current_hash {
+            None => true,
+            Some(ref hash) => {
+                // Si le mot de passe dans l'environnement ne correspond plus au hash en base
+                !verify_password(&initial_password, hash)
+            }
+        };
+
+        if needs_update {
+            let hashed = hash_password(&initial_password).expect("Échec hachage mot de passe");
             conn.execute(
-                "INSERT INTO admin_credentials (id, password_hash) VALUES (1, ?1)",
+                "INSERT INTO admin_credentials (id, password_hash) VALUES (1, ?1) \
+                 ON CONFLICT(id) DO UPDATE SET password_hash = excluded.password_hash, updated_at = CURRENT_TIMESTAMP",
                 [&hashed],
             )?;
             info!("============================================================");
-            info!("[Sécurité] Compte administrateur initialisé avec succès !");
-            info!("[Sécurité] Mot de passe initial : {}", initial_password);
-            info!("[Sécurité] (Modifiable via l'interface ou ADMIN_PASSWORD)");
+            info!("[Sécurité] Mot de passe administrateur synchronisé avec succès !");
             info!("============================================================");
         }
     }
