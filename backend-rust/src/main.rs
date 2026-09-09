@@ -15,7 +15,6 @@ use axum::{
     Router,
 };
 use rusqlite::Connection;
-use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
@@ -167,15 +166,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let compression = CompressionLayer::new().gzip(true);
-
     let api_router = create_api_router(Arc::clone(&state));
 
     let app = Router::new()
         .merge(api_router)
         .fallback(static_handler)
         .layer(middleware::from_fn(security_headers_middleware))
-        .layer(compression)
         .layer(cors)
         .with_state(state);
 

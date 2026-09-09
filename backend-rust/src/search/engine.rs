@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{params, Connection, Result};
 use regex::Regex;
 use lazy_static::lazy_static;
-use md5::{Digest, Md5};
+use sha2::{Digest, Sha256};
 
 use crate::db::text_norm::normalize_text;
 use super::types::{DocSearchResponse, DocumentSearchResult, OccurrenceResult, SearchResponse};
@@ -31,7 +31,7 @@ pub fn get_query_hash(query_terms: &[String]) -> String {
     norm_terms.sort();
 
     let joined = format!("v4_{}", norm_terms.join("_"));
-    let mut hasher = Md5::new();
+    let mut hasher = Sha256::new();
     hasher.update(joined.as_bytes());
     let hex_str = hex::encode(hasher.finalize());
     hex_str.chars().take(8).collect()
