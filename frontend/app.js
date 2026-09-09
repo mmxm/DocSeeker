@@ -219,6 +219,84 @@ document.addEventListener("DOMContentLoaded", () => {
     rootMargin: "80px 200px" // Pré-chargement fluide avant entrée dans le viewport
   });
 
+  // =========================================================================
+  // Gestionnaire de Chargement Prioritaire Dynamique avec Annulation (Abort)
+  // pour le volet des occurrences verticales (Desktop & Tiroir Mobile)
+  // =========================================================================
+  class DynamicCropManager {
+    constructor() {
+      this.activeRequests = new Map(); // img element -> AbortController
+      this.observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          const img = entry.target;
+          if (entry.isIntersecting) {
+            this.loadPriority(img);
+          } else {
+            this.cancelIfInFlight(img);
+          }
+        });
+      }, {
+        rootMargin: "180px 0px", // Pré-charge 1 à 2 vignettes d'avance au défilement
+        threshold: 0.01
+      });
+    }
+
+    observe(img) {
+      this.observer.observe(img);
+    }
+
+    cancelIfInFlight(img) {
+      if (this.activeRequests.has(img)) {
+        const controller = this.activeRequests.get(img);
+        controller.abort();
+        this.activeRequests.delete(img);
+      }
+    }
+
+    async loadPriority(img) {
+      const srcUrl = img.getAttribute("data-src");
+      if (!srcUrl || img.dataset.loaded === "true") return;
+
+      this.cancelIfInFlight(img);
+
+      const controller = new AbortController();
+      this.activeRequests.set(img, controller);
+
+      try {
+        const res = await fetch(srcUrl, {
+          signal: controller.signal,
+          priority: "high"
+        });
+
+        if (res.ok) {
+          const blob = await res.blob();
+          const blobUrl = URL.createObjectURL(blob);
+          img.src = blobUrl;
+          img.dataset.loaded = "true";
+          img.style.opacity = "1";
+          this.observer.unobserve(img);
+        }
+      } catch (err) {
+        if (err.name !== "AbortError") {
+          img.src = srcUrl;
+        }
+      } finally {
+        if (this.activeRequests.get(img) === controller) {
+          this.activeRequests.delete(img);
+        }
+      }
+    }
+
+    clear() {
+      for (const [, controller] of this.activeRequests.entries()) {
+        controller.abort();
+      }
+      this.activeRequests.clear();
+    }
+  }
+
+  const verticalCropManager = new DynamicCropManager();
+
   // Sélection multiple & Presse-papier
   let selectedDocIds = new Set();
   let lastSelectedDocId = null;
@@ -488,13 +566,15 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    const placeholderSvg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='120'%3E%3Crect width='100%25' height='100%25' fill='%23f1f5f9'/%3E%3C/svg%3E";
+
     occurrences.forEach((occ, index) => {
       const item = document.createElement("div");
       const isActive = (occ.page_number === activePage);
       item.className = `vertical-occ-card ${isActive ? 'active' : ''}`;
       item.innerHTML = `
         <div class="vertical-occ-img-wrapper">
-          <img src="${occ.crop_url}" class="vertical-occ-img" alt="Extrait p. ${occ.page_number}" loading="lazy" />
+          <img src="${placeholderSvg}" data-src="${occ.crop_url}" class="vertical-occ-img dynamic-crop" alt="Extrait p. ${occ.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
         </div>
         <div class="vertical-occ-footer">
           <span class="vertical-occ-page">Page ${occ.page_number}</span>
@@ -509,6 +589,8 @@ document.addEventListener("DOMContentLoaded", () => {
         openDocumentInSplitView(docId, docTitle, occ.page_number, occurrences, targetRect, occ.y_ratio || 0);
       });
       drawerOccurrencesList.appendChild(item);
+      const img = item.querySelector(".dynamic-crop");
+      if (img) verticalCropManager.observe(img);
     });
   }
 
@@ -2812,26 +2894,33 @@ document.addEventListener("DOMContentLoaded", () => {
       if (currentSearchQuery) {
         viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
       }
-      pdfFrame.src = viewerUrl;
 
-      pdfFrame.onload = () => {
-        hookIframePinchZoomIsolation();
-        setTimeout(() => {
-          goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
-          hookAnnotationStorageModified();
+      // Micro-différé de 120ms : garantit que les 3-4 vignettes visibles
+      // occupent les slots réseau du navigateur en priorité avant le téléchargement lourd du PDF
+      setTimeout(() => {
+        pdfFrame.src = viewerUrl;
+        pdfFrame.onload = () => {
           hookIframePinchZoomIsolation();
-        }, 400);
-      };
+          setTimeout(() => {
+            goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
+            hookAnnotationStorageModified();
+            hookIframePinchZoomIsolation();
+          }, 400);
+        };
+      }, 120);
     }
   }
 
   function renderVerticalOccurrences(docId, docTitle, occurrences, activePage) {
+    verticalCropManager.clear();
     docOccurrencesList.innerHTML = "";
 
     if (!occurrences || occurrences.length === 0) {
       docOccurrencesList.innerHTML = `<div style="color:var(--text-muted); font-size:12.5px; padding:10px;">Aucun extrait trouvé pour ce terme dans ce document.</div>`;
       return;
     }
+
+    const placeholderSvg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='120'%3E%3Crect width='100%25' height='100%25' fill='%23f1f5f9'/%3E%3C/svg%3E";
 
     occurrences.forEach((occ, index) => {
       const card = document.createElement("div");
@@ -2842,7 +2931,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       card.innerHTML = `
         <div class="vertical-occ-img-wrapper">
-          <img src="${occ.crop_url}" class="vertical-occ-img" alt="Extrait p. ${occ.page_number}" loading="lazy" />
+          <img src="${placeholderSvg}" data-src="${occ.crop_url}" class="vertical-occ-img dynamic-crop" alt="Extrait p. ${occ.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
         </div>
         <div class="vertical-occ-footer">
           <span class="vertical-occ-page">Page ${occ.page_number}</span>
@@ -2861,6 +2950,8 @@ document.addEventListener("DOMContentLoaded", () => {
       });
 
       docOccurrencesList.appendChild(card);
+      const img = card.querySelector(".dynamic-crop");
+      if (img) verticalCropManager.observe(img);
     });
 
     const activeCard = docOccurrencesList.querySelector(".vertical-occ-card.active");
