@@ -58,23 +58,27 @@ pub async fn get_crop(
 ) -> Response {
     let query_hash = params.h.unwrap_or_default();
     let terms = params.terms.unwrap_or_default();
+    let state_clone = Arc::clone(&state);
 
-    let crop_path = {
-        let conn = match state.db.lock() {
+    // Déportation du calcul lourd CPU de Pdfium sur le pool de threads dédié (ne bloque pas Tokio)
+    let crop_path = match tokio::task::spawn_blocking(move || {
+        let conn = match state_clone.db.lock() {
             Ok(c) => c,
-            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur DB").into_response(),
+            Err(_) => return None,
         };
-
         get_or_generate_crop_on_demand(
             &conn,
-            &state.pdf_engine,
-            &state.config,
+            &state_clone.pdf_engine,
+            &state_clone.config,
             doc_id,
             page,
             occ_id,
             &query_hash,
             &terms,
         )
+    }).await {
+        Ok(res) => res,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur génération vignette").into_response(),
     };
 
     let path = match crop_path {
@@ -95,7 +99,7 @@ pub async fn get_crop(
     }
 }
 
-/// GET /api/pdf/{doc_id} avec support complet HTTP 206 Partial Content (Byte-Range)
+/// GET /api/pdf/{doc_id} avec support complet HTTP 206 Partial Content (Byte-Range), buffers 64 Ko et ETag
 pub async fn get_pdf(
     State(state): State<Arc<AppState>>,
     Path(doc_id): Path<i64>,
@@ -124,6 +128,19 @@ pub async fn get_pdf(
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur lecture fichier").into_response(),
     };
 
+    // Génération de l'ETag pour économiser la bande passante (304 Not Modified)
+    let etag = format!("\"doc-{}-{}\"", doc_id, file_size);
+    if let Some(req_etag) = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {
+        if req_etag == etag {
+            return Response::builder()
+                .status(StatusCode::NOT_MODIFIED)
+                .header(header::ETAG, etag)
+                .header(header::CACHE_CONTROL, "public, max-age=86400")
+                .body(Body::empty())
+                .unwrap_or_else(|_| (StatusCode::NOT_MODIFIED, "").into_response());
+        }
+    }
+
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
 
     if let Some(range_str) = range_header {
@@ -149,7 +166,9 @@ pub async fn get_pdf(
                     return (StatusCode::RANGE_NOT_SATISFIABLE, "Range invalide").into_response();
                 }
 
-                let stream = ReaderStream::new(file.take(length));
+                // Buffer de streaming 64 Ko pour saturer la bande passante sans fragmentation
+                let buf_reader = tokio::io::BufReader::with_capacity(64 * 1024, file.take(length));
+                let stream = ReaderStream::new(buf_reader);
                 let body = Body::from_stream(stream);
 
                 return Response::builder()
@@ -158,6 +177,8 @@ pub async fn get_pdf(
                     .header(header::ACCEPT_RANGES, "bytes")
                     .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, end, file_size))
                     .header(header::CONTENT_LENGTH, length.to_string())
+                    .header(header::ETAG, &etag)
+                    .header(header::CACHE_CONTROL, "public, max-age=86400")
                     .body(body)
                     .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Erreur réponse").into_response());
             }
@@ -170,7 +191,8 @@ pub async fn get_pdf(
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Impossible d'ouvrir le fichier").into_response(),
     };
 
-    let stream = ReaderStream::new(file);
+    let buf_reader = tokio::io::BufReader::with_capacity(64 * 1024, file);
+    let stream = ReaderStream::new(buf_reader);
     let body = Body::from_stream(stream);
 
     Response::builder()
@@ -179,6 +201,8 @@ pub async fn get_pdf(
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CONTENT_LENGTH, file_size.to_string())
         .header(header::CONTENT_DISPOSITION, format!("inline; filename=\"{}\"", fname))
+        .header(header::ETAG, &etag)
+        .header(header::CACHE_CONTROL, "public, max-age=86400")
         .body(body)
         .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Erreur réponse").into_response())
 }

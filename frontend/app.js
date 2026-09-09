@@ -505,7 +505,8 @@ document.addEventListener("DOMContentLoaded", () => {
         closeMobileOccurrencesDrawer();
         currentActiveOccurrenceIndex = index;
         updateOccurrenceStepperUI();
-        openDocumentInSplitView(docId, docTitle, occ.page_number, occurrences, occ.rect, occ.y_ratio || 0);
+        const targetRect = (occ.highlight_rects && occ.highlight_rects.length > 0) ? occ.highlight_rects[0] : occ.rect;
+        openDocumentInSplitView(docId, docTitle, occ.page_number, occurrences, targetRect, occ.y_ratio || 0);
       });
       drawerOccurrencesList.appendChild(item);
     });
@@ -1161,7 +1162,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (viewerPageBadge) {
         viewerPageBadge.textContent = `Page ${occ.page_number}`;
       }
-      goToPageAndScrollToOccurrence(occ.page_number, occ.rect, occ.y_ratio);
+      const targetRect = (occ.highlight_rects && occ.highlight_rects.length > 0) ? occ.highlight_rects[0] : occ.rect;
+      goToPageAndScrollToOccurrence(occ.page_number, targetRect, occ.y_ratio);
     }
   }
 
@@ -1260,7 +1262,8 @@ document.addEventListener("DOMContentLoaded", () => {
       updateViewerSearchHighlight(query);
 
       if (occs.length > 0) {
-        goToPageAndScrollToOccurrence(occs[0].page_number, occs[0].rect, occs[0].y_ratio);
+        const targetRect = (occs[0].highlight_rects && occs[0].highlight_rects.length > 0) ? occs[0].highlight_rects[0] : occs[0].rect;
+        goToPageAndScrollToOccurrence(occs[0].page_number, targetRect, occs[0].y_ratio);
       }
     } catch (err) {
       console.error("Erreur recherche document:", err);
@@ -1753,7 +1756,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (doc.vignettes && doc.vignettes.length > 0) {
         doc.vignettes.forEach(v => {
           vignettesHtml += `
-            <div class="vignette-item" data-doc-id="${doc.id}" data-page="${v.page_number}" data-occ="${v.occ_id}" data-rect='${JSON.stringify(v.rect || [])}' data-yratio="${v.y_ratio || 0}" data-snippet="${encodeURIComponent(v.text_snippet || '')}" title="Page ${v.page_number} - Cliquer pour ouvrir">
+            <div class="vignette-item" data-doc-id="${doc.id}" data-page="${v.page_number}" data-occ="${v.occ_id}" data-rect='${JSON.stringify((v.highlight_rects && v.highlight_rects.length > 0) ? v.highlight_rects[0] : (v.rect || []))}' data-yratio="${v.y_ratio || 0}" data-snippet="${encodeURIComponent(v.text_snippet || '')}" title="Page ${v.page_number} - Cliquer pour ouvrir">
               <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='250' height='125'%3E%3Crect width='100%25' height='100%25' fill='%23f1f5f9'/%3E%3C/svg%3E" data-src="${v.crop_url}" class="vignette-crop-img lazy-crop" alt="Extrait p. ${v.page_number}" loading="lazy" decoding="async" />
               <span class="vignette-page-badge">p. ${v.page_number}</span>
             </div>
@@ -1924,7 +1927,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       const firstOcc = (doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0] : null;
       const firstPage = firstOcc ? firstOcc.page_number : 1;
-      const firstRect = firstOcc ? firstOcc.rect : null;
+      const firstRect = firstOcc ? ((firstOcc.highlight_rects && firstOcc.highlight_rects.length > 0) ? firstOcc.highlight_rects[0] : firstOcc.rect) : null;
       const yRatio = firstOcc ? firstOcc.y_ratio : 0;
       openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], firstRect, yRatio);
     };
@@ -2853,7 +2856,8 @@ document.addEventListener("DOMContentLoaded", () => {
         currentActiveOccurrenceIndex = index;
         updateOccurrenceStepperUI();
         viewerPageBadge.textContent = `Page ${occ.page_number}`;
-        goToPageAndScrollToOccurrence(occ.page_number, occ.rect, occ.y_ratio);
+        const targetRect = (occ.highlight_rects && occ.highlight_rects.length > 0) ? occ.highlight_rects[0] : occ.rect;
+        goToPageAndScrollToOccurrence(occ.page_number, targetRect, occ.y_ratio);
       });
 
       docOccurrencesList.appendChild(card);

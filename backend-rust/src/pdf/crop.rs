@@ -93,7 +93,7 @@ pub fn get_or_generate_crop_on_demand(
         page_number,
         target_occ.rect,
         &crop_path,
-        &[target_occ.rect],
+        &target_occ.highlight_rects,
     );
 
     match render_res {

@@ -11,6 +11,8 @@ pub struct OccurrenceResult {
     pub y_ratio: f64,
     pub y_pos: f64,
     pub rect: [f64; 4],
+    #[serde(default)]
+    pub highlight_rects: Vec<[f64; 4]>,
     pub bm25_score: f64,
 }
 

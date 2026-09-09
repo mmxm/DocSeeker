@@ -6,6 +6,7 @@ use tracing::info;
 
 pub struct PdfEngine {
     pdfium: Arc<Mutex<Pdfium>>,
+    page_cache: Arc<Mutex<Option<(PathBuf, i64, f64, f64, image::RgbaImage)>>>,
 }
 
 // Pdfium est enveloppé dans un Mutex, garantissant qu'un seul thread y accède à la fois.
@@ -67,6 +68,7 @@ impl PdfEngine {
 
         Ok(Self {
             pdfium: Arc::new(Mutex::new(pdfium)),
+            page_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -205,6 +207,27 @@ impl PdfEngine {
         Ok(())
     }
 
+    fn render_page_internal(
+        &self,
+        file_path: &Path,
+        page_number: i64,
+        render_scale: f64,
+    ) -> Result<(f64, f64, image::RgbaImage), String> {
+        let pdfium = self.pdfium.lock().map_err(|e| e.to_string())?;
+        let doc = pdfium
+            .load_pdf_from_file(file_path, None)
+            .map_err(|e| e.to_string())?;
+        let page_idx = (page_number - 1) as u16;
+        let page = doc.pages().get(page_idx).map_err(|e| e.to_string())?;
+        let pw = page.width().value as f64;
+        let ph = page.height().value as f64;
+        let target_w = (pw * render_scale).round() as i32;
+        let render_config = PdfRenderConfig::new().set_target_width(target_w);
+        let pixmap = page.render_with_config(&render_config).map_err(|e| e.to_string())?;
+        let rendered = pixmap.as_image().to_rgba8();
+        Ok((pw, ph, rendered))
+    }
+
     /// Génère une vignette cropée avec surbrillance jaune translucide autour de l'occurrence.
     pub fn render_crop(
         &self,
@@ -214,16 +237,25 @@ impl PdfEngine {
         output_webp: &Path,
         highlight_rects: &[[f64; 4]],
     ) -> Result<(), String> {
-        let pdfium = self.pdfium.lock().map_err(|e| e.to_string())?;
-        let doc = pdfium
-            .load_pdf_from_file(file_path, None)
-            .map_err(|e| e.to_string())?;
+        let render_scale = 2.0;
 
-        let page_idx = (page_number - 1) as u16;
-        let page = doc.pages().get(page_idx).map_err(|e| e.to_string())?;
-
-        let page_width = page.width().value as f64;
-        let page_height = page.height().value as f64;
+        // Récupération de la page rendue (depuis le cache éphémère ou rendu Pdfium)
+        let (page_width, page_height, mut img) = {
+            let mut cache = self.page_cache.lock().map_err(|e| e.to_string())?;
+            if let Some((ref p, pg, pw, ph, ref cached_img)) = *cache {
+                if p == file_path && pg == page_number {
+                    (pw, ph, cached_img.clone())
+                } else {
+                    let (pw, ph, rendered) = self.render_page_internal(file_path, page_number, render_scale)?;
+                    *cache = Some((file_path.to_path_buf(), page_number, pw, ph, rendered.clone()));
+                    (pw, ph, rendered)
+                }
+            } else {
+                let (pw, ph, rendered) = self.render_page_internal(file_path, page_number, render_scale)?;
+                *cache = Some((file_path.to_path_buf(), page_number, pw, ph, rendered.clone()));
+                (pw, ph, rendered)
+            }
+        };
 
         let [x0, y0, x1, y1] = rect;
         let occ_center_x = (x0 + x1) / 2.0;
@@ -243,14 +275,6 @@ impl PdfEngine {
         if crop_y1 == page_height {
             crop_y0 = (crop_y1 - CROP_HEIGHT).max(0.0);
         }
-
-        // Rendu de la page à 144 DPI (scale = 2.0)
-        let render_scale = 2.0;
-        let target_render_width = (page_width * render_scale).round() as i32;
-
-        let render_config = PdfRenderConfig::new().set_target_width(target_render_width);
-        let pixmap = page.render_with_config(&render_config).map_err(|e| e.to_string())?;
-        let mut img = pixmap.as_image().to_rgba8();
 
         // Incrustation du surlignage jaune semi-transparent sur les rectangles
         let yellow_color = Rgba([255, 224, 51, 128]); // Jaune Goodnotes translucide

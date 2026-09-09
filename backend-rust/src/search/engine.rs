@@ -75,6 +75,7 @@ pub fn match_word(norm_w: &str, term: &str) -> bool {
 #[derive(Clone, Debug)]
 struct RawMatchedWord {
     rect: [f64; 4],
+    highlight_rect: [f64; 4],
     word: String,
     block_no: i64,
     line_no: i64,
@@ -118,8 +119,23 @@ pub fn find_occurrences_on_page(
                 let norm_w = normalize_text(&word);
                 for term in &norm_terms {
                     if match_word(&norm_w, term) {
+                        // Surlignage précis de la sous-chaîne recherchée (ex: "extra" dans "extra-capillaire")
+                        let (sub_x0, sub_x1) = if let Some(pos) = norm_w.find(term.as_str()) {
+                            let word_chars = norm_w.chars().count().max(1) as f64;
+                            let start_chars = norm_w[..pos].chars().count() as f64;
+                            let term_chars = term.chars().count() as f64;
+                            let total_w = (x1 - x0).max(0.0);
+                            (
+                                x0 + total_w * (start_chars / word_chars),
+                                x0 + total_w * ((start_chars + term_chars) / word_chars),
+                            )
+                        } else {
+                            (x0, x1)
+                        };
+
                         matched_words.push(RawMatchedWord {
                             rect: [x0, y0, x1, y1],
+                            highlight_rect: [sub_x0, y0, sub_x1, y1],
                             word,
                             block_no,
                             line_no,
@@ -182,6 +198,7 @@ pub fn find_occurrences_on_page(
             "/api/crop/{}/{}/{}?h={}&terms={}",
             doc_id, page_number, occ_idx, query_hash, encoded_terms
         );
+        let highlight_rects: Vec<[f64; 4]> = group.iter().map(|w| w.highlight_rect).collect();
 
         results.push(OccurrenceResult {
             page_number,
@@ -193,6 +210,7 @@ pub fn find_occurrences_on_page(
             y_ratio: (y_ratio * 1000.0).round() / 1000.0,
             y_pos: (y0 * 10.0).round() / 10.0,
             rect: [x0, y0, x1, y1],
+            highlight_rects,
             bm25_score,
         });
     }
