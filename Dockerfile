@@ -6,8 +6,6 @@
 # Stage 1 : Compilation croisée native sur la plateforme hôte du builder
 FROM --platform=$BUILDPLATFORM rust:slim-bookworm AS builder
 
-ARG DOCSEEKER_VERSION=2.0.0
-ARG GIT_COMMIT=unknown
 ARG TARGETARCH
 
 WORKDIR /build
@@ -75,6 +73,13 @@ RUN ARCH="${TARGETARCH:-$(case $(uname -m) in aarch64|arm64) echo arm64;; *) ech
 # Stage 2 : Image d'exécution ultra-plume Google Distroless (~9 Mo téléchargé, ~55 Mo total sur disque)
 FROM gcr.io/distroless/cc-debian12
 
+WORKDIR /app
+
+# Copie du binaire compilé, de la bibliothèque pdfium et des fichiers frontend
+COPY --from=builder /build/docseeker-backend /usr/local/bin/docseeker
+COPY --from=builder /build/backend-rust/lib/libpdfium.so /usr/lib/libpdfium.so
+COPY frontend/ /app/frontend/
+
 ARG DOCSEEKER_VERSION=2.0.0
 ARG GIT_COMMIT=unknown
 
@@ -88,13 +93,6 @@ ENV DOCSEEKER_VERSION=${DOCSEEKER_VERSION} \
     HOST=0.0.0.0 \
     PORT=8080 \
     DATA_DIR=/app/data
-
-WORKDIR /app
-
-# Copie du binaire compilé, de la bibliothèque pdfium et des fichiers frontend
-COPY --from=builder /build/docseeker-backend /usr/local/bin/docseeker
-COPY --from=builder /build/backend-rust/lib/libpdfium.so /usr/lib/libpdfium.so
-COPY frontend/ /app/frontend/
 
 EXPOSE 8080
 
