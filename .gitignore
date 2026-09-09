@@ -24,3 +24,10 @@ backups/
 *.tar.gz
 dist/
 *.zip
+
+# Rust & Cargo
+target/
+**/target/
+backend-rust/lib/
+*.dylib
+*.so

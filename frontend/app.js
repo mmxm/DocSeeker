@@ -6,12 +6,16 @@ document.addEventListener("DOMContentLoaded", () => {
     return window.location.protocol + "//" + window.location.host;
   }
 
-  function apiFetch(input, init) {
+  async function apiFetch(input, init) {
     let cleanInput = input;
     if (typeof input === "string" && input.startsWith("/")) {
       cleanInput = cleanOrigin() + input;
     }
-    return fetch(cleanInput, init);
+    const res = await fetch(cleanInput, init);
+    if (res.status === 401 && !cleanInput.includes("/api/auth/")) {
+      showLoginModal("Session expirée. Veuillez vous reconnecter.");
+    }
+    return res;
   }
 
   // =========================================================================
@@ -521,11 +525,116 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // =========================================================================
+  // Authentification Native (Compte Unique Administrateur)
+  // =========================================================================
+  const loginModal = document.getElementById("loginModal");
+  const loginForm = document.getElementById("loginForm");
+  const loginPasswordInput = document.getElementById("loginPasswordInput");
+  const loginErrorMsg = document.getElementById("loginErrorMsg");
+  const submitLoginBtn = document.getElementById("submitLoginBtn");
+  const togglePasswordVisibilityBtn = document.getElementById("togglePasswordVisibilityBtn");
+  const logoutBtn = document.getElementById("logoutBtn");
+
+  function showLoginModal(errorText = "") {
+    if (!loginModal) return;
+    loginModal.style.display = "flex";
+    if (loginPasswordInput) {
+      loginPasswordInput.value = "";
+      setTimeout(() => loginPasswordInput.focus(), 150);
+    }
+    if (loginErrorMsg) {
+      if (errorText) {
+        loginErrorMsg.textContent = errorText;
+        loginErrorMsg.style.display = "block";
+      } else {
+        loginErrorMsg.style.display = "none";
+      }
+    }
+  }
+
+  function hideLoginModal() {
+    if (loginModal) loginModal.style.display = "none";
+  }
+
+  async function checkAuthStatus() {
+    try {
+      const res = await fetch(cleanOrigin() + "/api/auth/status");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.authenticated) {
+          hideLoginModal();
+          loadFoldersAndDocuments();
+          return;
+        }
+      }
+      showLoginModal();
+    } catch (_) {
+      showLoginModal();
+    }
+  }
+
+  if (loginForm) {
+    loginForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const pwd = loginPasswordInput ? loginPasswordInput.value : "";
+      if (!pwd) return;
+
+      if (submitLoginBtn) {
+        submitLoginBtn.disabled = true;
+        submitLoginBtn.textContent = "Connexion...";
+      }
+      if (loginErrorMsg) loginErrorMsg.style.display = "none";
+
+      try {
+        const res = await fetch(cleanOrigin() + "/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: pwd })
+        });
+
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          hideLoginModal();
+          showToast("Connexion réussie", "success");
+          loadFoldersAndDocuments();
+        } else {
+          showLoginModal(data.error || "Mot de passe incorrect");
+        }
+      } catch (err) {
+        showLoginModal("Erreur de communication avec le serveur");
+      } finally {
+        if (submitLoginBtn) {
+          submitLoginBtn.disabled = false;
+          submitLoginBtn.textContent = "Se connecter";
+        }
+      }
+    });
+  }
+
+  if (togglePasswordVisibilityBtn && loginPasswordInput) {
+    togglePasswordVisibilityBtn.addEventListener("click", () => {
+      const isPwd = loginPasswordInput.type === "password";
+      loginPasswordInput.type = isPwd ? "text" : "password";
+    });
+  }
+
+  if (logoutBtn) {
+    logoutBtn.addEventListener("click", async () => {
+      if (!confirm("Voulez-vous vraiment vous déconnecter ?")) return;
+      try {
+        await fetch(cleanOrigin() + "/api/auth/logout", { method: "POST" });
+      } catch (_) {}
+      showToast("Vous avez été déconnecté", "info");
+      showLoginModal();
+    });
+  }
+
   // Initialisation du nuancier dans la modale dossier
   initColorPalette();
 
-  // Chargement initial
-  loadFoldersAndDocuments();
+  // Chargement initial sécurisé
+  checkAuthStatus();
 
   // =========================================================================
   // Notifications Toast

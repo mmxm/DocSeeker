@@ -1,67 +1,31 @@
 services:
   app:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: ghcr.io/mmxm/docseeker-app:latest
     container_name: docseeker_app
     restart: unless-stopped
+    ports:
+      - "${HOST_HTTP_PORT:-8080}:8080"
     environment:
-      - PYTHONUNBUFFERED=1
-      - PYTHONPATH=/app
-      - MALLOC_ARENA_MAX=2
+      - HOST=0.0.0.0
+      - PORT=8080
+      # Mot de passe administrateur initial (personnalisable ou configurable au 1er boot)
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin1234}
       # UID / GID Synology (par défaut 1026:100 sur DSM) pour éviter toute erreur de permission
       - PUID=${PUID:-1026}
       - PGID=${PGID:-100}
-      # En production sous proxy unique, CORS restrictif
-      - ALLOWED_ORIGINS=
-    # Limites de ressources pour préserver la RAM de l'hôte (ajusté pour supporter les PDF volumineux jusqu'à 2 Go)
-    mem_limit: 2048m
-    mem_reservation: 512m
+      - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-2GB}
+    # Consommation mémoire drastiquement réduite grâce à Rust (divisée par 8)
+    mem_limit: 256m
+    mem_reservation: 64m
     volumes:
       # Persistance de la base SQLite et des documents/vignettes
       - ./data:/app/data
-    networks:
-      - internal_net
-    # Le port 8000 n'est PAS exposé sur l'hôte, uniquement accessible par Caddy
-    expose:
-      - "8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
-
-  caddy:
-    image: caddy:2.8-alpine
-    container_name: docseeker_proxy
-    restart: unless-stopped
-    ports:
-      - "${HOST_HTTP_PORT:-8080}:80"
-      - "${HOST_HTTPS_PORT:-8443}:443"
-      - "${HOST_HTTPS_PORT:-8443}:443/udp" # Support HTTP/3 (QUIC)
-    environment:
-      - BASIC_AUTH_USER=elwood
-      - BASIC_AUTH_PASSWORD_HASH=$$2a$$14$$tE6yxeeGVDxfwBob6bpg3.dI4Z4fvOOAXLcl2VIL.Fu0otS2wp2Q6
-      # Limite d'upload unique gérée par le proxy Caddy (modifiable directement ici : 2GB, 500MB, 1GB, etc.)
-      - MAX_UPLOAD_SIZE=2GB
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-      - caddy_logs:/var/log/caddy
-    depends_on:
-      app:
-        condition: service_healthy
-    networks:
-      - internal_net
-
-networks:
-  internal_net:
-    driver: bridge
-
-volumes:
-  caddy_data:
-    name: docseeker_caddy_data
-  caddy_config:
-    name: docseeker_caddy_config
-  caddy_logs:
-    name: docseeker_caddy_logs
+      start_period: 5s
