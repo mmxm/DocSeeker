@@ -3,10 +3,11 @@
 # ==============================================================================
 
 # Stage 1 : Compilation du binaire Rust
-FROM rust:bookworm AS builder
+FROM rust:slim-bookworm AS builder
 
 ARG DOCSEEKER_VERSION=2.0.0
 ARG GIT_COMMIT=unknown
+ARG TARGETARCH
 
 WORKDIR /build
 
@@ -14,20 +15,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     tar \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend-rust/Cargo.toml backend-rust/Cargo.lock* ./backend-rust/
 COPY backend-rust/src/ ./backend-rust/src/
+COPY backend-rust/tests/ ./backend-rust/tests/
 COPY frontend/ ./frontend/
 
 WORKDIR /build/backend-rust
 
 # Téléchargement automatique de la bibliothèque libpdfium partagée selon l'architecture cible
 RUN mkdir -p lib && \
-    ARCH=$(uname -m) && \
-    if [ "$ARCH" = "x86_64" ]; then \
+    ARCH="${TARGETARCH:-$(uname -m)}" && \
+    if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then \
         curl -sL https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz | tar -xz -C lib; \
-    elif [ "$ARCH" = "aarch64" ]; then \
+    elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
         curl -sL https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-arm64.tgz | tar -xz -C lib; \
     fi && \
     if [ -f lib/lib/libpdfium.so ]; then cp lib/lib/libpdfium.so lib/libpdfium.so; fi

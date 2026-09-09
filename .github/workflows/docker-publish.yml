@@ -17,20 +17,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          python-version: "3.13"
-          cache: "pip"
+          workspaces: backend-rust
 
-      - name: Install dependencies
+      - name: Run Test Suite (Cargo Test)
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run Test Suite (130 tests)
-        run: |
-          PYTHONPATH=. pytest tests/ -v
+          cargo test --manifest-path backend-rust/Cargo.toml --verbose
 
       - name: Set up QEMU (Multi-platform support)
         uses: docker/setup-qemu-action@v3
@@ -60,12 +57,13 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            DOCSEEKER_VERSION=1.0.0-${{ steps.meta.outputs.short_sha }}
+            DOCSEEKER_VERSION=2.0.0-${{ steps.meta.outputs.short_sha }}
             GIT_COMMIT=${{ steps.meta.outputs.short_sha }}
           tags: |
             ghcr.io/${{ steps.meta.outputs.owner }}/docseeker-app:latest
             ghcr.io/${{ steps.meta.outputs.owner }}/docseeker-app:${{ steps.meta.outputs.short_sha }}
-            ghcr.io/${{ steps.meta.outputs.owner }}/docseeker-app:1.0.0-${{ steps.meta.outputs.short_sha }}
+            ghcr.io/${{ steps.meta.outputs.owner }}/docseeker-app:2.0.0
+            ghcr.io/${{ steps.meta.outputs.owner }}/docseeker-app:2.0.0-${{ steps.meta.outputs.short_sha }}
             ghcr.io/${{ steps.meta.outputs.owner }}/docseeker:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
