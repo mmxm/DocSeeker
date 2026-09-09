@@ -1,4 +1,4 @@
-name: Build, Test & Publish to GHCR
+name: Build, Test & Publish to GHCR (Ultra-Rapide & Parallèle)
 
 on:
   push:
@@ -10,9 +10,11 @@ permissions:
   packages: write
 
 jobs:
-  test-and-build:
+  # ---------------------------------------------------------------------------
+  # 1. Exécution des tests unitaires et d'intégration
+  # ---------------------------------------------------------------------------
+  test:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -26,10 +28,35 @@ jobs:
           workspaces: backend-rust
 
       - name: Run Test Suite (Cargo Test)
-        run: |
-          cargo test --manifest-path backend-rust/Cargo.toml --verbose
+        run: cargo test --manifest-path backend-rust/Cargo.toml
 
-      - name: Set up QEMU (Multi-platform support)
+  # ---------------------------------------------------------------------------
+  # 2. Compilation parallèle des images Docker (AMD64 & ARM64 en simultané)
+  # ---------------------------------------------------------------------------
+  build-image:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compute Git Metadata
+        id: meta
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          PLATFORM_TAG=$(echo "${{ matrix.platform }}" | tr '/' '-')
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "owner=${OWNER}" >> $GITHUB_OUTPUT
+          echo "platform_tag=${PLATFORM_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Set up QEMU (Pour ARM64)
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -42,6 +69,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build and push platform-specific image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: true
+          build-args: |
+            DOCSEEKER_VERSION=2.0.0-${{ steps.meta.outputs.short_sha }}
+            GIT_COMMIT=${{ steps.meta.outputs.short_sha }}
+          tags: |
+            ghcr.io/${{ steps.meta.outputs.owner }}/docseeker-app:${{ steps.meta.outputs.platform_tag }}
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+  # ---------------------------------------------------------------------------
+  # 3. Fusion des manifests multi-architecture (En quelques secondes)
+  # ---------------------------------------------------------------------------
+  create-manifest:
+    needs: build-image
+    runs-on: ubuntu-latest
+    steps:
       - name: Compute Git Metadata
         id: meta
         run: |
@@ -50,20 +99,18 @@ jobs:
           echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
           echo "owner=${OWNER}" >> $GITHUB_OUTPUT
 
-      - name: Build and push Docker image (amd64 + arm64)
-        uses: docker/build-push-action@v5
+      - name: Log in to GitHub Container Registry (GHCR)
+        uses: docker/login-action@v3
         with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: |
-            DOCSEEKER_VERSION=2.0.0-${{ steps.meta.outputs.short_sha }}
-            GIT_COMMIT=${{ steps.meta.outputs.short_sha }}
-          tags: |
-            ghcr.io/${{ steps.meta.outputs.owner }}/docseeker-app:latest
-            ghcr.io/${{ steps.meta.outputs.owner }}/docseeker-app:${{ steps.meta.outputs.short_sha }}
-            ghcr.io/${{ steps.meta.outputs.owner }}/docseeker-app:2.0.0
-            ghcr.io/${{ steps.meta.outputs.owner }}/docseeker-app:2.0.0-${{ steps.meta.outputs.short_sha }}
-            ghcr.io/${{ steps.meta.outputs.owner }}/docseeker:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multi-arch manifest
+        run: |
+          IMAGE="ghcr.io/${{ steps.meta.outputs.owner }}/docseeker-app"
+          docker buildx imagetools create -t ${IMAGE}:latest \
+            -t ${IMAGE}:2.0.0 \
+            -t ${IMAGE}:2.0.0-${{ steps.meta.outputs.short_sha }} \
+            -t ${IMAGE}:${{ steps.meta.outputs.short_sha }} \
+            ${IMAGE}:linux-amd64 ${IMAGE}:linux-arm64

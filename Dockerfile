@@ -18,14 +18,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
+# 1. Copie des fichiers de dépendances
 COPY backend-rust/Cargo.toml backend-rust/Cargo.lock* ./backend-rust/
-COPY backend-rust/src/ ./backend-rust/src/
-COPY backend-rust/tests/ ./backend-rust/tests/
-COPY frontend/ ./frontend/
-
 WORKDIR /build/backend-rust
 
-# Téléchargement automatique de la bibliothèque libpdfium partagée selon l'architecture cible
+# 2. Téléchargement automatique de la bibliothèque libpdfium selon l'architecture
 RUN mkdir -p lib && \
     ARCH="${TARGETARCH:-$(uname -m)}" && \
     if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then \
@@ -35,7 +32,17 @@ RUN mkdir -p lib && \
     fi && \
     if [ -f lib/lib/libpdfium.so ]; then cp lib/lib/libpdfium.so lib/libpdfium.so; fi
 
-# Compilation Release hautement optimisée
+# 3. Pré-compilation des dépendances tierces (mise en cache Docker pérenne)
+RUN mkdir -p src && echo "fn main() {}" > src/main.rs && \
+    cargo build --release && \
+    rm -rf src target/release/deps/docseeker_backend* target/release/docseeker-backend*
+
+# 4. Copie du code source applicatif réel et du frontend
+COPY backend-rust/src/ ./src/
+COPY backend-rust/tests/ ./tests/
+COPY frontend/ /build/frontend/
+
+# 5. Compilation applicative ultra-rapide (les dépendances sont déjà compilées)
 RUN cargo build --release
 
 # Stage 2 : Image d'exécution minimale Debian Slim
