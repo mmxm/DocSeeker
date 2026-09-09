@@ -203,28 +203,15 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Observateur pour lazy-loading horizontal des extraits cropés
-  const cropObserver = new IntersectionObserver((entries, observer) => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        const img = entry.target;
-        if (img.dataset.src) {
-          img.src = img.dataset.src;
-          delete img.dataset.src;
-        }
-        observer.unobserve(img);
-      }
-    });
-  }, {
-    rootMargin: "80px 200px" // Pré-chargement fluide avant entrée dans le viewport
-  });
+  const PLACEHOLDER_CROP_SVG = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='250' height='125'%3E%3Crect width='100%25' height='100%25' fill='%23f1f5f9'/%3E%3C/svg%3E";
+  const PLACEHOLDER_COVER_SVG = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='200'%3E%3Crect width='100%25' height='100%25' fill='%23f1f5f9'/%3E%3C/svg%3E";
 
   // =========================================================================
   // Gestionnaire de Chargement Prioritaire Dynamique avec Annulation (Abort)
-  // pour le volet des occurrences verticales (Desktop & Tiroir Mobile)
+  // pour la grille principale de recherche et le volet latéral d'occurrences
   // =========================================================================
   class DynamicCropManager {
-    constructor() {
+    constructor(rootMargin = "180px 0px") {
       this.activeRequests = new Map(); // img element -> AbortController
       this.observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
@@ -236,7 +223,7 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         });
       }, {
-        rootMargin: "180px 0px", // Pré-charge 1 à 2 vignettes d'avance au défilement
+        rootMargin: rootMargin,
         threshold: 0.01
       });
     }
@@ -275,6 +262,8 @@ document.addEventListener("DOMContentLoaded", () => {
           img.dataset.loaded = "true";
           img.style.opacity = "1";
           this.observer.unobserve(img);
+        } else {
+          img.src = srcUrl;
         }
       } catch (err) {
         if (err.name !== "AbortError") {
@@ -295,7 +284,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  const verticalCropManager = new DynamicCropManager();
+  const verticalCropManager = new DynamicCropManager("180px 0px");
+  const mainGridCropManager = new DynamicCropManager("200px 300px");
 
   // Sélection multiple & Presse-papier
   let selectedDocIds = new Set();
@@ -1667,6 +1657,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Affichage des Documents (Bibliothèque & Résultats)
   // =========================================================================
   function renderDocumentLibrary(docs) {
+    mainGridCropManager.clear();
     resultsContainer.innerHTML = "";
     rawLoadedDocs = docs || [];
 
@@ -1839,7 +1830,7 @@ document.addEventListener("DOMContentLoaded", () => {
         doc.vignettes.forEach(v => {
           vignettesHtml += `
             <div class="vignette-item" data-doc-id="${doc.id}" data-page="${v.page_number}" data-occ="${v.occ_id}" data-rect='${JSON.stringify((v.highlight_rects && v.highlight_rects.length > 0) ? v.highlight_rects[0] : (v.rect || []))}' data-yratio="${v.y_ratio || 0}" data-snippet="${encodeURIComponent(v.text_snippet || '')}" title="Page ${v.page_number} - Cliquer pour ouvrir">
-              <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='250' height='125'%3E%3Crect width='100%25' height='100%25' fill='%23f1f5f9'/%3E%3C/svg%3E" data-src="${v.crop_url}" class="vignette-crop-img lazy-crop" alt="Extrait p. ${v.page_number}" loading="lazy" decoding="async" />
+              <img src="${PLACEHOLDER_CROP_SVG}" data-src="${v.crop_url}" class="vignette-crop-img dynamic-main-crop" alt="Extrait p. ${v.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
               <span class="vignette-page-badge">p. ${v.page_number}</span>
             </div>
           `;
@@ -1895,7 +1886,7 @@ document.addEventListener("DOMContentLoaded", () => {
               <span>Échec</span>
             </div>
           ` : ''}
-          <img src="${doc.cover_url}" class="doc-cover-img" alt="Couverture" loading="lazy" onerror="this.src='/placeholder-cover.png'" />
+          <img src="${PLACEHOLDER_COVER_SVG}" data-src="${doc.cover_url}" class="doc-cover-img dynamic-main-crop" alt="Couverture" onerror="this.src='/placeholder-cover.png'" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
         </div>
         <div class="doc-card-vignettes">
           <div class="vignettes-ribbon-container">
@@ -1992,8 +1983,8 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     });
 
-    // Observer pour le chargement paresseux horizontal
-    card.querySelectorAll(".lazy-crop").forEach(img => cropObserver.observe(img));
+    // Observer pour le chargement prioritaire dynamique avec annulation au défilement
+    card.querySelectorAll(".dynamic-main-crop").forEach(img => mainGridCropManager.observe(img));
 
     // Clics couverture et titre (double-clic ou clic si pas en sélection modale)
     const openDocAction = (e) => {
@@ -2051,6 +2042,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     sectionTitle.textContent = `Résultats pour "${query}"${searchScopeLabel}`;
+    mainGridCropManager.clear();
     resultsContainer.innerHTML = `<div style="padding: 16px; color: var(--text-muted);">Recherche en cours...</div>`;
 
     try {
@@ -2078,6 +2070,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function renderSearchResults(data) {
+    mainGridCropManager.clear();
     lastSearchResultsData = data;
     resultsContainer.innerHTML = "";
     const rawResults = data.results || [];
