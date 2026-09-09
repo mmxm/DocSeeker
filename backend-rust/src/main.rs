@@ -38,6 +38,20 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Support du healthcheck autonome pour conteneurs sans curl (Distroless)
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && args[1] == "--healthcheck" {
+        let port: u16 = std::env::var("PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(8080);
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)) {
+            Ok(_) => std::process::exit(0),
+            Err(_) => std::process::exit(1),
+        }
+    }
+
     // Initialisation des logs structurés
     tracing_subscriber::fmt()
         .with_env_filter(

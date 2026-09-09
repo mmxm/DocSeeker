@@ -45,8 +45,8 @@ COPY frontend/ /build/frontend/
 # 5. Compilation applicative ultra-rapide (les dépendances sont déjà compilées)
 RUN cargo build --release
 
-# Stage 2 : Image d'exécution minimale Debian Slim
-FROM debian:bookworm-slim
+# Stage 2 : Image d'exécution ultra-plume Google Distroless (~9 Mo téléchargé, ~55 Mo total sur disque)
+FROM gcr.io/distroless/cc-debian12
 
 ARG DOCSEEKER_VERSION=2.0.0
 ARG GIT_COMMIT=unknown
@@ -54,7 +54,7 @@ ARG GIT_COMMIT=unknown
 LABEL org.opencontainers.image.title="DocSeeker" \
       org.opencontainers.image.version="${DOCSEEKER_VERSION}" \
       org.opencontainers.image.revision="${GIT_COMMIT}" \
-      org.opencontainers.image.description="DocSeeker - Exploration et recherche ultra-rapide de documents PDF en Rust"
+      org.opencontainers.image.description="DocSeeker v2.0 - Rust & Google Distroless"
 
 ENV DOCSEEKER_VERSION=${DOCSEEKER_VERSION} \
     GIT_COMMIT=${GIT_COMMIT} \
@@ -62,31 +62,16 @@ ENV DOCSEEKER_VERSION=${DOCSEEKER_VERSION} \
     PORT=8080 \
     DATA_DIR=/app/data
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN groupadd -g 1000 appuser && \
-    useradd -u 1000 -g appuser -m -s /bin/bash appuser
-
 WORKDIR /app
 
-# Copie du binaire compilé et de la bibliothèque pdfium
+# Copie du binaire compilé, de la bibliothèque pdfium et des fichiers frontend
 COPY --from=builder /build/backend-rust/target/release/docseeker-backend /usr/local/bin/docseeker
 COPY --from=builder /build/backend-rust/lib/libpdfium.so /usr/lib/libpdfium.so
 COPY frontend/ /app/frontend/
-COPY docker-entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docseeker
-
-# Répertoires de données par défaut
-RUN mkdir -p /app/data/documents /app/data/cache_crops/covers && \
-    chown -R appuser:appuser /app
 
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/api/health || exit 1
+    CMD ["/usr/local/bin/docseeker", "--healthcheck"]
 
-ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["docseeker"]
+ENTRYPOINT ["/usr/local/bin/docseeker"]
