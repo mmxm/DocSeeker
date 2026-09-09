@@ -270,10 +270,10 @@ impl PdfEngine {
             for py in ry0..ry1 {
                 for px in rx0..rx1 {
                     let current = img.get_pixel(px, py);
-                    // Alpha blending simple
-                    let r = ((current[0] as u16 * 128 + yellow_color[0] as u16 * 128) / 255) as u8;
-                    let g = ((current[1] as u16 * 128 + yellow_color[1] as u16 * 128) / 255) as u8;
-                    let b = ((current[2] as u16 * 128 + yellow_color[2] as u16 * 128) / 255) as u8;
+                    // Alpha blending sécurisé sans dépassement u8 à 256
+                    let r = ((current[0] as u32 * 127 + yellow_color[0] as u32 * 128) / 255).min(255) as u8;
+                    let g = ((current[1] as u32 * 127 + yellow_color[1] as u32 * 128) / 255).min(255) as u8;
+                    let b = ((current[2] as u32 * 127 + yellow_color[2] as u32 * 128) / 255).min(255) as u8;
                     img.put_pixel(px, py, Rgba([r, g, b, 255]));
                 }
             }
