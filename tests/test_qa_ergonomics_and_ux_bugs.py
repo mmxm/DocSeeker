@@ -315,6 +315,45 @@ class TestQAErgonomicsAndUXBugs(unittest.TestCase):
         self.assertIn("touch-action: pan-x pan-y", self.style_css)
         self.assertIn("touch-action: auto", self.style_css)
 
+    # ----------------------------------------------------------------------
+    # BUG 27 : Fluidité du pinch-to-zoom et suppression des sauts de page
+    # ----------------------------------------------------------------------
+    def test_bug_27_pinch_to_zoom_smoothness_and_scroll_anchor(self):
+        """
+        [Ergonomie / Moteur PDF]
+        Le zoom tactile à deux doigts (pinch-to-zoom) ne doit pas provoquer de sauts de page
+        intempestifs ni d'à-coups/saccades lors du geste :
+        1. Dans pdf.mjs (TouchManager), touchInfo et origin doivent utiliser les coordonnées
+           viewport (clientX, clientY) et non (screenX, screenY).
+        2. Dans viewer.mjs (#setScaleUpdatePages), le scroll centré sur origin ne doit pas
+           invoquer scrollPageIntoView() afin d'éviter le réancrage forcé en haut de page.
+        3. Dans viewer.mjs, containerTopLeft doit utiliser getBoundingClientRect().
+        4. Dans viewer.mjs, updateScale doit arrondir à au moins 3 décimales (* 1000 / 1000)
+           pour un facteur de zoom continu et sans sauts d'échelle discrets.
+        """
+        with open("frontend/pdfjs/build/pdf.mjs", "r", encoding="utf-8") as f:
+            pdf_mjs = f.read()
+        with open("frontend/pdfjs/web/viewer.mjs", "r", encoding="utf-8") as f:
+            viewer_mjs = f.read()
+
+        # 1. Vérifier clientX/clientY dans TouchManager
+        self.assertIn("touch0X: touch0.clientX", pdf_mjs, "TouchManager doit utiliser clientX pour touch0X")
+        self.assertIn("touch0Y: touch0.clientY", pdf_mjs, "TouchManager doit utiliser clientY pour touch0Y")
+
+        # 2. Vérifier que scrollPageIntoView est dans le else quand origin est fourni
+        self.assertRegex(
+            viewer_mjs,
+            r'if\s*\(Array\.isArray\(origin\)\)\s*\{[\s\S]*?this\.container\.scrollLeft\s*\+=[\s\S]*?\}\s*else\s*\{[\s\S]*?this\.scrollPageIntoView',
+            "viewer.mjs ne doit pas exécuter scrollPageIntoView quand un origin est fourni lors du pinch-to-zoom"
+        )
+
+        # 3. getBoundingClientRect pour containerTopLeft
+        self.assertIn("this.container.getBoundingClientRect()", viewer_mjs)
+
+        # 4. Précision de zoom fluide (* 1000 / 1000)
+        self.assertIn("newScale * scaleFactor * 1000) / 1000", viewer_mjs)
+
+
 if __name__ == "__main__":
     unittest.main()
 

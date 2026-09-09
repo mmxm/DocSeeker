@@ -11683,24 +11683,25 @@ class PDFViewer {
     const previousScale = this._currentScale;
     this._currentScale = newScale;
     if (!noScroll) {
-      let page = this._currentPageNumber,
-        dest;
-      if (this._location && !(this.isInPresentationMode || this.isChangingPresentationMode)) {
-        page = this._location.pageNumber;
-        dest = [null, {
-          name: "XYZ"
-        }, this._location.left, this._location.top, null];
-      }
-      this.scrollPageIntoView({
-        pageNumber: page,
-        destArray: dest,
-        allowNegativeOffset: true
-      });
       if (Array.isArray(origin)) {
         const scaleDiff = newScale / previousScale - 1;
         const [top, left] = this.containerTopLeft;
-        this.container.scrollLeft += (origin[0] - left) * scaleDiff;
-        this.container.scrollTop += (origin[1] - top) * scaleDiff;
+        this.container.scrollLeft += (this.container.scrollLeft + origin[0] - left) * scaleDiff;
+        this.container.scrollTop += (this.container.scrollTop + origin[1] - top) * scaleDiff;
+      } else {
+        let page = this._currentPageNumber,
+          dest;
+        if (this._location && !(this.isInPresentationMode || this.isChangingPresentationMode)) {
+          page = this._location.pageNumber;
+          dest = [null, {
+            name: "XYZ"
+          }, this._location.left, this._location.top, null];
+        }
+        this.scrollPageIntoView({
+          pageNumber: page,
+          destArray: dest,
+          allowNegativeOffset: true
+        });
       }
     }
     this.eventBus.dispatch("scalechanging", {
@@ -12351,7 +12352,7 @@ class PDFViewer {
     }
     let newScale = this._currentScale;
     if (scaleFactor > 0 && scaleFactor !== 1) {
-      newScale = Math.round(newScale * scaleFactor * 100) / 100;
+      newScale = Math.round(newScale * scaleFactor * 1000) / 1000;
     } else if (steps) {
       const delta = steps > 0 ? DEFAULT_SCALE_DELTA : 1 / DEFAULT_SCALE_DELTA;
       const round = steps > 0 ? Math.ceil : Math.floor;
@@ -12395,7 +12396,8 @@ class PDFViewer {
     }
   }
   get containerTopLeft() {
-    return this.#containerTopLeft ||= [this.container.offsetTop, this.container.offsetLeft];
+    const rect = this.container.getBoundingClientRect();
+    return [rect.top, rect.left];
   }
   #cleanupSwitchAnnotationEditorMode() {
     this.#switchAnnotationEditorModeAC?.abort();
@@ -14556,7 +14558,7 @@ const PDFViewerApplication = {
     if (this[prop] > 1 && factor < 1 || this[prop] < 1 && factor > 1) {
       this[prop] = 1;
     }
-    const newFactor = Math.floor(previousScale * factor * this[prop] * 100) / (100 * previousScale);
+    const newFactor = Math.floor(previousScale * factor * this[prop] * 1000) / (1000 * previousScale);
     this[prop] = factor / newFactor;
     return newFactor;
   },

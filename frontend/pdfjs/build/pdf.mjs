@@ -3552,10 +3552,10 @@ class TouchManager {
       [touch0, touch1] = [touch1, touch0];
     }
     this.#touchInfo = {
-      touch0X: touch0.screenX,
-      touch0Y: touch0.screenY,
-      touch1X: touch1.screenX,
-      touch1Y: touch1.screenY
+      touch0X: touch0.clientX,
+      touch0Y: touch0.clientY,
+      touch1X: touch1.clientX,
+      touch1Y: touch1.clientY
     };
   }
   #onTouchMove(evt) {
@@ -3567,12 +3567,12 @@ class TouchManager {
       [touch0, touch1] = [touch1, touch0];
     }
     const {
-      screenX: screen0X,
-      screenY: screen0Y
+      clientX: screen0X,
+      clientY: screen0Y
     } = touch0;
     const {
-      screenX: screen1X,
-      screenY: screen1Y
+      clientX: screen1X,
+      clientY: screen1Y
     } = touch1;
     const touchInfo = this.#touchInfo;
     const {
