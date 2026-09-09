@@ -7,21 +7,33 @@ services:
     container_name: docseeker_app
     restart: unless-stopped
     ports:
-      - "${HOST_HTTP_PORT:-8080}:8080"
+      # Port hôte : Port conteneur
+      - "8080:8080"
     environment:
+      # Configuration Réseau
       - HOST=0.0.0.0
       - PORT=8080
-      # Mot de passe administrateur initial (personnalisable ou configurable au 1er boot)
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin1234}
-      # UID / GID Synology (par défaut 1026:100 sur DSM) pour éviter toute erreur de permission
-      - PUID=${PUID:-1026}
-      - PGID=${PGID:-100}
-      - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-2GB}
-    # Consommation mémoire drastiquement réduite grâce à Rust (divisée par 8)
+      - DATA_DIR=/app/data
+
+      # Authentification Administrateur (haché automatiquement en Argon2id au boot)
+      # Modifiez simplement la valeur ci-dessous pour changer votre mot de passe
+      - ADMIN_PASSWORD=admin1234
+
+      # Durée de session en jours
+      - SESSION_DURATION_DAYS=30
+
+      # Permissions Synology DSM (1026:100 par défaut sur Synology)
+      - PUID=1026
+      - PGID=100
+
+      # Taille maximale d'import PDF (ex: 2GB, 500MB)
+      - MAX_UPLOAD_SIZE=2GB
+
+    # Consommation mémoire optimisée grâce à Rust (divisée par 8)
     mem_limit: 256m
     mem_reservation: 64m
     volumes:
-      # Persistance de la base SQLite et des documents/vignettes
+      # Persistance des données (documents originaux, base SQLite et vignettes)
       - ./data:/app/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]

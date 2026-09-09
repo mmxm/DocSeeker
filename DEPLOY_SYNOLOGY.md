@@ -8,27 +8,19 @@ Ce guide vous explique comment déployer **DocSeeker v2.0** (Backend Rust & Auth
 
 L'image est automatiquement compilée et publiée sur **GitHub Container Registry** (`ghcr.io/mmxm/docseeker-app:latest`).
 
-### 1. Fichiers à déposer sur le NAS
-Sur votre NAS dans le dossier partagé (ex: `/docker/docseeker/`), vous n'avez besoin que de **2 fichiers** :
+### 1. Fichier unique à déposer sur le NAS
+Sur votre NAS dans le dossier partagé (ex: `/docker/docseeker/`), vous n'avez besoin que d'**un seul fichier** :
 
 ```text
 /docker/docseeker/
-├── docker-compose.yml
-└── .env
+└── docker-compose.yml
 ```
-*(Plus aucun `Caddyfile` n'est nécessaire ! Vous pouvez supprimer l'ancien `Caddyfile` s'il est présent sur le NAS).*
+*(Plus besoin de fichier `.env` ni de `Caddyfile` ! Toutes les variables et options sont directement incluses et commentées dans `docker-compose.yml`).*
 
-### 2. Configuration du fichier `.env` sur le NAS :
-```env
-# Mot de passe administrateur en clair (l'application le hache automatiquement en Argon2id)
-ADMIN_PASSWORD=VotreMotDePasseSecret123!
-
-# Port d'écoute hôte
-HOST_HTTP_PORT=8080
-
-# PUID/PGID Synology (généralement 1026:100 sur DSM)
-PUID=1026
-PGID=100
+Ouvrez simplement `docker-compose.yml` et ajustez votre mot de passe si souhaité :
+```yaml
+    environment:
+      - ADMIN_PASSWORD=VotreMotDePasseSecret123!
 ```
 
 ### 3. Démarrer ou Mettre à jour sur le NAS :
