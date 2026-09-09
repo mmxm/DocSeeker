@@ -2808,7 +2808,7 @@ document.addEventListener("DOMContentLoaded", () => {
       hookIframePinchZoomIsolation();
     } else {
       const pdfStreamUrl = `/api/pdf/${docId}`;
-      let viewerUrl = `/pdfjs/web/viewer.html?file=${encodeURIComponent(pdfStreamUrl)}#page=${targetPage}`;
+      let viewerUrl = `/pdfjs/web/viewer.html?file=${encodeURI(pdfStreamUrl)}#page=${targetPage}`;
       if (currentSearchQuery) {
         viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
       }

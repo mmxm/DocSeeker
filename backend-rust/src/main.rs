@@ -149,7 +149,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let headers = response.headers_mut();
 
         headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-        headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("SAMEORIGIN"));
         headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("strict-origin-when-cross-origin"));
         headers.insert(
             header::HeaderName::from_static("permissions-policy"),

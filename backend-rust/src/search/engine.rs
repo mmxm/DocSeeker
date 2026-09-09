@@ -30,7 +30,7 @@ pub fn get_query_hash(query_terms: &[String]) -> String {
         .collect();
     norm_terms.sort();
 
-    let joined = format!("v4_{}", norm_terms.join("_"));
+    let joined = format!("v5_{}", norm_terms.join("_"));
     let mut hasher = Sha256::new();
     hasher.update(joined.as_bytes());
     let hex_str = hex::encode(hasher.finalize());
