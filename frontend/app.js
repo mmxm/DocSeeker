@@ -922,25 +922,18 @@ document.addEventListener("DOMContentLoaded", () => {
     const val = e.target.value.trim();
     clearSearchBtn.style.display = val ? "flex" : "none";
 
-    // Filtre visuel instantané à 0ms sur les titres déjà affichés
-    if (val && resultsContainer.children.length > 0 && !currentSearchQuery) {
-      const lower = val.toLowerCase();
-      document.querySelectorAll(".doc-card").forEach(card => {
-        const title = (card.querySelector(".doc-title-main")?.getAttribute("title") || "").toLowerCase();
-        card.style.opacity = title.includes(lower) ? "1" : "0.35";
-      });
-    }
-
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
+    // Si le champ est entièrement vidé alors qu'une recherche était active, réinitialiser
+    if (!val && currentSearchQuery) {
+      currentSearchQuery = "";
       document.querySelectorAll(".doc-card").forEach(card => card.style.opacity = "1");
-      performSearch(val);
-    }, 250);
+      loadFoldersAndDocuments();
+    }
   });
 
   searchInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
-      clearTimeout(debounceTimer);
+      e.preventDefault();
+      document.querySelectorAll(".doc-card").forEach(card => card.style.opacity = "1");
       performSearch(searchInput.value.trim());
     }
   });
@@ -1078,6 +1071,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function closeSplitViewer() {
+    if (currentActiveDocId && window.pdfCacheManager) {
+      window.pdfCacheManager.pauseDownload(currentActiveDocId);
+    }
     workspace.classList.remove("split-active");
     document.documentElement.classList.remove("doc-open");
     document.body.classList.remove("doc-open");
@@ -1130,10 +1126,9 @@ document.addEventListener("DOMContentLoaded", () => {
     docSearchInput.addEventListener("input", (e) => {
       const rawVal = e.target.value;
       syncDocSearchInputs(rawVal, docSearchInput);
-      clearTimeout(docSearchDebounceTimer);
-      docSearchDebounceTimer = setTimeout(() => {
-        performDocSearch(rawVal.trim(), false);
-      }, 250);
+      if (!rawVal.trim()) {
+        performDocSearch("", false);
+      }
     });
   }
 
@@ -1172,10 +1167,9 @@ document.addEventListener("DOMContentLoaded", () => {
     viewerDocSearchInput.addEventListener("input", (e) => {
       const rawVal = e.target.value;
       syncDocSearchInputs(rawVal, viewerDocSearchInput);
-      clearTimeout(docSearchDebounceTimer);
-      docSearchDebounceTimer = setTimeout(() => {
-        performDocSearch(rawVal.trim(), false);
-      }, 250);
+      if (!rawVal.trim()) {
+        performDocSearch("", false);
+      }
     });
   }
 
@@ -1191,10 +1185,9 @@ document.addEventListener("DOMContentLoaded", () => {
     drawerDocSearchInput.addEventListener("input", (e) => {
       const rawVal = e.target.value;
       syncDocSearchInputs(rawVal, drawerDocSearchInput);
-      clearTimeout(docSearchDebounceTimer);
-      docSearchDebounceTimer = setTimeout(() => {
-        performDocSearch(rawVal.trim(), false);
-      }, 250);
+      if (!rawVal.trim()) {
+        performDocSearch("", false);
+      }
     });
   }
 
@@ -1319,15 +1312,22 @@ document.addEventListener("DOMContentLoaded", () => {
   if (searchNextBtn) searchNextBtn.addEventListener("click", goToNextOccurrence);
 
   // Support de la touche Entrée dans les champs de recherche du document
+  let lastExecutedDocSearchQuery = "";
   [viewerDocSearchInput, docSearchInput, drawerDocSearchInput].forEach(inp => {
     if (inp) {
       inp.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
           e.preventDefault();
-          if (e.shiftKey) {
-            goToPrevOccurrence();
+          const query = (inp.value || "").trim();
+          if (query !== lastExecutedDocSearchQuery) {
+            lastExecutedDocSearchQuery = query;
+            performDocSearch(query, false);
           } else {
-            goToNextOccurrence();
+            if (e.shiftKey) {
+              goToPrevOccurrence();
+            } else {
+              goToNextOccurrence();
+            }
           }
         }
       });
@@ -3038,6 +3038,9 @@ document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
   function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0) {
     const isSameDoc = (currentActiveDocId === docId);
+    if (!isSameDoc && currentActiveDocId && window.pdfCacheManager) {
+      window.pdfCacheManager.pauseDownload(currentActiveDocId);
+    }
     currentActiveDocId = docId;
     currentActiveDocTitle = docTitle;
     currentDocOriginalOccurrences = occurrences;
@@ -3103,11 +3106,11 @@ document.addEventListener("DOMContentLoaded", () => {
         viewerCacheBadge.className = "viewer-doc-badge viewer-cache-badge complete";
         viewerCacheBadge.textContent = "⚡ En cache";
         viewerCacheBadge.title = "Document disponible à 100% en cache local (0 ms réseau)";
-      } else if (status === "downloading") {
+      } else if (status === "downloading" && progress > 0) {
         viewerCacheBadge.style.display = "inline-flex";
         viewerCacheBadge.className = "viewer-doc-badge viewer-cache-badge downloading";
-        viewerCacheBadge.textContent = `↓ ${progress || 0}%`;
-        viewerCacheBadge.title = `Mise en cache locale en cours (${progress || 0}%)...`;
+        viewerCacheBadge.textContent = `📥 ${progress}%`;
+        viewerCacheBadge.title = `Mise en cache hors-ligne : ${progress}%`;
       } else {
         viewerCacheBadge.style.display = "none";
       }
@@ -3143,7 +3146,7 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         }
 
-        let viewerUrl = `/pdfjs/web/viewer.html?file=${encodeURIComponent(pdfTargetUrl)}#page=${targetPage}`;
+        let viewerUrl = `/pdfjs/web/viewer.html?file=${encodeURI(pdfTargetUrl)}#page=${targetPage}`;
         if (currentSearchQuery) {
           viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
         }
@@ -3154,6 +3157,25 @@ document.addEventListener("DOMContentLoaded", () => {
           pdfFrame.src = viewerUrl;
           pdfFrame.onload = () => {
             hookIframePinchZoomIsolation();
+            try {
+              const win = pdfFrame.contentWindow;
+              if (win && win.PDFViewerApplication && win.PDFViewerApplication.eventBus) {
+                win.PDFViewerApplication.eventBus._on("documentloaded", async () => {
+                  try {
+                    const app = win.PDFViewerApplication;
+                    if (app && app.pdfDocument && window.pdfCacheManager && !await window.pdfCacheManager.isComplete(docId)) {
+                      const data = await app.pdfDocument.getData();
+                      const fullBlob = new Blob([data], { type: "application/pdf" });
+                      await window.pdfCacheManager.finalizeBlob(docId, fullBlob, `doc-${docId}`, fullBlob.size);
+                      updateCacheUI("complete", 100);
+                    }
+                  } catch (e) {
+                    console.warn("[PdfCache] Capture blob PDF.js:", e);
+                  }
+                }, { once: true });
+              }
+            } catch (e) {}
+
             setTimeout(() => {
               goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
               hookAnnotationStorageModified();
