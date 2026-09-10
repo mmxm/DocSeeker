@@ -30,7 +30,7 @@ pub fn get_query_hash(query_terms: &[String]) -> String {
         .collect();
     norm_terms.sort();
 
-    let joined = format!("v5_{}", norm_terms.join("_"));
+    let joined = format!("v6_{}", norm_terms.join("_"));
     let mut hasher = Sha256::new();
     hasher.update(joined.as_bytes());
     let hex_str = hex::encode(hasher.finalize());
@@ -108,32 +108,48 @@ pub fn find_occurrences_on_page(
     for w in words_data {
         let WordEntry(x0, y0, x1, y1, ref word, block_no, line_no) = *w;
         let norm_w = normalize_text(word);
+        let mut matched_terms_in_word: Vec<String> = Vec::new();
+        let mut min_pos = usize::MAX;
+        let mut max_end_pos = 0;
+
         for term in &norm_terms {
             if match_word(&norm_w, term) {
-                // Surlignage précis de la sous-chaîne recherchée (ex: "extra" dans "extra-capillaire")
-                let (sub_x0, sub_x1) = if let Some(pos) = norm_w.find(term.as_str()) {
-                    let word_chars = norm_w.chars().count().max(1) as f64;
-                    let start_chars = norm_w[..pos].chars().count() as f64;
-                    let term_chars = term.chars().count() as f64;
-                    let total_w = (x1 - x0).max(0.0);
-                    (
-                        x0 + total_w * (start_chars / word_chars),
-                        x0 + total_w * ((start_chars + term_chars) / word_chars),
-                    )
-                } else {
-                    (x0, x1)
-                };
-
-                matched_words.push(RawMatchedWord {
-                    rect: [x0, y0, x1, y1],
-                    highlight_rect: [sub_x0, y0, sub_x1, y1],
-                    word: word.clone(),
-                    block_no,
-                    line_no,
-                    matched_term: term.clone(),
-                });
-                break;
+                matched_terms_in_word.push(term.clone());
+                if let Some(pos) = norm_w.find(term.as_str()) {
+                    let char_pos = norm_w[..pos].chars().count();
+                    let char_len = term.chars().count();
+                    min_pos = min_pos.min(char_pos);
+                    max_end_pos = max_end_pos.max(char_pos + char_len);
+                }
             }
+        }
+
+        if !matched_terms_in_word.is_empty() {
+            let total_chars = norm_w.chars().count().max(1);
+            // Si plusieurs termes de la requête correspondent (ex: "extra" et "utérine" dans "extra-utérine")
+            // ou si les termes couvrent la quasi-totalité du mot, surligner tout le mot [x0, x1]
+            let (sub_x0, sub_x1) = if matched_terms_in_word.len() > 1
+                || (min_pos == 0 && max_end_pos >= total_chars.saturating_sub(2))
+                || min_pos == usize::MAX
+            {
+                (x0, x1)
+            } else {
+                let total_w = (x1 - x0).max(0.0);
+                let char_count = total_chars as f64;
+                (
+                    x0 + total_w * (min_pos as f64 / char_count),
+                    (x0 + total_w * (max_end_pos as f64 / char_count)).min(x1),
+                )
+            };
+
+            matched_words.push(RawMatchedWord {
+                rect: [x0, y0, x1, y1],
+                highlight_rect: [sub_x0, y0, sub_x1, y1],
+                word: word.clone(),
+                block_no,
+                line_no,
+                matched_term: matched_terms_in_word.join("+"),
+            });
         }
     }
 

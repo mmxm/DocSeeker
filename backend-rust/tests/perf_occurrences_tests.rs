@@ -186,3 +186,50 @@ fn test_corrupt_header_pdf_handling() {
     let has_pdf_magic = header.starts_with(b"%PDF-");
     assert!(!has_pdf_magic, "Un fichier sans %PDF- doit être rejeté sans crasher");
 }
+
+#[test]
+fn test_compound_words_full_highlight() {
+    let norm_w = "extra-uterine";
+    let norm_terms = vec!["grossesse".to_string(), "extra".to_string(), "uterine".to_string()];
+    let (x0, x1): (f64, f64) = (100.0, 200.0);
+
+    let mut matched_terms_in_word: Vec<String> = Vec::new();
+    let mut min_pos = usize::MAX;
+    let mut max_end_pos = 0;
+
+    for term in &norm_terms {
+        if norm_w.contains(term.as_str()) {
+            matched_terms_in_word.push(term.clone());
+            if let Some(pos) = norm_w.find(term.as_str()) {
+                let char_pos = norm_w[..pos].chars().count();
+                let char_len = term.chars().count();
+                min_pos = min_pos.min(char_pos);
+                max_end_pos = max_end_pos.max(char_pos + char_len);
+            }
+        }
+    }
+
+    assert_eq!(matched_terms_in_word.len(), 2);
+    assert_eq!(matched_terms_in_word, vec!["extra", "uterine"]);
+
+    let total_chars = norm_w.chars().count().max(1);
+    let (sub_x0, sub_x1) = if matched_terms_in_word.len() > 1
+        || (min_pos == 0 && max_end_pos >= total_chars.saturating_sub(2))
+        || min_pos == usize::MAX
+    {
+        (x0, x1)
+    } else {
+        let total_w = (x1 - x0).max(0.0);
+        let char_count = total_chars as f64;
+        (
+            x0 + total_w * (min_pos as f64 / char_count),
+            (x0 + total_w * (max_end_pos as f64 / char_count)).min(x1),
+        )
+    };
+
+    // Le mot composé "extra-utérine" doit couvrir toute la largeur [100.0, 200.0]
+    assert_eq!(sub_x0, 100.0);
+    assert_eq!(sub_x1, 200.0);
+}
+
+
