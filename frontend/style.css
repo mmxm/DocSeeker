@@ -122,6 +122,7 @@ body.light-theme {
 }
 
 .app-version-pill {
+  display: none;
   font-size: 11px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-weight: 600;

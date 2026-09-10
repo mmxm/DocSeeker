@@ -3487,7 +3487,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 700);
   }
 
-  // Chargement et affichage discret de la version / commit de l'application
+  // Chargement et affichage discret uniquement du numéro de commit
   async function loadAppVersion() {
     try {
       const res = await apiFetch("/api/version");
@@ -3496,9 +3496,13 @@ document.addEventListener("DOMContentLoaded", () => {
         const badge = document.getElementById("appVersionBadge");
         if (badge) {
           const shortCommit = data.commit && data.commit !== "unknown" ? data.commit.substring(0, 7) : "";
-          const ver = data.version ? data.version.replace(/^v/, "") : "2.0.0";
-          badge.textContent = shortCommit ? `v${ver} (${shortCommit})` : `v${ver}`;
-          badge.title = `DocSeeker v${ver} | Commit: ${data.commit} | Moteur: ${data.backend || 'Rust'}`;
+          if (shortCommit) {
+            badge.textContent = shortCommit;
+            badge.title = `Commit: ${data.commit}`;
+            badge.style.display = "inline-flex";
+          } else {
+            badge.style.display = "none";
+          }
         }
       }
     } catch (e) {
