@@ -1731,53 +1731,58 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!title) return "";
     if (!query || !query.trim()) return escapeHtml(title);
 
-    const rawTerms = query.trim().split(/\s+/).filter(t => t.length >= 1);
-    if (rawTerms.length === 0) return escapeHtml(title);
+    try {
+      const rawTerms = query.trim().split(/\s+/).filter(t => t.length >= 1);
+      if (rawTerms.length === 0) return escapeHtml(title);
 
-    const accentMap = {
-      'a': '[aàáâãäåAÀÁÂÃÄÅ]',
-      'e': '[eèéêëEÈÉÊË]',
-      'i': '[iìíîïIÌÍÎÏ]',
-      'o': '[oòóôõöOÒÓÔÕÖ]',
-      'u': '[uùúûüUÙÚÛÜ]',
-      'c': '[cçCÇ]',
-      'n': '[nñNÑ]'
-    };
+      const accentMap = {
+        'a': '[aàáâãäåAÀÁÂÃÄÅ]',
+        'e': '[eèéêëEÈÉÊË]',
+        'i': '[iìíîïIÌÍÎÏ]',
+        'o': '[oòóôõöOÒÓÔÕÖ]',
+        'u': '[uùúûüUÙÚÛÜ]',
+        'c': '[cçCÇ]',
+        'n': '[nñNÑ]'
+      };
 
-    const patterns = [];
-    rawTerms.forEach(term => {
-      const variants = [term];
-      if ((term.endsWith('s') || term.endsWith('x')) && term.length > 3) {
-        variants.push(term.slice(0, -1));
-      }
-      variants.forEach(v => {
-        const normalized = v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-        const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regexStr = escaped.split('').map(ch => accentMap[ch] || `[${ch.toUpperCase()}${ch.toLowerCase()}]`).join('');
-        if (v.length <= 2) {
-          patterns.push(`(?<!\\w)${regexStr}(?!\\w)`);
-        } else {
-          patterns.push(`(?<!\\w)${regexStr}`);
+      const patterns = [];
+      rawTerms.forEach(term => {
+        const variants = [term];
+        if ((term.endsWith('s') || term.endsWith('x')) && term.length > 3) {
+          variants.push(term.slice(0, -1));
         }
+        variants.forEach(v => {
+          const normalized = v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+          const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const regexStr = escaped.split('').map(ch => accentMap[ch] || `[${ch.toUpperCase()}${ch.toLowerCase()}]`).join('');
+          if (v.length <= 2) {
+            patterns.push(`(?<!\\w)${regexStr}(?!\\w)`);
+          } else {
+            patterns.push(`(?<!\\w)${regexStr}`);
+          }
+        });
       });
-    });
 
-    if (patterns.length === 0) return escapeHtml(title);
+      if (patterns.length === 0) return escapeHtml(title);
 
-    // Trier par longueur décroissante pour privilégier la variante la plus longue (ex: 'complications' avant 'complication')
-    patterns.sort((a, b) => b.length - a.length);
+      // Trier par longueur décroissante pour privilégier la variante la plus longue (ex: 'complications' avant 'complication')
+      patterns.sort((a, b) => b.length - a.length);
 
-    const pattern = new RegExp(`(${patterns.join('|')})`, 'gi');
-    let lastIndex = 0;
-    let result = '';
-    let match;
-    while ((match = pattern.exec(title)) !== null) {
-      result += escapeHtml(title.substring(lastIndex, match.index));
-      result += `<mark class="title-highlight">${escapeHtml(match[0])}</mark>`;
-      lastIndex = pattern.lastIndex;
+      const pattern = new RegExp(`(${patterns.join('|')})`, 'gi');
+      let lastIndex = 0;
+      let result = '';
+      let match;
+      while ((match = pattern.exec(title)) !== null) {
+        result += escapeHtml(title.substring(lastIndex, match.index));
+        result += `<mark class="title-highlight">${escapeHtml(match[0])}</mark>`;
+        lastIndex = pattern.lastIndex;
+      }
+      result += escapeHtml(title.substring(lastIndex));
+      return result;
+    } catch (e) {
+      console.warn("highlightTitle exception:", e);
+      return escapeHtml(title);
     }
-    result += escapeHtml(title.substring(lastIndex));
-    return result;
   }
 
   function createDocCardElement(doc, isSearch = false) {
@@ -2193,11 +2198,15 @@ document.addEventListener("DOMContentLoaded", () => {
     currentLoadedDocs = currentLoadedDocs.concat(rawResults);
 
     rawResults.forEach(doc => {
-      const card = createDocCardElement(doc, true);
-      if (sentinel && sentinel.parentNode === resultsContainer) {
-        resultsContainer.insertBefore(card, sentinel);
-      } else {
-        resultsContainer.appendChild(card);
+      try {
+        const card = createDocCardElement(doc, true);
+        if (sentinel && sentinel.parentNode === resultsContainer) {
+          resultsContainer.insertBefore(card, sentinel);
+        } else {
+          resultsContainer.appendChild(card);
+        }
+      } catch (cardErr) {
+        console.error("Erreur rendu carte document pagination:", doc.id, cardErr);
       }
     });
 
@@ -2234,8 +2243,12 @@ document.addEventListener("DOMContentLoaded", () => {
     currentLoadedDocs = sortedResults;
 
     sortedResults.forEach(doc => {
-      const card = createDocCardElement(doc, true);
-      resultsContainer.appendChild(card);
+      try {
+        const card = createDocCardElement(doc, true);
+        resultsContainer.appendChild(card);
+      } catch (cardErr) {
+        console.error("Erreur rendu carte document:", doc.id, cardErr);
+      }
     });
 
     // Configuration de l'IntersectionObserver pour le scroll infini des résultats
@@ -3474,6 +3487,26 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 700);
   }
 
-  // Vérification initiale de l'état du pipeline au chargement de l'application
+  // Chargement et affichage discret de la version / commit de l'application
+  async function loadAppVersion() {
+    try {
+      const res = await apiFetch("/api/version");
+      if (res.ok) {
+        const data = await res.json();
+        const badge = document.getElementById("appVersionBadge");
+        if (badge) {
+          const shortCommit = data.commit && data.commit !== "unknown" ? data.commit.substring(0, 7) : "";
+          const ver = data.version ? data.version.replace(/^v/, "") : "2.0.0";
+          badge.textContent = shortCommit ? `v${ver} (${shortCommit})` : `v${ver}`;
+          badge.title = `DocSeeker v${ver} | Commit: ${data.commit} | Moteur: ${data.backend || 'Rust'}`;
+        }
+      }
+    } catch (e) {
+      console.warn("Impossible de charger la version:", e);
+    }
+  }
+
+  // Initialisation au chargement de l'application
+  loadAppVersion();
   startPipelinePolling();
 });

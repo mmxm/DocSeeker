@@ -89,8 +89,11 @@ async fn health_handler(
 }
 
 async fn version_handler() -> axum::Json<serde_json::Value> {
+    let commit = std::env::var("GIT_COMMIT").unwrap_or_else(|_| "dev".to_string());
+    let version = std::env::var("DOCSEEKER_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
     axum::Json(serde_json::json!({
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": version,
+        "commit": commit,
         "backend": "Rust (Axum + Rusqlite + Pdfium)",
     }))
 }
