@@ -1231,6 +1231,41 @@ document.addEventListener("DOMContentLoaded", () => {
     if (searchNextBtn) searchNextBtn.disabled = total <= 1;
   }
 
+  function getCurrentViewerPage() {
+    try {
+      const win = pdfFrame?.contentWindow;
+      if (win && win.PDFViewerApplication && typeof win.PDFViewerApplication.page === "number" && win.PDFViewerApplication.page > 0) {
+        return win.PDFViewerApplication.page;
+      }
+    } catch (e) {}
+
+    if (viewerPageBadge) {
+      const m = viewerPageBadge.textContent.match(/\d+/);
+      if (m) return parseInt(m[0], 10);
+    }
+    return 1;
+  }
+
+  function findClosestOccurrenceIndex(occs, currentPage) {
+    if (!occs || occs.length === 0) return -1;
+    let bestIdx = 0;
+    let minDiff = Infinity;
+
+    for (let i = 0; i < occs.length; i++) {
+      const p = occs[i].page_number;
+      if (p === currentPage) {
+        return i; // Correspondance exacte sur la page courante
+      }
+      const diff = Math.abs(p - currentPage);
+      // En cas d'égalité de distance, priorité vers l'avant (p > currentPage)
+      if (diff < minDiff || (diff === minDiff && p > currentPage)) {
+        minDiff = diff;
+        bestIdx = i;
+      }
+    }
+    return bestIdx;
+  }
+
   function jumpToOccurrenceByIndex(index) {
     if (!currentActiveOccurrences || currentActiveOccurrences.length === 0) return;
     if (index < 0) index = currentActiveOccurrences.length - 1;
@@ -1334,12 +1369,18 @@ document.addEventListener("DOMContentLoaded", () => {
       if (drawerDocCount) drawerDocCount.textContent = pillText;
 
       currentActiveOccurrences = currentDocOriginalOccurrences || [];
-      currentActiveOccurrenceIndex = currentActiveOccurrences.length > 0 ? 0 : -1;
-      updateOccurrenceStepperUI();
-
       renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentDocOriginalOccurrences);
       renderDrawerOccurrences(currentActiveDocId, currentActiveDocTitle, currentDocOriginalOccurrences);
       updateViewerSearchHighlight(currentSearchQuery);
+
+      if (currentActiveOccurrences.length > 0) {
+        const curPage = getCurrentViewerPage();
+        const bestIdx = findClosestOccurrenceIndex(currentActiveOccurrences, curPage);
+        jumpToOccurrenceByIndex(bestIdx);
+      } else {
+        currentActiveOccurrenceIndex = -1;
+        updateOccurrenceStepperUI();
+      }
       return;
     }
 
@@ -1357,16 +1398,17 @@ document.addEventListener("DOMContentLoaded", () => {
       if (drawerDocCount) drawerDocCount.textContent = pillLabel;
 
       currentActiveOccurrences = occs;
-      currentActiveOccurrenceIndex = occs.length > 0 ? 0 : -1;
-      updateOccurrenceStepperUI();
-
       renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, occs);
       renderDrawerOccurrences(currentActiveDocId, currentActiveDocTitle, occs);
       updateViewerSearchHighlight(query);
 
       if (occs.length > 0) {
-        const targetRect = (occs[0].highlight_rects && occs[0].highlight_rects.length > 0) ? occs[0].highlight_rects[0] : occs[0].rect;
-        goToPageAndScrollToOccurrence(occs[0].page_number, targetRect, occs[0].y_ratio);
+        const curPage = getCurrentViewerPage();
+        const bestIdx = findClosestOccurrenceIndex(occs, curPage);
+        jumpToOccurrenceByIndex(bestIdx);
+      } else {
+        currentActiveOccurrenceIndex = -1;
+        updateOccurrenceStepperUI();
       }
     } catch (err) {
       console.error("Erreur recherche document:", err);
