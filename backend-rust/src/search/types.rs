@@ -14,6 +14,8 @@ pub struct OccurrenceResult {
     #[serde(default)]
     pub highlight_rects: Vec<[f64; 4]>,
     pub bm25_score: f64,
+    #[serde(default)]
+    pub font_size: f64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

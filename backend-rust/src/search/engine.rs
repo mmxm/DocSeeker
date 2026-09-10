@@ -206,6 +206,10 @@ pub fn find_occurrences_on_page(
             doc_id, page_number, occ_idx, query_hash, encoded_terms
         );
         let highlight_rects: Vec<[f64; 4]> = group.iter().map(|w| w.highlight_rect).collect();
+        let font_size = group
+            .iter()
+            .map(|w| (w.rect[3] - w.rect[1]).max(0.0))
+            .fold(0.0, f64::max);
 
         results.push(OccurrenceResult {
             page_number,
@@ -219,6 +223,7 @@ pub fn find_occurrences_on_page(
             rect: [x0, y0, x1, y1],
             highlight_rects,
             bm25_score,
+            font_size: (font_size * 10.0).round() / 10.0,
         });
     }
 
@@ -640,6 +645,7 @@ pub fn search_documents(
         relevant_ribbon.sort_by(|a, b| {
             b.distinct_terms_count
                 .cmp(&a.distinct_terms_count)
+                .then_with(|| b.font_size.partial_cmp(&a.font_size).unwrap_or(std::cmp::Ordering::Equal))
                 .then_with(|| a.bm25_score.partial_cmp(&b.bm25_score).unwrap_or(std::cmp::Ordering::Equal))
                 .then_with(|| a.page_number.cmp(&b.page_number))
         });
@@ -709,7 +715,21 @@ pub fn search_documents(
             }
         }
 
-        // 4. Volume d'occurrences et score statistique BM25
+        // 4. Bonus de taille de police (Titre de chapitre / section en grande police)
+        // Calibré comme départageur proportionnel doux (max +400 pts) pour ne JAMAIS dépasser la complétude (3/3 > 2/3)
+        let best_font_size = doc_info
+            .all_occurrences
+            .iter()
+            .map(|o| o.font_size)
+            .fold(0.0, f64::max);
+
+        if best_font_size > 10.0 {
+            // Corps de texte normal = 10 pt. Au-delà, bonus proportionnel continu plafonné à 400 pts
+            let font_bonus = ((best_font_size - 10.0) * 25.0).clamp(0.0, 400.0);
+            relevance_score += font_bonus;
+        }
+
+        // 5. Volume d'occurrences et score statistique BM25
         relevance_score += (total_doc_occs as f64 * 5.0).min(300.0);
         relevance_score += doc_info.best_bm25.abs() * 50.0;
 
