@@ -13747,6 +13747,7 @@ const PDFViewerApplication = {
     this.pdfLinkService.externalLinkEnabled = true;
     this.store = null;
     this.isInitialViewSet = false;
+    this._externalProgressManaged = false;
     this.url = "";
     this.baseUrl = "";
     this._downloadUrl = "";
@@ -13893,7 +13894,25 @@ const PDFViewerApplication = {
     console.error(`${message}\n\n${moreInfoText.join("\n")}`);
     return message;
   },
+  setDownloadProgress(status, percent) {
+    this._externalProgressManaged = true;
+    if (!this.loadingBar) return;
+    if (status === "downloading") {
+      this.loadingBar.show();
+      this.loadingBar.percent = Math.max(0, Math.min(100, percent));
+    } else if (status === "complete") {
+      this.loadingBar.percent = 100;
+      setTimeout(() => {
+        if (this.loadingBar) this.loadingBar.hide();
+      }, 400);
+    } else if (status === "paused" || status === "error") {
+      this.loadingBar.hide();
+    }
+  },
   progress(level) {
+    if (this._externalProgressManaged) {
+      return;
+    }
     const percent = Math.round(level * 100);
     if (!this.loadingBar || percent <= this.loadingBar.percent) {
       return;

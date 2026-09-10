@@ -85,11 +85,63 @@ class PdfCacheManager {
   }
 
   /**
-   * Vérifie si un PDF est déjà disponible à 100% en cache
+   * Vérifie si un PDF est déjà disponible à 100% en cache avec intégrité validée
    */
   async isComplete(docId) {
     const meta = await this.getMetadata(docId);
-    return Boolean(meta && meta.isComplete);
+    if (!meta || !meta.isComplete || !meta.totalBytes || meta.totalBytes <= 0) {
+      return false;
+    }
+
+    // Si l'ETag encode la taille (format "doc-{id}-{size}"), vérifier la cohérence stricte
+    if (meta.etag) {
+      const match = meta.etag.match(/doc-\d+-(\d+)/);
+      if (match) {
+        const expectedSize = parseInt(match[1], 10);
+        if (expectedSize > 0 && meta.totalBytes !== expectedSize) {
+          console.warn(`[PdfCacheManager] Cache invalide doc ${docId} (totalBytes ${meta.totalBytes} != etag ${expectedSize}). Invalidation.`);
+          await this.invalidate(docId);
+          return false;
+        }
+      } else if (meta.etag === `doc-${docId}`) {
+        // Ancien format de cache corrompu sans taille
+        console.warn(`[PdfCacheManager] Ancien format de cache détecté pour doc ${docId}. Invalidation préventive.`);
+        await this.invalidate(docId);
+        return false;
+      }
+    }
+
+    // Vérifier que le Blob existe réellement et que sa taille correspond exactement à totalBytes
+    const blob = await this.getBlob(docId);
+    if (!blob || blob.size !== meta.totalBytes) {
+      console.warn(`[PdfCacheManager] Cache corrompu ou incomplet doc ${docId} (taille blob: ${blob?.size || 0}, attendu: ${meta.totalBytes}). Invalidation.`);
+      await this.invalidate(docId);
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Retourne la progression actuelle d'un document
+   */
+  async getProgress(docId) {
+    const id = Number(docId);
+    if (await this.isComplete(id)) {
+      return { status: "complete", progress: 100 };
+    }
+    const meta = await this.getMetadata(id);
+    if (!meta || !meta.totalBytes || meta.totalBytes <= 0) {
+      return { status: "none", progress: 0 };
+    }
+    const isDownloading = this.activeDownloads.has(id);
+    const pct = Math.min(99, Math.round((meta.downloadedBytes / meta.totalBytes) * 100));
+    return {
+      status: isDownloading ? "downloading" : (pct > 0 ? "paused" : "none"),
+      progress: pct,
+      downloadedBytes: meta.downloadedBytes,
+      totalBytes: meta.totalBytes
+    };
   }
 
   /**
@@ -188,6 +240,10 @@ class PdfCacheManager {
    * Enregistre le Blob complet dans le magasin blobs et finalise les métadonnées
    */
   async finalizeBlob(docId, blob, etag, totalBytes) {
+    if (!blob || blob.size <= 0 || (totalBytes > 0 && blob.size !== totalBytes)) {
+      console.error(`[PdfCacheManager] Refus d'enregistrer un blob incomplet pour doc ${docId} (blob.size=${blob?.size}, totalBytes=${totalBytes})`);
+      return;
+    }
     await this.init();
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction(["blobs", "metadata"], "readwrite");
@@ -383,11 +439,17 @@ class PdfCacheManager {
       if (response.status === 416) {
         console.warn(`[PdfCacheManager] Status 416 pour doc ${id}, vérification intégrité...`);
         const allChunks = await this.getAllChunks(id);
-        if (allChunks.length > 0) {
-          const fullBlob = new Blob(allChunks, { type: "application/pdf" });
-          await this.finalizeBlob(id, fullBlob, meta.etag || "", fullBlob.size);
-          this._notifyProgress(id, { status: "complete", progress: 100 });
+        const fullBlob = new Blob(allChunks, { type: "application/pdf" });
+        if (meta.totalBytes > 0 && fullBlob.size === meta.totalBytes) {
+          await this.finalizeBlob(id, fullBlob, meta.etag || serverEtag, fullBlob.size);
+          this._notifyProgress(id, {
+            status: "complete",
+            progress: 100,
+            downloadedBytes: fullBlob.size,
+            totalBytes: fullBlob.size
+          });
         } else {
+          console.warn(`[PdfCacheManager] Données incomplètes lors du statut 416 (${fullBlob.size} != ${meta.totalBytes}). Invalidation.`);
           await this.invalidate(id);
         }
         this.activeDownloads.delete(id);
@@ -448,18 +510,37 @@ class PdfCacheManager {
           meta.downloadedBytes = downloadedSoFar;
           meta.chunkCount = chunkIndex;
           meta.updatedAt = Date.now();
+          await this.saveMetadata(meta);
 
-          // Assemblage final du Blob
+          // Si le flux réseau s'est arrêté avant que la totalité du fichier ne soit reçue
+          if (totalBytes > 0 && downloadedSoFar < totalBytes) {
+            console.warn(`[PdfCacheManager] Flux terminé avant la fin pour doc ${id} : ${downloadedSoFar}/${totalBytes} octets.`);
+            this._notifyProgress(id, {
+              status: "paused",
+              progress: Math.min(99, Math.round((downloadedSoFar / totalBytes) * 100)),
+              downloadedBytes: downloadedSoFar,
+              totalBytes: totalBytes
+            });
+            break;
+          }
+
+          // Assemblage final du Blob uniquement si 100% complet
           const allChunks = await this.getAllChunks(id);
           const fullBlob = new Blob(allChunks, { type: "application/pdf" });
           
-          await this.finalizeBlob(id, fullBlob, serverEtag, fullBlob.size);
+          if (totalBytes > 0 && fullBlob.size !== totalBytes) {
+            console.error(`[PdfCacheManager] Incohérence taille finale doc ${id} (${fullBlob.size} != ${totalBytes}). Invalidation.`);
+            await this.invalidate(id);
+            break;
+          }
+
+          await this.finalizeBlob(id, fullBlob, serverEtag, totalBytes);
           
           this._notifyProgress(id, {
             status: "complete",
             progress: 100,
-            downloadedBytes: fullBlob.size,
-            totalBytes: fullBlob.size
+            downloadedBytes: totalBytes,
+            totalBytes: totalBytes
           });
           break;
         }

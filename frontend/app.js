@@ -3114,6 +3114,14 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         viewerCacheBadge.style.display = "none";
       }
+
+      // Synchronisation directe avec la barre de progression bleue dans le lecteur PDF.js
+      try {
+        const win = pdfFrame.contentWindow;
+        if (win && win.PDFViewerApplication && typeof win.PDFViewerApplication.setDownloadProgress === "function") {
+          win.PDFViewerApplication.setDownloadProgress(status, progress);
+        }
+      } catch (e) {}
     };
 
     if (window.pdfCacheManager) {
@@ -3157,20 +3165,29 @@ document.addEventListener("DOMContentLoaded", () => {
           pdfFrame.src = viewerUrl;
           pdfFrame.onload = () => {
             hookIframePinchZoomIsolation();
+
+            // Synchronisation de la progression dès le chargement de l'iframe
+            if (window.pdfCacheManager) {
+              window.pdfCacheManager.getProgress(docId).then(p => {
+                if (currentActiveDocId === docId) {
+                  updateCacheUI(p.status, p.progress);
+                }
+              }).catch(() => {});
+            }
+
+            // Fallback résilient en cas d'erreur de chargement (ex: ancien cache corrompu)
             try {
               const win = pdfFrame.contentWindow;
               if (win && win.PDFViewerApplication && win.PDFViewerApplication.eventBus) {
-                win.PDFViewerApplication.eventBus._on("documentloaded", async () => {
-                  try {
-                    const app = win.PDFViewerApplication;
-                    if (app && app.pdfDocument && window.pdfCacheManager && !await window.pdfCacheManager.isComplete(docId)) {
-                      const data = await app.pdfDocument.getData();
-                      const fullBlob = new Blob([data], { type: "application/pdf" });
-                      await window.pdfCacheManager.finalizeBlob(docId, fullBlob, `doc-${docId}`, fullBlob.size);
-                      updateCacheUI("complete", 100);
-                    }
-                  } catch (e) {
-                    console.warn("[PdfCache] Capture blob PDF.js:", e);
+                win.PDFViewerApplication.eventBus._on("documenterror", async (err) => {
+                  console.warn(`[DocSeeker] Erreur chargement document ${docId} :`, err);
+                  if (window.pdfCacheManager) {
+                    await window.pdfCacheManager.invalidate(docId);
+                  }
+                  if (pdfTargetUrl.startsWith("blob:")) {
+                    console.log(`[DocSeeker] Bascule automatique sur /api/pdf/${docId} suite à erreur Blob`);
+                    updateCacheUI("none", 0);
+                    pdfFrame.src = `/pdfjs/web/viewer.html?file=/api/pdf/${docId}#page=${targetPage}`;
                   }
                 }, { once: true });
               }
