@@ -41,22 +41,15 @@ pub async fn get_cover(
     Path(doc_id): Path<i64>,
 ) -> Response {
     let cover_webp = state.config.covers_dir.join(format!("{}.webp", doc_id));
-    let cover_jpg = state.config.covers_dir.join(format!("{}.jpg", doc_id));
-
-    let (file_path, content_type) = if cover_webp.exists() {
-        (cover_webp, "image/webp")
-    } else if cover_jpg.exists() {
-        (cover_jpg, "image/jpeg")
-    } else {
-        // Fallback sur placeholder ou 404
+    if !cover_webp.exists() {
         return (StatusCode::NOT_FOUND, "Couverture introuvable").into_response();
-    };
+    }
 
-    match tokio::fs::read(&file_path).await {
+    match tokio::fs::read(&cover_webp).await {
         Ok(bytes) => (
             StatusCode::OK,
             [
-                (header::CONTENT_TYPE, content_type),
+                (header::CONTENT_TYPE, "image/webp"),
                 (header::CACHE_CONTROL, "public, max-age=86400"),
             ],
             bytes,
@@ -75,12 +68,9 @@ pub async fn get_crop(
     let terms = params.terms.unwrap_or_default();
 
     // 1. FAST-PATH: Servir immédiatement si déjà sur disque sans toucher SQLite ni le sémaphore
-    let (webp_path, jpg_path) = compute_crop_path(&state.config, doc_id, page, occ_id, &query_hash);
+    let webp_path = compute_crop_path(&state.config, doc_id, page, occ_id, &query_hash);
     if webp_path.exists() {
         return serve_file_cache(&webp_path, "image/webp").await;
-    }
-    if jpg_path.exists() {
-        return serve_file_cache(&jpg_path, "image/jpeg").await;
     }
 
     // 2. Récupération des données en base avec libération IMMÉDIATE du verrou SQLite

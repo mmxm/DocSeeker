@@ -170,12 +170,11 @@ impl PdfEngine {
         })
     }
 
-    /// Génère la vignette de couverture (première page) sous forme WebP et JPEG.
+    /// Génère la vignette de couverture (première page) au format WebP.
     pub fn render_cover(
         &self,
         file_path: &Path,
         output_webp: &Path,
-        output_jpg: &Path,
     ) -> Result<(), String> {
         let pdfium = self.pdfium.lock().map_err(|e| e.to_string())?;
         let doc = pdfium
@@ -199,10 +198,8 @@ impl PdfEngine {
             std::fs::create_dir_all(parent).ok();
         }
 
-        // Sauvegarde WebP
-        let _ = img.save_with_format(output_webp, ImageFormat::WebP);
-        // Sauvegarde JPG
-        let _ = img.save_with_format(output_jpg, ImageFormat::Jpeg);
+        img.save_with_format(output_webp, ImageFormat::WebP)
+            .map_err(|e| e.to_string())?;
 
         Ok(())
     }

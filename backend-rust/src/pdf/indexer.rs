@@ -86,11 +86,10 @@ pub fn index_pdf_file(
         conn.last_insert_rowid()
     };
 
-    // Générer la couverture si au moins 1 page
+    // Générer la couverture WebP si au moins 1 page
     if extracted.total_pages > 0 {
         let cover_webp = config.covers_dir.join(format!("{}.webp", doc_id));
-        let cover_jpg = config.covers_dir.join(format!("{}.jpg", doc_id));
-        if let Err(e) = pdf_engine.render_cover(file_path, &cover_webp, &cover_jpg) {
+        if let Err(e) = pdf_engine.render_cover(file_path, &cover_webp) {
             warn!("[Indexer] Impossible de générer la couverture pour doc {} : {}", doc_id, e);
         }
     }
@@ -142,11 +141,9 @@ pub fn remove_document(conn: &Connection, config: &Config, doc_id: i64) -> Resul
         let _ = std::fs::remove_file(pdf_path);
     }
 
-    // Supprimer les couvertures
+    // Supprimer la couverture WebP
     let cover_webp = config.covers_dir.join(format!("{}.webp", doc_id));
-    let cover_jpg = config.covers_dir.join(format!("{}.jpg", doc_id));
     let _ = std::fs::remove_file(cover_webp);
-    let _ = std::fs::remove_file(cover_jpg);
 
     // Nettoyer les crops en cache
     let doc_cache_dir = config.cache_dir.join(format!("doc_{}", doc_id));

@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use regex::Regex;
 use lazy_static::lazy_static;
-use rusqlite::{params, Connection};
 use tracing::warn;
 
 use crate::config::Config;
@@ -12,14 +11,14 @@ lazy_static! {
     static ref RE_HASH: Regex = Regex::new(r"^[a-f0-9]{1,32}$").unwrap();
 }
 
-/// Calcule les chemins attendus pour une vignette (.webp et .jpg historique)
+/// Calcule le chemin attendu pour une vignette WebP
 pub fn compute_crop_path(
     config: &Config,
     doc_id: i64,
     page_number: i64,
     occ_id: usize,
     query_hash: &str,
-) -> (PathBuf, PathBuf) {
+) -> PathBuf {
     let safe_hash = if RE_HASH.is_match(query_hash.trim()) {
         query_hash.trim()
     } else {
@@ -31,9 +30,7 @@ pub fn compute_crop_path(
     } else {
         format!("p{}_occ{}.webp", page_number, occ_id)
     };
-    let webp_path = doc_cache_dir.join(&crop_filename);
-    let jpg_path = doc_cache_dir.join(crop_filename.replace(".webp", ".jpg"));
-    (webp_path, jpg_path)
+    doc_cache_dir.join(&crop_filename)
 }
 
 /// Génère toutes les vignettes des occurrences d'une page en une seule passe de rendu Pdfium
@@ -129,52 +126,4 @@ pub fn generate_crops_for_page(
     target_crop_path.filter(|p| p.exists())
 }
 
-/// Rétro-compatibilité : recherche en base et génération
-#[allow(dead_code)]
-pub fn get_or_generate_crop_on_demand(
-    conn: &Connection,
-    pdf_engine: &PdfEngine,
-    config: &Config,
-    doc_id: i64,
-    page_number: i64,
-    occ_id: usize,
-    query_hash: &str,
-    terms_str: &str,
-) -> Option<PathBuf> {
-    let (webp_path, jpg_path) = compute_crop_path(config, doc_id, page_number, occ_id, query_hash);
-    if webp_path.exists() {
-        return Some(webp_path);
-    }
-    if jpg_path.exists() {
-        return Some(jpg_path);
-    }
-
-    let mut stmt = match conn.prepare(
-        "SELECT p.words_json, d.filename FROM pages p JOIN documents d ON d.id = p.doc_id WHERE p.doc_id = ?1 AND p.page_number = ?2",
-    ) {
-        Ok(s) => s,
-        Err(_) => return None,
-    };
-
-    let row = stmt.query_row(params![doc_id, page_number], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-    });
-
-    let (words_json, filename) = match row {
-        Ok(val) => val,
-        Err(_) => return None,
-    };
-
-    generate_crops_for_page(
-        pdf_engine,
-        config,
-        doc_id,
-        page_number,
-        occ_id,
-        query_hash,
-        terms_str,
-        &words_json,
-        &filename,
-    )
-}
 
