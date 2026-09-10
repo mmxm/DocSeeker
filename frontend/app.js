@@ -25,6 +25,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const clearSearchBtn = document.getElementById("clearSearchBtn");
   const searchStats = document.getElementById("searchStats");
   const workspace = document.getElementById("workspace");
+  const resultsPane = document.getElementById("resultsPane");
   const generalView = document.getElementById("generalView");
   const docDetailView = document.getElementById("docDetailView");
   const resultsContainer = document.getElementById("resultsContainer");
@@ -180,6 +181,8 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentActiveDocId = null;
   let currentActiveDocTitle = "";
   let currentDocOriginalOccurrences = [];
+  let savedGeneralResultsScrollTop = 0;
+  let isRestoringScroll = false;
 
   // État des dossiers
   let currentFolderId = null; // null = racine
@@ -544,6 +547,16 @@ document.addEventListener("DOMContentLoaded", () => {
       closeSplitViewer();
     }
   });
+
+  // Mémorisation de la position de défilement vertical de la vue générale
+  if (resultsPane) {
+    resultsPane.addEventListener("scroll", () => {
+      if (isRestoringScroll) return;
+      if (generalView && generalView.style.display !== "none") {
+        savedGeneralResultsScrollTop = resultsPane.scrollTop;
+      }
+    }, { passive: true });
+  }
 
   // =========================================================================
   // Tiroir Mobile d'extraits (Bottom Sheet)
@@ -994,6 +1007,7 @@ document.addEventListener("DOMContentLoaded", () => {
       currentSortMode = e.target.value;
       userManuallyChangedSort = true;
       updateSortPillLabel();
+      savedGeneralResultsScrollTop = 0;
       if (currentSearchQuery && lastSearchResultsData) {
         renderSearchResults(lastSearchResultsData);
       } else {
@@ -1094,6 +1108,26 @@ document.addEventListener("DOMContentLoaded", () => {
     docDetailView.style.display = "none";
     generalView.style.display = "block";
     document.querySelectorAll(".vignette-item.active").forEach(el => el.classList.remove("active"));
+
+    // Restauration robuste et protégée du niveau de défilement vertical initial
+    isRestoringScroll = true;
+    const targetScroll = savedGeneralResultsScrollTop;
+    const restore = () => {
+      if (resultsPane) {
+        resultsPane.scrollTop = targetScroll;
+      }
+    };
+    restore();
+    requestAnimationFrame(() => {
+      restore();
+      requestAnimationFrame(() => {
+        restore();
+        setTimeout(() => {
+          restore();
+          isRestoringScroll = false;
+        }, 50);
+      });
+    });
   }
 
   function updateFolderFilterVisibility() {
@@ -1533,6 +1567,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function loadFoldersAndDocuments() {
     currentSearchQuery = "";
+    savedGeneralResultsScrollTop = 0;
     showGeneralResultsView();
     renderBreadcrumbs();
     updateFolderFilterVisibility();
@@ -2147,6 +2182,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     currentSearchQuery = query;
+    savedGeneralResultsScrollTop = 0;
     foldersSection.style.display = "none";
     showGeneralResultsView();
 
@@ -3072,8 +3108,15 @@ document.addEventListener("DOMContentLoaded", () => {
     currentActiveOccurrenceIndex = currentActiveOccurrences.length > 0 ? initialIdx : -1;
     updateOccurrenceStepperUI();
 
+    if (resultsPane && generalView && generalView.style.display !== "none") {
+      savedGeneralResultsScrollTop = resultsPane.scrollTop;
+    }
+
     generalView.style.display = "none";
     docDetailView.style.display = "block";
+    if (resultsPane) {
+      resultsPane.scrollTop = 0;
+    }
     docDetailTitle.textContent = docTitle;
     docDetailCount.textContent = `${occurrences.length} occurrence${occurrences.length > 1 ? 's' : ''} dans ce document`;
 
