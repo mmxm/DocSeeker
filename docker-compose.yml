@@ -29,9 +29,9 @@ services:
       # Taille maximale d'import PDF (ex: 2GB, 500MB)
       - MAX_UPLOAD_SIZE=2GB
 
-    # Consommation mémoire optimisée grâce à Rust (divisée par 8)
-    mem_limit: 256m
-    mem_reservation: 64m
+    # Consommation mémoire optimisée avec marge de sécurité pour gros PDF
+    mem_limit: 1024m
+    mem_reservation: 128m
     volumes:
       # Persistance des données (documents originaux, base SQLite et vignettes)
       - ./data:/app/data

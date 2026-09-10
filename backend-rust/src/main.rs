@@ -33,6 +33,7 @@ pub struct AppState {
     pub pdf_engine: Arc<PdfEngine>,
     pub pipeline: Arc<IndexingPipeline>,
     pub rate_limiter: Arc<LoginRateLimiter>,
+    pub crop_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 #[tokio::main]
@@ -134,6 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     let rate_limiter = Arc::new(LoginRateLimiter::new());
+    let crop_semaphore = Arc::new(tokio::sync::Semaphore::new(2));
 
     let state = Arc::new(AppState {
         config: config.clone(),
@@ -141,6 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pdf_engine,
         pipeline,
         rate_limiter,
+        crop_semaphore,
     });
 
     // En-têtes HTTP de sécurité stricts (OWASP Top 10 - remplace Caddyfile)

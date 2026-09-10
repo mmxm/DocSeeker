@@ -12,12 +12,27 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 
 use crate::AppState;
-use crate::pdf::crop::get_or_generate_crop_on_demand;
+use crate::pdf::crop::{compute_crop_path, generate_crops_for_page};
 
 #[derive(Deserialize)]
 pub struct CropQueryParams {
     pub h: Option<String>,
     pub terms: Option<String>,
+}
+
+/// Helper pour servir un fichier statique avec en-têtes de cache immutables
+async fn serve_file_cache(path: &std::path::Path, content_type: &'static str) -> Response {
+    match tokio::fs::read(path).await {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, content_type),
+                (header::CACHE_CONTROL, "public, max-age=604800, immutable"),
+            ],
+            bytes,
+        ).into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "Fichier introuvable").into_response(),
+    }
 }
 
 /// GET /api/cover/{doc_id}
@@ -58,16 +73,55 @@ pub async fn get_crop(
 ) -> Response {
     let query_hash = params.h.unwrap_or_default();
     let terms = params.terms.unwrap_or_default();
-    let state_clone = Arc::clone(&state);
 
-    // Déportation du calcul lourd CPU de Pdfium sur le pool de threads dédié (ne bloque pas Tokio)
-    let crop_path = match tokio::task::spawn_blocking(move || {
-        let conn = match state_clone.db.lock() {
+    // 1. FAST-PATH: Servir immédiatement si déjà sur disque sans toucher SQLite ni le sémaphore
+    let (webp_path, jpg_path) = compute_crop_path(&state.config, doc_id, page, occ_id, &query_hash);
+    if webp_path.exists() {
+        return serve_file_cache(&webp_path, "image/webp").await;
+    }
+    if jpg_path.exists() {
+        return serve_file_cache(&jpg_path, "image/jpeg").await;
+    }
+
+    // 2. Récupération des données en base avec libération IMMÉDIATE du verrou SQLite
+    let (words_json, filename) = {
+        let conn = match state.db.lock() {
             Ok(c) => c,
-            Err(_) => return None,
+            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur DB").into_response(),
         };
-        get_or_generate_crop_on_demand(
-            &conn,
+        let mut stmt = match conn.prepare(
+            "SELECT p.words_json, d.filename FROM pages p JOIN documents d ON d.id = p.doc_id WHERE p.doc_id = ?1 AND p.page_number = ?2",
+        ) {
+            Ok(s) => s,
+            Err(_) => return (StatusCode::NOT_FOUND, "Page introuvable").into_response(),
+        };
+
+        let row = stmt.query_row(params![doc_id, page], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        });
+
+        match row {
+            Ok(val) => val,
+            Err(_) => return (StatusCode::NOT_FOUND, "Document ou page introuvable").into_response(),
+        }
+    }; // <-- La connexion SQLite est déverrouillée immédiatement ici !
+
+    // 3. Acquisition d'un permis de rendu Pdfium (limite à 2 tâches concurrentes pour préserver la RAM)
+    let permit = match state.crop_semaphore.clone().acquire_owned().await {
+        Ok(p) => p,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur sémaphore").into_response(),
+    };
+
+    // Vérification rapide post-sémaphore : un autre thread a pu générer le lot pour cette page entre temps
+    if webp_path.exists() {
+        drop(permit);
+        return serve_file_cache(&webp_path, "image/webp").await;
+    }
+
+    let state_clone = Arc::clone(&state);
+    let crop_path = match tokio::task::spawn_blocking(move || {
+        let _permit = permit; // Maintient le permis actif pendant l'exécution Pdfium
+        generate_crops_for_page(
             &state_clone.pdf_engine,
             &state_clone.config,
             doc_id,
@@ -75,6 +129,8 @@ pub async fn get_crop(
             occ_id,
             &query_hash,
             &terms,
+            &words_json,
+            &filename,
         )
     }).await {
         Ok(res) => res,
@@ -86,18 +142,9 @@ pub async fn get_crop(
         _ => return (StatusCode::NOT_FOUND, "Vignette introuvable").into_response(),
     };
 
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => (
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, "image/webp"),
-                (header::CACHE_CONTROL, "public, max-age=604800, immutable"),
-            ],
-            bytes,
-        ).into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "Fichier introuvable").into_response(),
-    }
+    serve_file_cache(&path, "image/webp").await
 }
+
 
 /// GET /api/pdf/{doc_id} avec support complet HTTP 206 Partial Content (Byte-Range), buffers 64 Ko et ETag
 pub async fn get_pdf(

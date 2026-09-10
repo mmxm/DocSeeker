@@ -207,23 +207,27 @@ document.addEventListener("DOMContentLoaded", () => {
   const PLACEHOLDER_COVER_SVG = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='200'%3E%3Crect width='100%25' height='100%25' fill='%23f1f5f9'/%3E%3C/svg%3E";
 
   // =========================================================================
+  // =========================================================================
   // Gestionnaire de Chargement Prioritaire Dynamique avec Annulation (Abort)
-  // pour la grille principale de recherche et le volet latéral d'occurrences
+  // et Debounce au défilement pour la grille principale et le volet latéral
   // =========================================================================
   class DynamicCropManager {
-    constructor(rootMargin = "180px 0px") {
+    constructor(rootMargin = "180px 0px", debounceMs = 60) {
+      this.rootMargin = rootMargin;
+      this.debounceMs = debounceMs;
       this.activeRequests = new Map(); // img element -> AbortController
+      this.pendingDebounce = new Map(); // img element -> timerId
       this.observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
           const img = entry.target;
           if (entry.isIntersecting) {
-            this.loadPriority(img);
+            this.scheduleLoad(img);
           } else {
-            this.cancelIfInFlight(img);
+            this.cancelPendingOrInFlight(img);
           }
         });
       }, {
-        rootMargin: rootMargin,
+        rootMargin: this.rootMargin,
         threshold: 0.01
       });
     }
@@ -232,7 +236,11 @@ document.addEventListener("DOMContentLoaded", () => {
       this.observer.observe(img);
     }
 
-    cancelIfInFlight(img) {
+    cancelPendingOrInFlight(img) {
+      if (this.pendingDebounce.has(img)) {
+        clearTimeout(this.pendingDebounce.get(img));
+        this.pendingDebounce.delete(img);
+      }
       if (this.activeRequests.has(img)) {
         const controller = this.activeRequests.get(img);
         controller.abort();
@@ -240,11 +248,23 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
+    scheduleLoad(img) {
+      if (img.dataset.loaded === "true") return;
+      if (this.pendingDebounce.has(img)) {
+        clearTimeout(this.pendingDebounce.get(img));
+      }
+      const timer = setTimeout(() => {
+        this.pendingDebounce.delete(img);
+        this.loadPriority(img);
+      }, this.debounceMs);
+      this.pendingDebounce.set(img, timer);
+    }
+
     async loadPriority(img) {
       const srcUrl = img.getAttribute("data-src");
       if (!srcUrl || img.dataset.loaded === "true") return;
 
-      this.cancelIfInFlight(img);
+      this.cancelPendingOrInFlight(img);
 
       const controller = new AbortController();
       this.activeRequests.set(img, controller);
@@ -277,6 +297,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     clear() {
+      for (const [, timer] of this.pendingDebounce.entries()) {
+        clearTimeout(timer);
+      }
+      this.pendingDebounce.clear();
       for (const [, controller] of this.activeRequests.entries()) {
         controller.abort();
       }
