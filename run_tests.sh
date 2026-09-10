@@ -16,10 +16,15 @@ echo "[1/2] Exécution des tests unitaires et d'intégration (Cargo Test)..."
 cargo test --manifest-path backend-rust/Cargo.toml -- --nocapture
 
 echo ""
+echo ""
 echo "[2/2] Vérification du formatage et des avertissements de compilation..."
 cargo check --manifest-path backend-rust/Cargo.toml
 
 echo ""
+echo "[3/3] Exécution des tests automatiques sur corpus réel (tous les documents)..."
+python3 scripts/automated_real_corpus_search_test.py
+
+echo ""
 echo "========================================================================="
-echo "   TOUS LES TESTS RUST ONT RÉUSSI AVEC SUCCÈS (0 erreur, 0 régression)   "
+echo "   TOUS LES TESTS RUST & CORPUS ONT RÉUSSI AVEC SUCCÈS (0 erreur)        "
 echo "========================================================================="
