@@ -41,6 +41,114 @@ pub struct AppState {
     pub search_cache: Arc<Mutex<LruCache<String, SearchResponse>>>,
 }
 
+fn setup_panic_hook(data_dir: std::path::PathBuf) {
+    let crash_file = data_dir.join("crash.log");
+    std::panic::set_hook(Box::new(move |info| {
+        let timestamp = chrono::Local::now().to_rfc3339();
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            *s
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.as_str()
+        } else {
+            "Payload de panic inconnu"
+        };
+
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "Emplacement inconnu".to_string());
+
+        let backtrace = std::backtrace::Backtrace::capture();
+
+        let crash_report = format!(
+            "\n==================== [FATAL CRASH / PANIC] ====================\n\
+             Horodatage : {}\n\
+             Message    : {}\n\
+             Fichier    : {}\n\
+             Pile d'appel (Backtrace) :\n{:?}\n\
+             ===============================================================\n",
+            timestamp, payload, location, backtrace
+        );
+
+        eprintln!("{}", crash_report);
+
+        // Écriture persistante dans crash.log
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&crash_file) {
+            use std::io::Write;
+            let _ = file.write_all(crash_report.as_bytes());
+            let _ = file.flush();
+        }
+    }));
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Échec d'écoute de l'événement Ctrl+C");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        if let Ok(mut stream) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            stream.recv().await;
+        } else {
+            std::future::pending::<()>().await;
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            tracing::info!("[DocSeeker] Signal d'arrêt reçu (SIGINT / Ctrl+C). Fermeture ordonnée du serveur...");
+        },
+        _ = terminate => {
+            tracing::info!("[DocSeeker] Signal d'arrêt système reçu (SIGTERM / Docker stop). Fermeture ordonnée du serveur...");
+        },
+    }
+}
+
+fn spawn_memory_watchdog() {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+            #[cfg(target_os = "linux")]
+            {
+                if let Ok(content) = tokio::fs::read_to_string("/proc/self/status").await {
+                    let mut vmrss_kb = 0u64;
+                    let mut vmpeak_kb = 0u64;
+                    for line in content.lines() {
+                        if line.starts_with("VmRSS:") {
+                            if let Some(val) = line.split_whitespace().nth(1) {
+                                vmrss_kb = val.parse().unwrap_or(0);
+                            }
+                        } else if line.starts_with("VmPeak:") {
+                            if let Some(val) = line.split_whitespace().nth(1) {
+                                vmpeak_kb = val.parse().unwrap_or(0);
+                            }
+                        }
+                    }
+                    let rss_mb = vmrss_kb / 1024;
+                    let peak_mb = vmpeak_kb / 1024;
+                    if rss_mb > 1500 {
+                        tracing::warn!(
+                            "[Memory Watchdog] Utilisation RAM TRÈS ÉLEVÉE : {} Mo (Pic : {} Mo). Risque de crash OOM Docker !",
+                            rss_mb, peak_mb
+                        );
+                    } else if rss_mb > 800 {
+                        tracing::info!(
+                            "[Memory Watchdog] Utilisation RAM : {} Mo (Pic : {} Mo)",
+                            rss_mb, peak_mb
+                        );
+                    }
+                }
+            }
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Support du healthcheck autonome pour conteneurs sans curl (Distroless)
@@ -69,6 +177,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Config::from_env();
     config.ensure_directories()?;
+
+    // Installation du hook de panics et capture de crash log
+    setup_panic_hook(config.data_dir.clone());
+
+    // Vérification de présence d'un rapport de crash antérieur
+    let crash_log_path = config.data_dir.join("crash.log");
+    if crash_log_path.exists() {
+        if let Ok(metadata) = std::fs::metadata(&crash_log_path) {
+            if metadata.len() > 0 {
+                tracing::warn!(
+                    "[Diagnostic] Un journal de crash antérieur a été détecté : {:?} ({} octets). Consultez ce fichier si le conteneur a redémarré de manière inattendue.",
+                    crash_log_path, metadata.len()
+                );
+            }
+        }
+    }
+
+    // Démarrage du moniteur de mémoire
+    spawn_memory_watchdog();
 
     // Initialisation Base de Données SQLite
     info!("Étape 1 : Initialisation des tables SQLite...");
@@ -123,15 +250,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialisation du moteur PDF (Pdfium)
     let pdf_engine = Arc::new(PdfEngine::new().expect("Échec initialisation PdfEngine"));
 
-    // Synchronisation initiale des fichiers PDF dans data/documents/
-    {
-        let conn = db.lock().unwrap();
-        let (added, files) = scan_and_sync_documents(&conn, &pdf_engine, &config);
-        if added > 0 {
-            info!("[DocSeeker] {} document(s) synchronisé(s) au démarrage : {:?}", added, files);
-        }
-    }
-
     // Initialisation du pipeline d'indexation asynchrone
     let pipeline = Arc::new(IndexingPipeline::new(
         Arc::clone(&db),
@@ -152,6 +270,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         crop_semaphore,
         search_cache,
     });
+
+    // Synchronisation initiale des fichiers PDF en tâche de fond (démarrage serveur immédiat sans bloquer le healthcheck)
+    {
+        let bg_db = Arc::clone(&state.db);
+        let bg_engine = Arc::clone(&state.pdf_engine);
+        let bg_config = state.config.clone();
+        let bg_cache = Arc::clone(&state.search_cache);
+        tokio::task::spawn_blocking(move || {
+            if let Ok(conn) = bg_db.lock() {
+                let (added, files) = scan_and_sync_documents(&conn, &bg_engine, &bg_config);
+                if added > 0 {
+                    info!("[DocSeeker] {} document(s) synchronisé(s) en tâche de fond : {:?}", added, files);
+                    if let Ok(mut cache) = bg_cache.lock() {
+                        cache.clear();
+                    }
+                }
+            }
+        });
+    }
 
     // En-têtes HTTP de sécurité stricts (OWASP Top 10 - remplace Caddyfile)
     async fn security_headers_middleware(request: Request<axum::body::Body>, next: Next) -> Response {
@@ -188,7 +325,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("DocSeeker à l'écoute sur http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     Ok(())
 }

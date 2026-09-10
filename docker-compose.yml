@@ -29,15 +29,15 @@ services:
       # Taille maximale d'import PDF (ex: 2GB, 500MB)
       - MAX_UPLOAD_SIZE=2GB
 
-    # Consommation mémoire optimisée avec marge de sécurité pour gros PDF
-    mem_limit: 1024m
-    mem_reservation: 128m
+    # Consommation mémoire dimensionnée pour grands corpus médicaux (PDF de 800 Mo)
+    mem_limit: 2048m
+    mem_reservation: 256m
     volumes:
       # Persistance des données (documents originaux, base SQLite et vignettes)
       - ./data:/app/data
     healthcheck:
       test: ["CMD", "/usr/local/bin/docseeker", "--healthcheck"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
-      start_period: 5s
+      start_period: 60s

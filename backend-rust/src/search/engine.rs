@@ -343,7 +343,7 @@ pub fn search_titles(
         }
     }
 
-    results.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap());
+    results.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap_or(std::cmp::Ordering::Equal));
 
     let total_documents = results.len();
     let total_pages = if total_documents > 0 && page_size > 0 {
@@ -442,89 +442,6 @@ pub fn search_documents(
     "#;
 
     let mut stmt = conn.prepare(sql)?;
-    let mut rows_data = Vec::new();
-
-    {
-        let rows = stmt.query_map(params![fts_and_query], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?.unwrap_or_default(),
-                row.get::<_, Option<i64>>(5)?,
-                row.get::<_, i64>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, String>(8)?,
-                row.get::<_, f64>(9)?,
-            ))
-        })?;
-
-        for r in rows.flatten() {
-            if let Some(ref allowed) = allowed_folder_ids {
-                if let Some(fid) = r.5 {
-                    if !allowed.contains(&fid) {
-                        continue;
-                    }
-                } else {
-                    continue;
-                }
-            }
-            rows_data.push(r);
-        }
-    }
-
-    let matched_doc_ids_and: HashSet<i64> = rows_data.iter().map(|r| r.0).collect();
-
-    // Fallback OR si moins de 8 résultats et plusieurs termes
-    if rows_data.len() < 8 && terms.len() > 1 {
-        let or_rows = stmt.query_map(params![fts_or_query], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?.unwrap_or_default(),
-                row.get::<_, Option<i64>>(5)?,
-                row.get::<_, i64>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, String>(8)?,
-                row.get::<_, f64>(9)?,
-            ))
-        })?;
-
-        let mut seen_keys: HashSet<(i64, i64)> = rows_data.iter().map(|r| (r.0, r.1)).collect();
-        for r in or_rows.flatten() {
-            if let Some(ref allowed) = allowed_folder_ids {
-                if let Some(fid) = r.5 {
-                    if !allowed.contains(&fid) {
-                        continue;
-                    }
-                } else {
-                    continue;
-                }
-            }
-            let key = (r.0, r.1);
-            if !seen_keys.contains(&key) {
-                seen_keys.insert(key);
-                rows_data.push(r);
-            }
-        }
-    }
-
-    if rows_data.is_empty() {
-        return Ok(SearchResponse {
-            query: query.to_string(),
-            query_hash,
-            total_documents: 0,
-            total_occurrences: 0,
-            results: Vec::new(),
-            page: 1,
-            limit: page_size,
-            total_pages: 0,
-            has_more: false,
-        });
-    }
 
     struct GroupedDoc {
         id: i64,
@@ -540,40 +457,147 @@ pub fn search_documents(
     }
 
     let mut doc_groups: HashMap<i64, GroupedDoc> = HashMap::new();
+    let mut matched_doc_ids_and: HashSet<i64> = HashSet::new();
+    let mut seen_keys: HashSet<(i64, i64)> = HashSet::new();
+    let mut total_rows_and = 0usize;
 
-    for r in rows_data {
-        let (doc_id, page_number, words_json, filename, title, doc_folder_id, total_pages, created_at, updated_at, bm25_score) = r;
+    {
+        let mut rows = stmt.query(params![fts_and_query])?;
+        while let Some(row) = rows.next()? {
+            let doc_id: i64 = row.get(0)?;
+            let page_number: i64 = row.get(1)?;
+            let doc_folder_id: Option<i64> = row.get(5)?;
 
-        let entry = doc_groups.entry(doc_id).or_insert_with(|| GroupedDoc {
-            id: doc_id,
-            filename,
-            title,
-            folder_id: doc_folder_id,
-            total_pages,
-            created_at,
-            updated_at,
-            best_bm25: bm25_score,
-            matched_all_terms: matched_doc_ids_and.contains(&doc_id),
-            all_occurrences: Vec::new(),
-        });
+            if let Some(ref allowed) = allowed_folder_ids {
+                if let Some(fid) = doc_folder_id {
+                    if !allowed.contains(&fid) {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
 
-        if bm25_score < entry.best_bm25 {
-            entry.best_bm25 = bm25_score;
+            let words_json: String = row.get(2)?;
+            let filename: String = row.get(3)?;
+            let title: String = row.get::<_, Option<String>>(4)?.unwrap_or_default();
+            let total_pages: i64 = row.get(6)?;
+            let created_at: String = row.get(7)?;
+            let updated_at: String = row.get(8)?;
+            let bm25_score: f64 = row.get(9)?;
+
+            seen_keys.insert((doc_id, page_number));
+            matched_doc_ids_and.insert(doc_id);
+            total_rows_and += 1;
+
+            let entry = doc_groups.entry(doc_id).or_insert_with(|| GroupedDoc {
+                id: doc_id,
+                filename,
+                title,
+                folder_id: doc_folder_id,
+                total_pages,
+                created_at,
+                updated_at,
+                best_bm25: bm25_score,
+                matched_all_terms: true,
+                all_occurrences: Vec::new(),
+            });
+
+            if bm25_score < entry.best_bm25 {
+                entry.best_bm25 = bm25_score;
+            }
+
+            let words_data: Vec<WordEntry> = serde_json::from_str(&words_json).unwrap_or_default();
+            let occs = find_occurrences_on_page(
+                &words_data,
+                &terms,
+                &query_hash,
+                doc_id,
+                page_number,
+                bm25_score,
+                &encoded_terms,
+                842.0,
+            );
+            entry.all_occurrences.extend(occs);
         }
+    }
 
-        let words_data: Vec<WordEntry> = serde_json::from_str(&words_json).unwrap_or_default();
-        let occs = find_occurrences_on_page(
-            &words_data,
-            &terms,
-            &query_hash,
-            doc_id,
-            page_number,
-            bm25_score,
-            &encoded_terms,
-            842.0,
-        );
+    // Fallback OR si moins de 8 résultats et plusieurs termes
+    if total_rows_and < 8 && terms.len() > 1 {
+        let mut rows = stmt.query(params![fts_or_query])?;
+        while let Some(row) = rows.next()? {
+            let doc_id: i64 = row.get(0)?;
+            let page_number: i64 = row.get(1)?;
+            let key = (doc_id, page_number);
+            if seen_keys.contains(&key) {
+                continue;
+            }
 
-        entry.all_occurrences.extend(occs);
+            let doc_folder_id: Option<i64> = row.get(5)?;
+            if let Some(ref allowed) = allowed_folder_ids {
+                if let Some(fid) = doc_folder_id {
+                    if !allowed.contains(&fid) {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
+
+            seen_keys.insert(key);
+
+            let words_json: String = row.get(2)?;
+            let filename: String = row.get(3)?;
+            let title: String = row.get::<_, Option<String>>(4)?.unwrap_or_default();
+            let total_pages: i64 = row.get(6)?;
+            let created_at: String = row.get(7)?;
+            let updated_at: String = row.get(8)?;
+            let bm25_score: f64 = row.get(9)?;
+
+            let entry = doc_groups.entry(doc_id).or_insert_with(|| GroupedDoc {
+                id: doc_id,
+                filename,
+                title,
+                folder_id: doc_folder_id,
+                total_pages,
+                created_at,
+                updated_at,
+                best_bm25: bm25_score,
+                matched_all_terms: matched_doc_ids_and.contains(&doc_id),
+                all_occurrences: Vec::new(),
+            });
+
+            if bm25_score < entry.best_bm25 {
+                entry.best_bm25 = bm25_score;
+            }
+
+            let words_data: Vec<WordEntry> = serde_json::from_str(&words_json).unwrap_or_default();
+            let occs = find_occurrences_on_page(
+                &words_data,
+                &terms,
+                &query_hash,
+                doc_id,
+                page_number,
+                bm25_score,
+                &encoded_terms,
+                842.0,
+            );
+            entry.all_occurrences.extend(occs);
+        }
+    }
+
+    if doc_groups.is_empty() {
+        return Ok(SearchResponse {
+            query: query.to_string(),
+            query_hash,
+            total_documents: 0,
+            total_occurrences: 0,
+            results: Vec::new(),
+            page: 1,
+            limit: page_size,
+            total_pages: 0,
+            has_more: false,
+        });
     }
 
     let mut final_results = Vec::new();
@@ -593,17 +617,17 @@ pub fn search_documents(
             doc_info.matched_all_terms = true;
         }
 
-        // Ruban horizontal (les 25 meilleures occurrences)
+        // Ruban horizontal (les 25 meilleures occurrences au départ, scrollable pour le reste)
         let mut relevant_ribbon = doc_info.all_occurrences.clone();
         relevant_ribbon.sort_by(|a, b| {
             b.distinct_terms_count
                 .cmp(&a.distinct_terms_count)
-                .then_with(|| a.bm25_score.partial_cmp(&b.bm25_score).unwrap())
+                .then_with(|| a.bm25_score.partial_cmp(&b.bm25_score).unwrap_or(std::cmp::Ordering::Equal))
                 .then_with(|| a.page_number.cmp(&b.page_number))
         });
         relevant_ribbon.truncate(MAX_OCCURRENCES_PER_DOC);
 
-        // Split view : toutes ordonnées chronologiquement
+        // Split view & parcours exhaustif : 100% ordonnées chronologiquement
         let mut chronological_occs = doc_info.all_occurrences;
         chronological_occs.sort_by(|a, b| {
             a.page_number.cmp(&b.page_number).then_with(|| a.occ_id.cmp(&b.occ_id))
@@ -633,7 +657,7 @@ pub fn search_documents(
         });
     }
 
-    final_results.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap());
+    final_results.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap_or(std::cmp::Ordering::Equal));
 
     let total_documents = final_results.len();
     let total_pages = if total_documents > 0 && page_size > 0 {

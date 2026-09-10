@@ -33,9 +33,21 @@ pub fn index_pdf_file(
     original_filename: &str,
     custom_title: Option<&str>,
 ) -> std::result::Result<i64, String> {
-    let file_hash = compute_file_hash(file_path).map_err(|e| e.to_string())?;
     let file_size = std::fs::metadata(file_path).map(|m| m.len() as i64).unwrap_or(0);
+    if file_size < 5 {
+        return Err(format!("Fichier PDF vide ou invalide ({} octet(s))", file_size));
+    }
 
+    let mut header = [0u8; 5];
+    if let Ok(mut f) = std::fs::File::open(file_path) {
+        if let Ok(n) = f.read(&mut header) {
+            if n < 5 || !header.starts_with(b"%PDF-") {
+                return Err("Fichier corrompu : signature %PDF- absente".to_string());
+            }
+        }
+    }
+
+    let file_hash = compute_file_hash(file_path).map_err(|e| e.to_string())?;
     let extracted = pdf_engine.extract_document_data(file_path)?;
 
     // Nettoyage et normalisation du titre
@@ -181,6 +193,12 @@ pub fn scan_and_sync_documents(
             if path.is_file() {
                 if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                     if ext.eq_ignore_ascii_case("pdf") {
+                        if let Ok(meta) = std::fs::metadata(&path) {
+                            if meta.len() < 5 {
+                                warn!("[Sync] Fichier PDF ignoré car vide (< 5 octets) : {:?}", path);
+                                continue;
+                            }
+                        }
                         if let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
                             let norm_fname: String = fname.nfc().collect();
                             if !existing_files.contains(&norm_fname) && !existing_files.contains(fname) {

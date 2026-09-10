@@ -2000,6 +2000,59 @@ document.addEventListener("DOMContentLoaded", () => {
         const walk = (x - startX) * 1.5;
         ribbon.scrollLeft = scrollLeftPos - walk;
       });
+
+      // Scroll infini horizontal : chargement transparent des occurrences suivantes au scroll vers la droite
+      if (isSearch && doc.occurrences_by_page && doc.occurrences_by_page.length > (doc.vignettes ? doc.vignettes.length : 0)) {
+        const renderedKeys = new Set((doc.vignettes || []).map(v => `${v.page_number}_${v.occ_id}`));
+        const pendingOccurrences = doc.occurrences_by_page.filter(o => !renderedKeys.has(`${o.page_number}_${o.occ_id}`));
+        let nextIndex = 0;
+        const CHUNK_SIZE = 25;
+
+        const loadMoreVignettes = () => {
+          if (nextIndex >= pendingOccurrences.length) return;
+          const chunk = pendingOccurrences.slice(nextIndex, nextIndex + CHUNK_SIZE);
+          nextIndex += CHUNK_SIZE;
+
+          const fragment = document.createDocumentFragment();
+          chunk.forEach(v => {
+            const vEl = document.createElement("div");
+            vEl.className = "vignette-item";
+            vEl.setAttribute("data-doc-id", doc.id);
+            vEl.setAttribute("data-page", v.page_number);
+            vEl.setAttribute("data-occ", v.occ_id);
+            vEl.setAttribute("data-rect", JSON.stringify((v.highlight_rects && v.highlight_rects.length > 0) ? v.highlight_rects[0] : (v.rect || [])));
+            vEl.setAttribute("data-yratio", v.y_ratio || 0);
+            vEl.setAttribute("data-snippet", encodeURIComponent(v.text_snippet || ''));
+            vEl.title = `Page ${v.page_number} - Cliquer pour ouvrir`;
+
+            vEl.innerHTML = `
+              <img src="${PLACEHOLDER_CROP_SVG}" data-src="${v.crop_url}" class="vignette-crop-img dynamic-main-crop" alt="Extrait p. ${v.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
+              <span class="vignette-page-badge">p. ${v.page_number}</span>
+            `;
+
+            vEl.addEventListener("click", () => {
+              const dPage = parseInt(vEl.getAttribute("data-page"), 10);
+              const yRatio = parseFloat(vEl.getAttribute("data-yratio") || 0);
+              let rect = null;
+              try { rect = JSON.parse(vEl.getAttribute("data-rect") || "[]"); } catch(e) {}
+              openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], rect, yRatio);
+            });
+
+            const img = vEl.querySelector(".dynamic-main-crop");
+            if (img) mainGridCropManager.observe(img);
+
+            fragment.appendChild(vEl);
+          });
+
+          ribbon.appendChild(fragment);
+        };
+
+        ribbon.addEventListener("scroll", () => {
+          if (ribbon.scrollLeft + ribbon.clientWidth >= ribbon.scrollWidth - 120) {
+            loadMoreVignettes();
+          }
+        }, { passive: true });
+      }
     }
 
     // Clics vignettes

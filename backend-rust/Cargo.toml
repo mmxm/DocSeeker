@@ -40,5 +40,5 @@ rayon = "1.10"
 opt-level = 3
 lto = "thin"
 codegen-units = 16
-strip = true
-panic = "abort"
+strip = "debuginfo"
+panic = "unwind"
