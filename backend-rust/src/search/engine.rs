@@ -79,7 +79,7 @@ struct RawMatchedWord {
     word: String,
     block_no: i64,
     line_no: i64,
-    matched_term: String,
+    matched_terms: Vec<String>,
 }
 
 pub fn find_occurrences_on_page(
@@ -148,7 +148,7 @@ pub fn find_occurrences_on_page(
                 word: word.clone(),
                 block_no,
                 line_no,
-                matched_term: matched_terms_in_word.join("+"),
+                matched_terms: matched_terms_in_word,
             });
         }
     }
@@ -190,7 +190,9 @@ pub fn find_occurrences_on_page(
         let occ_text = group.iter().map(|w| w.word.as_str()).collect::<Vec<_>>().join(" ");
         let mut distinct_terms = HashSet::new();
         for w in &group {
-            distinct_terms.insert(w.matched_term.clone());
+            for t in &w.matched_terms {
+                distinct_terms.insert(t.clone());
+            }
         }
 
         let y_ratio = if page_height > 0.0 {
