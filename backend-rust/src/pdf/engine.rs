@@ -234,7 +234,7 @@ impl PdfEngine {
         output_webp: &Path,
         highlight_rects: &[[f64; 4]],
     ) -> Result<(), String> {
-        let render_scale = 2.0;
+        let render_scale = 1.5;
 
         // Récupération de la page rendue (depuis le cache éphémère ou rendu Pdfium)
         let (page_width, page_height, mut img) = {

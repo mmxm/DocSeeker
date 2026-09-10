@@ -224,3 +224,92 @@ fn test_path_traversal_prevention() {
     assert_eq!(clean, "passwd.pdf", "La traversée de répertoire doit être éliminée");
     assert!(!clean.contains(".."));
 }
+
+// -----------------------------------------------------------------------------
+// 6. Tests Optimisations Recherche & Indexation (WordEntry, Pagination, FTS5, LRU)
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_word_entry_typed_deserialization() {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+    struct WordEntry(pub f64, pub f64, pub f64, pub f64, pub String, pub i64, pub i64);
+
+    let json_str = r#"[[10.5, 20.2, 55.8, 32.1, "recherche", 1, 3], [60.0, 20.2, 90.5, 32.1, "visuelle", 1, 3]]"#;
+    let words: Vec<WordEntry> = serde_json::from_str(json_str).expect("Désérialisation WordEntry valide");
+
+    assert_eq!(words.len(), 2);
+    assert_eq!(words[0].4, "recherche");
+    assert_eq!(words[0].0, 10.5);
+    assert_eq!(words[1].4, "visuelle");
+}
+
+#[test]
+fn test_fts5_external_content_and_prefix() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(r#"
+        CREATE TABLE pages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_id INTEGER NOT NULL,
+            page_number INTEGER NOT NULL,
+            text_content TEXT
+        );
+
+        CREATE VIRTUAL TABLE pages_fts USING fts5(
+            text_content,
+            content='pages',
+            content_rowid='id',
+            tokenize='unicode61 remove_diacritics 2',
+            prefix='2 3 4'
+        );
+
+        CREATE TRIGGER pages_ai AFTER INSERT ON pages BEGIN
+            INSERT INTO pages_fts(rowid, text_content) VALUES (new.id, new.text_content);
+        END;
+
+        CREATE TRIGGER pages_ad AFTER DELETE ON pages BEGIN
+            INSERT INTO pages_fts(pages_fts, rowid, text_content) VALUES('delete', old.id, old.text_content);
+        END;
+    "#).unwrap();
+
+    // Insertion uniquement dans la table standard 'pages'
+    conn.execute(
+        "INSERT INTO pages (doc_id, page_number, text_content) VALUES (?1, ?2, ?3)",
+        params![1, 1, "DocSeeker est un moteur de recherche ultra rapide pour vos documents."],
+    ).unwrap();
+
+    // Recherche FTS5 par préfixe 'doc*'
+    let mut stmt = conn.prepare("SELECT p.doc_id, p.page_number FROM pages_fts JOIN pages p ON p.id = pages_fts.rowid WHERE pages_fts MATCH 'doc*'").unwrap();
+    let rows: Vec<(i64, i64)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().flatten().collect();
+
+    assert_eq!(rows.len(), 1, "Le trigger doit avoir synchronisé FTS5 sans écriture manuelle");
+    assert_eq!(rows[0], (1, 1));
+
+    // Suppression dans pages
+    conn.execute("DELETE FROM pages WHERE doc_id = 1", []).unwrap();
+    let rows_after: Vec<(i64, i64)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().flatten().collect();
+    assert_eq!(rows_after.len(), 0, "Le trigger DELETE doit avoir nettoyé l'index FTS5");
+}
+
+#[test]
+fn test_search_lru_cache() {
+    use std::num::NonZeroUsize;
+    use lru::LruCache;
+
+    let mut cache: LruCache<String, String> = LruCache::new(NonZeroUsize::new(2).unwrap());
+    cache.put("key1".to_string(), "val1".to_string());
+    cache.put("key2".to_string(), "val2".to_string());
+
+    assert_eq!(cache.get("key1").map(|s| s.as_str()), Some("val1"));
+
+    // Éviction LRU
+    cache.put("key3".to_string(), "val3".to_string());
+    assert_eq!(cache.get("key2"), None, "key2 aurait dû être évincée");
+    assert_eq!(cache.get("key1").map(|s| s.as_str()), Some("val1"));
+
+    // Invalidation totale
+    cache.clear();
+    assert_eq!(cache.len(), 0);
+}
+

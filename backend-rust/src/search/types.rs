@@ -40,6 +40,14 @@ pub struct SearchResponse {
     pub total_documents: usize,
     pub total_occurrences: usize,
     pub results: Vec<DocumentSearchResult>,
+    #[serde(default)]
+    pub page: usize,
+    #[serde(default)]
+    pub limit: usize,
+    #[serde(default)]
+    pub total_pages: usize,
+    #[serde(default)]
+    pub has_more: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -49,3 +57,9 @@ pub struct DocSearchResponse {
     pub total_occurrences: usize,
     pub occurrences: Vec<OccurrenceResult>,
 }
+
+/// Élément mot extrait d'une page PDF avec ses coordonnées écran :
+/// [x0, y0, x1, y1, mot, block_no, line_no]
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct WordEntry(pub f64, pub f64, pub f64, pub f64, pub String, pub i64, pub i64);
+

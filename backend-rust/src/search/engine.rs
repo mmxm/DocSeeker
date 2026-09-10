@@ -5,7 +5,7 @@ use lazy_static::lazy_static;
 use sha2::{Digest, Sha256};
 
 use crate::db::text_norm::normalize_text;
-use super::types::{DocSearchResponse, DocumentSearchResult, OccurrenceResult, SearchResponse};
+use super::types::{DocSearchResponse, DocumentSearchResult, OccurrenceResult, SearchResponse, WordEntry};
 
 const MAX_OCCURRENCES_PER_DOC: usize = 25;
 
@@ -83,7 +83,7 @@ struct RawMatchedWord {
 }
 
 pub fn find_occurrences_on_page(
-    words_data: &[serde_json::Value],
+    words_data: &[WordEntry],
     query_terms: &[String],
     query_hash: &str,
     doc_id: i64,
@@ -104,46 +104,35 @@ pub fn find_occurrences_on_page(
 
     let mut matched_words: Vec<RawMatchedWord> = Vec::new();
 
-    // words_data format: [ [x0, y0, x1, y1, word, block_no, line_no], ... ]
+    // words_data format: WordEntry(x0, y0, x1, y1, word, block_no, line_no)
     for w in words_data {
-        if let Some(arr) = w.as_array() {
-            if arr.len() >= 7 {
-                let x0 = arr[0].as_f64().unwrap_or(0.0);
-                let y0 = arr[1].as_f64().unwrap_or(0.0);
-                let x1 = arr[2].as_f64().unwrap_or(0.0);
-                let y1 = arr[3].as_f64().unwrap_or(0.0);
-                let word = arr[4].as_str().unwrap_or("").to_string();
-                let block_no = arr[5].as_i64().unwrap_or(0);
-                let line_no = arr[6].as_i64().unwrap_or(0);
+        let WordEntry(x0, y0, x1, y1, ref word, block_no, line_no) = *w;
+        let norm_w = normalize_text(word);
+        for term in &norm_terms {
+            if match_word(&norm_w, term) {
+                // Surlignage précis de la sous-chaîne recherchée (ex: "extra" dans "extra-capillaire")
+                let (sub_x0, sub_x1) = if let Some(pos) = norm_w.find(term.as_str()) {
+                    let word_chars = norm_w.chars().count().max(1) as f64;
+                    let start_chars = norm_w[..pos].chars().count() as f64;
+                    let term_chars = term.chars().count() as f64;
+                    let total_w = (x1 - x0).max(0.0);
+                    (
+                        x0 + total_w * (start_chars / word_chars),
+                        x0 + total_w * ((start_chars + term_chars) / word_chars),
+                    )
+                } else {
+                    (x0, x1)
+                };
 
-                let norm_w = normalize_text(&word);
-                for term in &norm_terms {
-                    if match_word(&norm_w, term) {
-                        // Surlignage précis de la sous-chaîne recherchée (ex: "extra" dans "extra-capillaire")
-                        let (sub_x0, sub_x1) = if let Some(pos) = norm_w.find(term.as_str()) {
-                            let word_chars = norm_w.chars().count().max(1) as f64;
-                            let start_chars = norm_w[..pos].chars().count() as f64;
-                            let term_chars = term.chars().count() as f64;
-                            let total_w = (x1 - x0).max(0.0);
-                            (
-                                x0 + total_w * (start_chars / word_chars),
-                                x0 + total_w * ((start_chars + term_chars) / word_chars),
-                            )
-                        } else {
-                            (x0, x1)
-                        };
-
-                        matched_words.push(RawMatchedWord {
-                            rect: [x0, y0, x1, y1],
-                            highlight_rect: [sub_x0, y0, sub_x1, y1],
-                            word,
-                            block_no,
-                            line_no,
-                            matched_term: term.clone(),
-                        });
-                        break;
-                    }
-                }
+                matched_words.push(RawMatchedWord {
+                    rect: [x0, y0, x1, y1],
+                    highlight_rect: [sub_x0, y0, sub_x1, y1],
+                    word: word.clone(),
+                    block_no,
+                    line_no,
+                    matched_term: term.clone(),
+                });
+                break;
             }
         }
     }
@@ -266,8 +255,13 @@ pub fn search_titles(
     conn: &Connection,
     query: &str,
     folder_id: Option<i64>,
+    limit: Option<usize>,
+    offset: Option<usize>,
 ) -> Result<SearchResponse> {
     let terms = sanitize_fts_query(query);
+    let page_size = limit.unwrap_or(15);
+    let current_offset = offset.unwrap_or(0);
+
     if terms.is_empty() {
         return Ok(SearchResponse {
             query: query.to_string(),
@@ -275,6 +269,10 @@ pub fn search_titles(
             total_documents: 0,
             total_occurrences: 0,
             results: Vec::new(),
+            page: 1,
+            limit: page_size,
+            total_pages: 0,
+            has_more: false,
         });
     }
 
@@ -347,12 +345,31 @@ pub fn search_titles(
 
     results.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap());
 
+    let total_documents = results.len();
+    let total_pages = if total_documents > 0 && page_size > 0 {
+        total_documents.div_ceil(page_size)
+    } else {
+        0
+    };
+    let has_more = current_offset + page_size < total_documents;
+    let page = if page_size > 0 { (current_offset / page_size) + 1 } else { 1 };
+
+    let paged_results = if current_offset < total_documents {
+        results.into_iter().skip(current_offset).take(page_size).collect()
+    } else {
+        Vec::new()
+    };
+
     Ok(SearchResponse {
         query: query.to_string(),
         query_hash: get_query_hash(&terms),
-        total_documents: results.len(),
+        total_documents,
         total_occurrences: 0,
-        results,
+        results: paged_results,
+        page,
+        limit: page_size,
+        total_pages,
+        has_more,
     })
 }
 
@@ -361,12 +378,17 @@ pub fn search_documents(
     query: &str,
     titles_only: bool,
     folder_id: Option<i64>,
+    limit: Option<usize>,
+    offset: Option<usize>,
 ) -> Result<SearchResponse> {
     if titles_only {
-        return search_titles(conn, query, folder_id);
+        return search_titles(conn, query, folder_id, limit, offset);
     }
 
     let terms = sanitize_fts_query(query);
+    let page_size = limit.unwrap_or(15);
+    let current_offset = offset.unwrap_or(0);
+
     if terms.is_empty() {
         return Ok(SearchResponse {
             query: query.to_string(),
@@ -374,6 +396,10 @@ pub fn search_documents(
             total_documents: 0,
             total_occurrences: 0,
             results: Vec::new(),
+            page: 1,
+            limit: page_size,
+            total_pages: 0,
+            has_more: false,
         });
     }
 
@@ -409,7 +435,7 @@ pub fn search_documents(
             COALESCE(d.updated_at, d.created_at) as updated_at,
             bm25(pages_fts) as bm25_score
         FROM pages_fts
-        JOIN pages p ON p.doc_id = pages_fts.doc_id AND p.page_number = pages_fts.page_number
+        JOIN pages p ON p.id = pages_fts.rowid
         JOIN documents d ON d.id = p.doc_id
         WHERE pages_fts MATCH ?1
         ORDER BY bm25_score ASC;
@@ -493,6 +519,10 @@ pub fn search_documents(
             total_documents: 0,
             total_occurrences: 0,
             results: Vec::new(),
+            page: 1,
+            limit: page_size,
+            total_pages: 0,
+            has_more: false,
         });
     }
 
@@ -531,7 +561,7 @@ pub fn search_documents(
             entry.best_bm25 = bm25_score;
         }
 
-        let words_data: Vec<serde_json::Value> = serde_json::from_str(&words_json).unwrap_or_default();
+        let words_data: Vec<WordEntry> = serde_json::from_str(&words_json).unwrap_or_default();
         let occs = find_occurrences_on_page(
             &words_data,
             &terms,
@@ -605,12 +635,31 @@ pub fn search_documents(
 
     final_results.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap());
 
+    let total_documents = final_results.len();
+    let total_pages = if total_documents > 0 && page_size > 0 {
+        total_documents.div_ceil(page_size)
+    } else {
+        0
+    };
+    let has_more = current_offset + page_size < total_documents;
+    let page = if page_size > 0 { (current_offset / page_size) + 1 } else { 1 };
+
+    let paged_results = if current_offset < total_documents {
+        final_results.into_iter().skip(current_offset).take(page_size).collect()
+    } else {
+        Vec::new()
+    };
+
     Ok(SearchResponse {
         query: query.to_string(),
         query_hash,
-        total_documents: final_results.len(),
+        total_documents,
         total_occurrences: total_matches_count,
-        results: final_results,
+        results: paged_results,
+        page,
+        limit: page_size,
+        total_pages,
+        has_more,
     })
 }
 
@@ -643,8 +692,8 @@ pub fn search_within_document(
             p.words_json,
             bm25(pages_fts) as bm25_score
         FROM pages_fts
-        JOIN pages p ON p.doc_id = pages_fts.doc_id AND p.page_number = pages_fts.page_number
-        WHERE pages_fts.doc_id = ?1 AND pages_fts MATCH ?2
+        JOIN pages p ON p.id = pages_fts.rowid
+        WHERE p.doc_id = ?1 AND pages_fts MATCH ?2
         ORDER BY p.page_number ASC;
     "#;
 
@@ -660,7 +709,7 @@ pub fn search_within_document(
     let mut occurrences = Vec::new();
     for r in rows.flatten() {
         let (page_number, words_json, bm25_score) = r;
-        let words_data: Vec<serde_json::Value> = serde_json::from_str(&words_json).unwrap_or_default();
+        let words_data: Vec<WordEntry> = serde_json::from_str(&words_json).unwrap_or_default();
         let occs = find_occurrences_on_page(
             &words_data,
             &terms,

@@ -44,11 +44,26 @@ CREATE TABLE IF NOT EXISTS pages (
 
 pub const CREATE_FTS5_TABLE: &str = r#"
 CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
-    doc_id UNINDEXED,
-    page_number UNINDEXED,
     text_content,
-    tokenize='unicode61 remove_diacritics 2'
+    content='pages',
+    content_rowid='id',
+    tokenize='unicode61 remove_diacritics 2',
+    prefix='2 3 4'
 );
+
+-- Triggers pour synchronisation automatique et atomique de pages_fts avec pages
+CREATE TRIGGER IF NOT EXISTS pages_ai AFTER INSERT ON pages BEGIN
+    INSERT INTO pages_fts(rowid, text_content) VALUES (new.id, new.text_content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS pages_ad AFTER DELETE ON pages BEGIN
+    INSERT INTO pages_fts(pages_fts, rowid, text_content) VALUES('delete', old.id, old.text_content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
+    INSERT INTO pages_fts(pages_fts, rowid, text_content) VALUES('delete', old.id, old.text_content);
+    INSERT INTO pages_fts(rowid, text_content) VALUES (new.id, new.text_content);
+END;
 "#;
 
 pub const CREATE_ANNOTATIONS_TABLE: &str = r#"

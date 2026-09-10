@@ -217,6 +217,7 @@ document.addEventListener("DOMContentLoaded", () => {
       this.debounceMs = debounceMs;
       this.activeRequests = new Map(); // img element -> AbortController
       this.pendingDebounce = new Map(); // img element -> timerId
+      this.createdBlobUrls = new Set();
       this.observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
           const img = entry.target;
@@ -278,6 +279,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (res.ok) {
           const blob = await res.blob();
           const blobUrl = URL.createObjectURL(blob);
+          this.createdBlobUrls.add(blobUrl);
           img.src = blobUrl;
           img.dataset.loaded = "true";
           img.style.opacity = "1";
@@ -305,6 +307,10 @@ document.addEventListener("DOMContentLoaded", () => {
         controller.abort();
       }
       this.activeRequests.clear();
+      for (const url of this.createdBlobUrls) {
+        URL.revokeObjectURL(url);
+      }
+      this.createdBlobUrls.clear();
     }
   }
 
@@ -2070,7 +2076,7 @@ document.addEventListener("DOMContentLoaded", () => {
     resultsContainer.innerHTML = `<div style="padding: 16px; color: var(--text-muted);">Recherche en cours...</div>`;
 
     try {
-      let url = `/api/search?q=${encodeURIComponent(query)}`;
+      let url = `/api/search?q=${encodeURIComponent(query)}&limit=15&offset=0`;
       if (isTitlesOnly) url += `&titles_only=true`;
       if (isFolderOnly) url += `&folder_id=${currentFolderId}`;
 
@@ -2091,6 +2097,61 @@ document.addEventListener("DOMContentLoaded", () => {
       console.error("Erreur recherche:", err);
       resultsContainer.innerHTML = `<div style="padding: 16px; color: var(--danger);">Erreur lors de la recherche.</div>`;
     }
+  }
+
+  let searchPaginationObserver = null;
+  let isFetchingNextSearchPage = false;
+
+  async function fetchNextSearchPage() {
+    if (isFetchingNextSearchPage || !lastSearchResultsData || !lastSearchResultsData.has_more) return;
+    isFetchingNextSearchPage = true;
+
+    const query = currentSearchQuery;
+    const isTitlesOnly = filterTitlesOnly.checked;
+    const isFolderOnly = filterCurrentFolderOnly.checked && currentFolderId !== null;
+    const offset = currentLoadedDocs.length;
+
+    try {
+      let url = `/api/search?q=${encodeURIComponent(query)}&limit=15&offset=${offset}`;
+      if (isTitlesOnly) url += `&titles_only=true`;
+      if (isFolderOnly) url += `&folder_id=${currentFolderId}`;
+
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data && data.results && data.results.length > 0) {
+        lastSearchResultsData.has_more = data.has_more;
+        lastSearchResultsData.results = (lastSearchResultsData.results || []).concat(data.results);
+        appendSearchResults(data);
+      } else {
+        lastSearchResultsData.has_more = false;
+        const sentinel = document.getElementById("search-scroll-sentinel");
+        if (sentinel) sentinel.remove();
+      }
+    } catch (err) {
+      console.error("Erreur chargement page suivante recherche:", err);
+    } finally {
+      isFetchingNextSearchPage = false;
+    }
+  }
+
+  function appendSearchResults(data) {
+    const sentinel = document.getElementById("search-scroll-sentinel");
+    const rawResults = data.results || [];
+    currentLoadedDocs = currentLoadedDocs.concat(rawResults);
+
+    rawResults.forEach(doc => {
+      const card = createDocCardElement(doc, true);
+      if (sentinel && sentinel.parentNode === resultsContainer) {
+        resultsContainer.insertBefore(card, sentinel);
+      } else {
+        resultsContainer.appendChild(card);
+      }
+    });
+
+    if (!data.has_more && sentinel) {
+      sentinel.remove();
+    }
+    updateSelectionUI();
   }
 
   function renderSearchResults(data) {
@@ -2123,6 +2184,27 @@ document.addEventListener("DOMContentLoaded", () => {
       const card = createDocCardElement(doc, true);
       resultsContainer.appendChild(card);
     });
+
+    // Configuration de l'IntersectionObserver pour le scroll infini des résultats
+    if (searchPaginationObserver) {
+      searchPaginationObserver.disconnect();
+    }
+
+    if (data.has_more) {
+      const sentinel = document.createElement("div");
+      sentinel.id = "search-scroll-sentinel";
+      sentinel.style.cssText = "height: 40px; width: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 13px;";
+      sentinel.innerHTML = `<span style="opacity: 0.7;">Chargement de résultats supplémentaires...</span>`;
+      resultsContainer.appendChild(sentinel);
+
+      searchPaginationObserver = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+          fetchNextSearchPage();
+        }
+      }, { rootMargin: "300px 0px" });
+
+      searchPaginationObserver.observe(sentinel);
+    }
 
     updateSelectionUI();
   }

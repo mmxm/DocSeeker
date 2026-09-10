@@ -27,6 +27,10 @@ use crate::pipeline::IndexingPipeline;
 use crate::routes::create_api_router;
 use crate::static_files::static_handler;
 
+use std::num::NonZeroUsize;
+use lru::LruCache;
+use crate::search::types::SearchResponse;
+
 pub struct AppState {
     pub config: Config,
     pub db: Arc<Mutex<Connection>>,
@@ -34,6 +38,7 @@ pub struct AppState {
     pub pipeline: Arc<IndexingPipeline>,
     pub rate_limiter: Arc<LoginRateLimiter>,
     pub crop_semaphore: Arc<tokio::sync::Semaphore>,
+    pub search_cache: Arc<Mutex<LruCache<String, SearchResponse>>>,
 }
 
 #[tokio::main]
@@ -136,6 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rate_limiter = Arc::new(LoginRateLimiter::new());
     let crop_semaphore = Arc::new(tokio::sync::Semaphore::new(2));
+    let search_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(100).unwrap())));
 
     let state = Arc::new(AppState {
         config: config.clone(),
@@ -144,6 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pipeline,
         rate_limiter,
         crop_semaphore,
+        search_cache,
     });
 
     // En-têtes HTTP de sécurité stricts (OWASP Top 10 - remplace Caddyfile)

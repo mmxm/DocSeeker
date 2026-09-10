@@ -72,7 +72,6 @@ pub fn index_pdf_file(
 
     let doc_id = if let Some(id) = existing_id {
         conn.execute("DELETE FROM pages WHERE doc_id = ?1", params![id]).map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM pages_fts WHERE doc_id = ?1", params![id]).map_err(|e| e.to_string())?;
         conn.execute(
             "UPDATE documents SET title = ?1, file_hash = ?2, total_pages = ?3, file_size = ?4, status = 'ready', error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?5",
             params![title, file_hash, extracted.total_pages, file_size, id],
@@ -94,24 +93,16 @@ pub fn index_pdf_file(
         }
     }
 
-    // Insérer les pages et FTS5 dans une transaction
+    // Insérer les pages dans une transaction (le trigger pages_ai indexe automatiquement dans pages_fts)
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     {
         let mut insert_page = tx
             .prepare("INSERT INTO pages (doc_id, page_number, text_content, words_json) VALUES (?1, ?2, ?3, ?4)")
             .map_err(|e| e.to_string())?;
 
-        let mut insert_fts = tx
-            .prepare("INSERT INTO pages_fts (doc_id, page_number, text_content) VALUES (?1, ?2, ?3)")
-            .map_err(|e| e.to_string())?;
-
         for p in extracted.pages {
             insert_page
                 .execute(params![doc_id, p.page_number, p.text_content, p.words_json])
-                .map_err(|e| e.to_string())?;
-
-            insert_fts
-                .execute(params![doc_id, p.page_number, p.text_content])
                 .map_err(|e| e.to_string())?;
         }
     }
@@ -131,8 +122,8 @@ pub fn remove_document(conn: &Connection, config: &Config, doc_id: i64) -> Resul
         None => return Ok(false),
     };
 
+    // La suppression dans pages déclenche automatiquement le trigger pages_ad pour pages_fts
     conn.execute("DELETE FROM pages WHERE doc_id = ?1", params![doc_id]).map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM pages_fts WHERE doc_id = ?1", params![doc_id]).map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM documents WHERE id = ?1", params![doc_id]).map_err(|e| e.to_string())?;
 
     // Supprimer le fichier PDF
@@ -159,6 +150,8 @@ pub fn scan_and_sync_documents(
     pdf_engine: &PdfEngine,
     config: &Config,
 ) -> (usize, Vec<String>) {
+    use rayon::prelude::*;
+
     if !config.documents_dir.exists() {
         std::fs::create_dir_all(&config.documents_dir).ok();
         return (0, Vec::new());
@@ -181,7 +174,7 @@ pub fn scan_and_sync_documents(
         }
     }
 
-    let mut added = Vec::new();
+    let mut candidate_paths = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&config.documents_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -191,23 +184,34 @@ pub fn scan_and_sync_documents(
                         if let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
                             let norm_fname: String = fname.nfc().collect();
                             if !existing_files.contains(&norm_fname) && !existing_files.contains(fname) {
-                                if let Ok(fhash) = compute_file_hash(&path) {
-                                    if !existing_hashes.contains(&fhash) {
-                                        match index_pdf_file(conn, pdf_engine, config, &path, &norm_fname, None) {
-                                            Ok(_) => {
-                                                existing_files.insert(norm_fname.clone());
-                                                existing_hashes.insert(fhash);
-                                                added.push(norm_fname);
-                                            }
-                                            Err(e) => {
-                                                error!("[Sync] Échec indexation {}: {}", fname, e);
-                                            }
-                                        }
-                                    }
-                                }
+                                candidate_paths.push((path, norm_fname));
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // Calcul multi-cœurs des hashs SHA256 avec Rayon
+    let candidates_with_hashes: Vec<_> = candidate_paths
+        .into_par_iter()
+        .filter_map(|(path, norm_fname)| {
+            compute_file_hash(&path).ok().map(|hash| (path, norm_fname, hash))
+        })
+        .collect();
+
+    let mut added = Vec::new();
+    for (path, norm_fname, fhash) in candidates_with_hashes {
+        if !existing_hashes.contains(&fhash) {
+            match index_pdf_file(conn, pdf_engine, config, &path, &norm_fname, None) {
+                Ok(_) => {
+                    existing_files.insert(norm_fname.clone());
+                    existing_hashes.insert(fhash);
+                    added.push(norm_fname);
+                }
+                Err(e) => {
+                    error!("[Sync] Échec indexation {}: {}", norm_fname, e);
                 }
             }
         }

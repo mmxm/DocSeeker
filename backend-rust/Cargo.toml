@@ -33,6 +33,8 @@ governor = "0.6"
 urlencoding = "2.1"
 futures-util = "0.3"
 tempfile = "3.17"
+lru = "0.12"
+rayon = "1.10"
 
 [profile.release]
 opt-level = 3

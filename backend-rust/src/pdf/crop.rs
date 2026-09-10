@@ -5,6 +5,7 @@ use tracing::warn;
 
 use crate::config::Config;
 use crate::search::engine::find_occurrences_on_page;
+use crate::search::types::WordEntry;
 use super::engine::PdfEngine;
 
 lazy_static! {
@@ -60,7 +61,7 @@ pub fn generate_crops_for_page(
         return None;
     }
 
-    let words_data: Vec<serde_json::Value> = serde_json::from_str(words_json).unwrap_or_default();
+    let words_data: Vec<WordEntry> = serde_json::from_str(words_json).unwrap_or_default();
     let terms: Vec<String> = terms_str
         .split(',')
         .map(|s| s.trim().to_string())

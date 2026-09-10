@@ -20,14 +20,45 @@ pub struct CropQueryParams {
     pub terms: Option<String>,
 }
 
-/// Helper pour servir un fichier statique avec en-têtes de cache immutables
-async fn serve_file_cache(path: &std::path::Path, content_type: &'static str) -> Response {
+/// Helper pour servir un fichier statique avec ETag et en-têtes de cache immutables
+async fn serve_file_cache(
+    path: &std::path::Path,
+    content_type: &'static str,
+    if_none_match: Option<&str>,
+) -> Response {
+    let meta = match tokio::fs::metadata(path).await {
+        Ok(m) => m,
+        Err(_) => return (StatusCode::NOT_FOUND, "Fichier introuvable").into_response(),
+    };
+
+    let file_len = meta.len();
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let etag = format!("\"w-{}-{}\"", file_len, mtime);
+
+    if let Some(req_etag) = if_none_match {
+        if req_etag == etag {
+            return Response::builder()
+                .status(StatusCode::NOT_MODIFIED)
+                .header(header::ETAG, etag)
+                .header(header::CACHE_CONTROL, "public, max-age=604800, immutable")
+                .body(Body::empty())
+                .unwrap_or_else(|_| (StatusCode::NOT_MODIFIED, "").into_response());
+        }
+    }
+
     match tokio::fs::read(path).await {
         Ok(bytes) => (
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, content_type),
                 (header::CACHE_CONTROL, "public, max-age=604800, immutable"),
+                (header::ETAG, &etag),
             ],
             bytes,
         ).into_response(),
@@ -39,23 +70,15 @@ async fn serve_file_cache(path: &std::path::Path, content_type: &'static str) ->
 pub async fn get_cover(
     State(state): State<Arc<AppState>>,
     Path(doc_id): Path<i64>,
+    headers: HeaderMap,
 ) -> Response {
     let cover_webp = state.config.covers_dir.join(format!("{}.webp", doc_id));
     if !cover_webp.exists() {
         return (StatusCode::NOT_FOUND, "Couverture introuvable").into_response();
     }
 
-    match tokio::fs::read(&cover_webp).await {
-        Ok(bytes) => (
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, "image/webp"),
-                (header::CACHE_CONTROL, "public, max-age=86400"),
-            ],
-            bytes,
-        ).into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "Fichier introuvable").into_response(),
-    }
+    let if_none_match = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
+    serve_file_cache(&cover_webp, "image/webp", if_none_match).await
 }
 
 /// GET /api/crop/{doc_id}/{page}/{occ_id}
@@ -63,14 +86,16 @@ pub async fn get_crop(
     State(state): State<Arc<AppState>>,
     Path((doc_id, page, occ_id)): Path<(i64, i64, usize)>,
     Query(params): Query<CropQueryParams>,
+    headers: HeaderMap,
 ) -> Response {
     let query_hash = params.h.unwrap_or_default();
     let terms = params.terms.unwrap_or_default();
+    let if_none_match = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
 
     // 1. FAST-PATH: Servir immédiatement si déjà sur disque sans toucher SQLite ni le sémaphore
     let webp_path = compute_crop_path(&state.config, doc_id, page, occ_id, &query_hash);
     if webp_path.exists() {
-        return serve_file_cache(&webp_path, "image/webp").await;
+        return serve_file_cache(&webp_path, "image/webp", if_none_match).await;
     }
 
     // 2. Récupération des données en base avec libération IMMÉDIATE du verrou SQLite
@@ -105,7 +130,7 @@ pub async fn get_crop(
     // Vérification rapide post-sémaphore : un autre thread a pu générer le lot pour cette page entre temps
     if webp_path.exists() {
         drop(permit);
-        return serve_file_cache(&webp_path, "image/webp").await;
+        return serve_file_cache(&webp_path, "image/webp", if_none_match).await;
     }
 
     let state_clone = Arc::clone(&state);
@@ -132,7 +157,7 @@ pub async fn get_crop(
         _ => return (StatusCode::NOT_FOUND, "Vignette introuvable").into_response(),
     };
 
-    serve_file_cache(&path, "image/webp").await
+    serve_file_cache(&path, "image/webp", if_none_match).await
 }
 
 
@@ -184,7 +209,7 @@ pub async fn get_pdf(
         // Ex: "bytes=0-1024" ou "bytes=500-"
         if let Some(spec) = range_str.strip_prefix("bytes=") {
             let parts: Vec<&str> = spec.split('-').collect();
-            let start = parts.get(0).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+            let start = parts.first().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
             let end = parts
                 .get(1)
                 .and_then(|s| s.parse::<u64>().ok())
@@ -199,7 +224,7 @@ pub async fn get_pdf(
                     Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Impossible d'ouvrir le fichier").into_response(),
                 };
 
-                if let Err(_) = file.seek(SeekFrom::Start(start)).await {
+                if file.seek(SeekFrom::Start(start)).await.is_err() {
                     return (StatusCode::RANGE_NOT_SATISFIABLE, "Range invalide").into_response();
                 }
 

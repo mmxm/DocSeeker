@@ -212,7 +212,12 @@ pub async fn delete_document_handler(
     })?;
 
     match remove_document(&conn, &state.config, doc_id) {
-        Ok(true) => Ok(Json(serde_json::json!({"status": "ok", "deleted_id": doc_id}))),
+        Ok(true) => {
+            if let Ok(mut cache) = state.search_cache.lock() {
+                cache.clear();
+            }
+            Ok(Json(serde_json::json!({"status": "ok", "deleted_id": doc_id})))
+        }
         Ok(false) => Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Document introuvable"}))).into_response()),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response()),
     }
@@ -391,6 +396,9 @@ pub async fn reindex_document(
     Path(doc_id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, Response> {
     state.pipeline.enqueue(doc_id);
+    if let Ok(mut cache) = state.search_cache.lock() {
+        cache.clear();
+    }
     Ok(Json(serde_json::json!({"status": "queued", "doc_id": doc_id})))
 }
 
@@ -401,7 +409,13 @@ pub async fn sync_documents_handler(
         let conn = state.db.lock().map_err(|_| {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
         })?;
-        scan_and_sync_documents(&conn, &state.pdf_engine, &state.config)
+        let (added_count, added_files) = scan_and_sync_documents(&conn, &state.pdf_engine, &state.config);
+        if added_count > 0 {
+            if let Ok(mut cache) = state.search_cache.lock() {
+                cache.clear();
+            }
+        }
+        (added_count, added_files)
     };
 
     Ok(Json(serde_json::json!({

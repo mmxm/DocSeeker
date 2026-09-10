@@ -32,8 +32,42 @@ pub fn init_db(db_path: &Path) -> Result<()> {
     conn.execute_batch(schema::CREATE_DOCUMENTS_TABLE)?;
     info!("Init table pages...");
     conn.execute_batch(schema::CREATE_PAGES_TABLE)?;
-    info!("Init table pages_fts...");
+
+    // Migration FTS5 idempotente : vérifie si pages_fts utilise déjà le mode external content
+    let fts_sql: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'pages_fts'",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+
+    let needs_fts_migration = match fts_sql {
+        Some(sql) => !sql.contains("content='pages'") || !sql.contains("prefix='2 3 4'"),
+        None => false,
+    };
+
+    if needs_fts_migration {
+        info!("Migration de la table pages_fts vers FTS5 External Content & Préfixes 2,3,4...");
+        let _ = conn.execute_batch("
+            DROP TRIGGER IF EXISTS pages_ai;
+            DROP TRIGGER IF EXISTS pages_ad;
+            DROP TRIGGER IF EXISTS pages_au;
+            DROP TABLE IF EXISTS pages_fts;
+        ");
+    }
+
+    info!("Init table pages_fts & triggers...");
     conn.execute_batch(schema::CREATE_FTS5_TABLE)?;
+
+    if needs_fts_migration {
+        info!("Reconstruction de l'index inversé FTS5 depuis la table pages...");
+        let count: i64 = conn.query_row("SELECT count(*) FROM pages", [], |r| r.get(0)).unwrap_or(0);
+        if count > 0 {
+            conn.execute_batch("INSERT INTO pages_fts(rowid, text_content) SELECT id, text_content FROM pages;")?;
+            info!("Index FTS5 reconstruit avec succès pour {} pages.", count);
+        }
+    }
     info!("Init table annotations...");
     conn.execute_batch(schema::CREATE_ANNOTATIONS_TABLE)?;
     info!("Init table auth...");
