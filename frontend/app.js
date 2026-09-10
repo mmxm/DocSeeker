@@ -1653,7 +1653,7 @@ document.addEventListener("DOMContentLoaded", () => {
         copy.sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
         break;
       case "relevance":
-        copy.sort((a, b) => (b.total_occurrences || 0) - (a.total_occurrences || 0));
+        copy.sort((a, b) => (b.relevance_score ?? b.total_occurrences ?? 0) - (a.relevance_score ?? a.total_occurrences ?? 0));
         break;
       default:
         break;
@@ -1668,7 +1668,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!relOpt) {
         relOpt = document.createElement("option");
         relOpt.value = "relevance";
-        relOpt.textContent = "Pertinence (Occurrences)";
+        relOpt.textContent = "Pertinence";
         sortSelect.insertBefore(relOpt, sortSelect.firstChild);
       }
     } else {

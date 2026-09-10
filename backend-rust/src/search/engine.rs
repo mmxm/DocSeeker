@@ -645,18 +645,79 @@ pub fn search_documents(
         });
         relevant_ribbon.truncate(MAX_OCCURRENCES_PER_DOC);
 
+        let mut relevance_score = 0.0;
+
+        if terms.len() > 1 {
+            // 1. Couverture globale de tous les termes dans le document
+            if doc_info.matched_all_terms {
+                relevance_score += 1000.0;
+            }
+
+            // 2. Proximité immédiate (au sein d'une même phrase / occurrence continue)
+            let max_distinct_in_single_occ = doc_info
+                .all_occurrences
+                .iter()
+                .map(|o| o.distinct_terms_count)
+                .max()
+                .unwrap_or(0);
+
+            if max_distinct_in_single_occ >= terms.len() {
+                // Phrase exacte ou tous les termes collés ensemble : bonus maximal
+                relevance_score += 5000.0;
+            } else if max_distinct_in_single_occ >= 2 {
+                relevance_score += (max_distinct_in_single_occ as f64 / terms.len() as f64) * 2000.0;
+            }
+
+            let multi_term_occs = doc_info
+                .all_occurrences
+                .iter()
+                .filter(|o| o.distinct_terms_count >= 2)
+                .count();
+            relevance_score += (multi_term_occs as f64 * 50.0).min(500.0);
+
+            // 3. Proximité à la page (mots regroupés dans le même paragraphe / même page)
+            let mut page_terms_map: HashMap<i64, HashSet<String>> = HashMap::new();
+            for o in &doc_info.all_occurrences {
+                let entry = page_terms_map.entry(o.page_number).or_default();
+                for mt in &o.matched_terms {
+                    entry.insert(mt.clone());
+                }
+            }
+
+            let max_distinct_on_same_page = page_terms_map
+                .values()
+                .map(|s| s.len())
+                .max()
+                .unwrap_or(0);
+
+            if max_distinct_on_same_page >= terms.len() {
+                // Tous les termes de la recherche réunis sur une même page
+                relevance_score += 2500.0;
+            } else if max_distinct_on_same_page >= 2 {
+                relevance_score += (max_distinct_on_same_page as f64 / terms.len() as f64) * 1000.0;
+            }
+
+            let full_coverage_pages = page_terms_map
+                .values()
+                .filter(|s| s.len() >= terms.len())
+                .count();
+            relevance_score += (full_coverage_pages as f64 * 100.0).min(1000.0);
+        } else {
+            // Recherche mono-terme : pertinence classique
+            if !doc_info.all_occurrences.is_empty() {
+                relevance_score += 500.0;
+            }
+        }
+
+        // 4. Volume d'occurrences et score statistique BM25
+        relevance_score += (total_doc_occs as f64 * 5.0).min(300.0);
+        relevance_score += doc_info.best_bm25.abs() * 50.0;
+
         // Split view & parcours exhaustif : 100% ordonnées chronologiquement
         let mut chronological_occs = doc_info.all_occurrences;
         chronological_occs.sort_by(|a, b| {
             a.page_number.cmp(&b.page_number).then_with(|| a.occ_id.cmp(&b.occ_id))
         });
-
-        let mut relevance_score = 0.0;
-        if doc_info.matched_all_terms {
-            relevance_score += 1000.0;
-        }
-        relevance_score += total_doc_occs as f64 * 10.0;
-        relevance_score += doc_info.best_bm25.abs() * 100.0;
 
         final_results.push(DocumentSearchResult {
             id: doc_info.id,
