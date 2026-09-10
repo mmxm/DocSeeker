@@ -418,9 +418,6 @@ class PdfCacheManager {
       // Si nous avons déjà téléchargé une partie, demander uniquement la suite !
       if (meta.downloadedBytes > 0) {
         headers["Range"] = `bytes=${meta.downloadedBytes}-`;
-        if (meta.etag) {
-          headers["If-Range"] = meta.etag;
-        }
       }
 
       this._notifyProgress(id, {

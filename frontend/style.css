@@ -543,9 +543,27 @@ body.light-theme {
 }
 
 .viewer-cache-badge.downloading {
-  background: #f1f5f9;
+  background: #eff6ff;
   color: #2563eb;
-  border: 1px solid #cbd5e1;
+  border: 1px solid #bfdbfe;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.viewer-cache-badge.downloading::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2563eb;
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.2); }
 }
 
 .viewer-cache-badge.complete {

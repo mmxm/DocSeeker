@@ -2103,17 +2103,6 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    // Clics vignettes
-    card.querySelectorAll(".vignette-item").forEach(vEl => {
-      vEl.addEventListener("click", () => {
-        const dPage = parseInt(vEl.getAttribute("data-page"), 10);
-        const yRatio = parseFloat(vEl.getAttribute("data-yratio") || 0);
-        let rect = null;
-        try { rect = JSON.parse(vEl.getAttribute("data-rect") || "[]"); } catch(e) {}
-        openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], rect, yRatio);
-      });
-    });
-
     // Observer pour le chargement prioritaire dynamique avec annulation au défilement
     card.querySelectorAll(".dynamic-main-crop").forEach(img => mainGridCropManager.observe(img));
 
@@ -3037,11 +3026,12 @@ document.addEventListener("DOMContentLoaded", () => {
   // Split View & Lecteur PDF
   // =========================================================================
   function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0) {
-    const isSameDoc = (currentActiveDocId === docId);
+    const numericDocId = Number(docId);
+    const isSameDoc = (Number(currentActiveDocId) === numericDocId);
     if (!isSameDoc && currentActiveDocId && window.pdfCacheManager) {
       window.pdfCacheManager.pauseDownload(currentActiveDocId);
     }
-    currentActiveDocId = docId;
+    currentActiveDocId = numericDocId;
     currentActiveDocTitle = docTitle;
     currentDocOriginalOccurrences = occurrences;
 
@@ -3081,7 +3071,7 @@ document.addEventListener("DOMContentLoaded", () => {
     docDetailTitle.textContent = docTitle;
     docDetailCount.textContent = `${occurrences.length} occurrence${occurrences.length > 1 ? 's' : ''} dans ce document`;
 
-    renderVerticalOccurrences(docId, docTitle, occurrences, targetPage);
+    renderVerticalOccurrences(numericDocId, docTitle, occurrences, targetPage);
 
     // Synchronisation du tiroir mobile d'extraits
     if (mobileOccurrencesCountText) {
@@ -3093,13 +3083,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (drawerDocCount) {
       drawerDocCount.textContent = `${occurrences.length} extrait${occurrences.length > 1 ? 's' : ''}`;
     }
-    renderDrawerOccurrences(docId, docTitle, occurrences, targetPage);
+    renderDrawerOccurrences(numericDocId, docTitle, occurrences, targetPage);
 
     viewerDocTitle.textContent = docTitle;
     viewerPageBadge.textContent = `Page ${targetPage}`;
 
     const viewerCacheBadge = document.getElementById("viewerCacheBadge");
-    const updateCacheUI = (status, progress) => {
+    const updateCacheUI = (status, progress, downloadedBytes = 0, totalBytes = 0) => {
       if (!viewerCacheBadge) return;
       if (status === "complete") {
         viewerCacheBadge.style.display = "inline-flex";
@@ -3109,8 +3099,15 @@ document.addEventListener("DOMContentLoaded", () => {
       } else if (status === "downloading" && progress > 0) {
         viewerCacheBadge.style.display = "inline-flex";
         viewerCacheBadge.className = "viewer-doc-badge viewer-cache-badge downloading";
-        viewerCacheBadge.textContent = `📥 ${progress}%`;
-        viewerCacheBadge.title = `Mise en cache hors-ligne : ${progress}%`;
+        const mbDl = downloadedBytes > 0 ? (downloadedBytes / (1024 * 1024)).toFixed(1) : null;
+        const mbTot = totalBytes > 0 ? (totalBytes / (1024 * 1024)).toFixed(0) : null;
+        if (mbDl && mbTot) {
+          viewerCacheBadge.textContent = `📥 ${progress}% (${mbDl}/${mbTot} Mo)`;
+          viewerCacheBadge.title = `Mise en cache hors-ligne : ${mbDl} Mo sur ${mbTot} Mo (${progress}%) - Lecture fluide disponible`;
+        } else {
+          viewerCacheBadge.textContent = `📥 ${progress}%`;
+          viewerCacheBadge.title = `Mise en cache hors-ligne : ${progress}% - Lecture fluide disponible`;
+        }
       } else {
         viewerCacheBadge.style.display = "none";
       }
@@ -3125,9 +3122,9 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     if (window.pdfCacheManager) {
-      window.pdfCacheManager.onProgress(docId, (info) => {
-        if (currentActiveDocId === docId) {
-          updateCacheUI(info.status, info.progress);
+      window.pdfCacheManager.onProgress(numericDocId, (info) => {
+        if (Number(currentActiveDocId) === numericDocId) {
+          updateCacheUI(info.status, info.progress, info.downloadedBytes, info.totalBytes);
         }
       });
     }
@@ -3136,21 +3133,30 @@ document.addEventListener("DOMContentLoaded", () => {
       goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
       hookAnnotationStorageModified();
       hookIframePinchZoomIsolation();
+
+      // S'assurer que le téléchargement résumable continue en tâche de fond s'il n'est pas encore complet
+      if (window.pdfCacheManager) {
+        window.pdfCacheManager.isComplete(numericDocId).then(complete => {
+          if (!complete) {
+            window.pdfCacheManager.startDownload(numericDocId);
+          }
+        }).catch(() => {});
+      }
     } else {
       (async () => {
-        let pdfTargetUrl = `/api/pdf/${docId}`;
+        let pdfTargetUrl = `/api/pdf/${numericDocId}`;
 
         if (window.pdfCacheManager) {
-          const complete = await window.pdfCacheManager.isComplete(docId);
+          const complete = await window.pdfCacheManager.isComplete(numericDocId);
           if (complete) {
-            const blobUrl = await window.pdfCacheManager.getBlobUrl(docId);
+            const blobUrl = await window.pdfCacheManager.getBlobUrl(numericDocId);
             if (blobUrl) {
               pdfTargetUrl = blobUrl;
               updateCacheUI("complete", 100);
             }
           } else {
             // Lancer ou reprendre le téléchargement résumable en tâche de fond
-            window.pdfCacheManager.startDownload(docId);
+            window.pdfCacheManager.startDownload(numericDocId);
           }
         }
 
@@ -3168,9 +3174,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
             // Synchronisation de la progression dès le chargement de l'iframe
             if (window.pdfCacheManager) {
-              window.pdfCacheManager.getProgress(docId).then(p => {
-                if (currentActiveDocId === docId) {
-                  updateCacheUI(p.status, p.progress);
+              window.pdfCacheManager.getProgress(numericDocId).then(p => {
+                if (Number(currentActiveDocId) === numericDocId) {
+                  updateCacheUI(p.status, p.progress, p.downloadedBytes, p.totalBytes);
                 }
               }).catch(() => {});
             }
@@ -3180,14 +3186,14 @@ document.addEventListener("DOMContentLoaded", () => {
               const win = pdfFrame.contentWindow;
               if (win && win.PDFViewerApplication && win.PDFViewerApplication.eventBus) {
                 win.PDFViewerApplication.eventBus._on("documenterror", async (err) => {
-                  console.warn(`[DocSeeker] Erreur chargement document ${docId} :`, err);
+                  console.warn(`[DocSeeker] Erreur chargement document ${numericDocId} :`, err);
                   if (window.pdfCacheManager) {
-                    await window.pdfCacheManager.invalidate(docId);
+                    await window.pdfCacheManager.invalidate(numericDocId);
                   }
                   if (pdfTargetUrl.startsWith("blob:")) {
-                    console.log(`[DocSeeker] Bascule automatique sur /api/pdf/${docId} suite à erreur Blob`);
+                    console.log(`[DocSeeker] Bascule automatique sur /api/pdf/${numericDocId} suite à erreur Blob`);
                     updateCacheUI("none", 0);
-                    pdfFrame.src = `/pdfjs/web/viewer.html?file=/api/pdf/${docId}#page=${targetPage}`;
+                    pdfFrame.src = `/pdfjs/web/viewer.html?file=/api/pdf/${numericDocId}#page=${targetPage}`;
                   }
                 }, { once: true });
               }
