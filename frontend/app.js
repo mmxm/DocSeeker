@@ -846,6 +846,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const delOpts = { method: "DELETE" };
       for (const id of idsToDelete) {
         await apiFetch(`/api/documents/${id}`, delOpts);
+        if (window.pdfCacheManager) window.pdfCacheManager.invalidate(id).catch(() => {});
       }
       showToast(`${count} document(s) supprimé(s).`, "info");
       if (currentSearchQuery) {
@@ -2886,6 +2887,9 @@ document.addEventListener("DOMContentLoaded", () => {
           cache.delete(`/api/pdf/${currentActiveDocId}`);
         }).catch(() => {});
       }
+      if (window.pdfCacheManager) {
+        window.pdfCacheManager.invalidate(currentActiveDocId).catch(() => {});
+      }
 
       // Mettre à jour updated_at localement
       const docItem = currentLoadedDocs.find(d => d.id === currentActiveDocId);
@@ -3049,30 +3053,73 @@ document.addEventListener("DOMContentLoaded", () => {
     viewerDocTitle.textContent = docTitle;
     viewerPageBadge.textContent = `Page ${targetPage}`;
 
+    const viewerCacheBadge = document.getElementById("viewerCacheBadge");
+    const updateCacheUI = (status, progress) => {
+      if (!viewerCacheBadge) return;
+      if (status === "complete") {
+        viewerCacheBadge.style.display = "inline-flex";
+        viewerCacheBadge.className = "viewer-doc-badge viewer-cache-badge complete";
+        viewerCacheBadge.textContent = "⚡ En cache";
+        viewerCacheBadge.title = "Document disponible à 100% en cache local (0 ms réseau)";
+      } else if (status === "downloading") {
+        viewerCacheBadge.style.display = "inline-flex";
+        viewerCacheBadge.className = "viewer-doc-badge viewer-cache-badge downloading";
+        viewerCacheBadge.textContent = `↓ ${progress || 0}%`;
+        viewerCacheBadge.title = `Mise en cache locale en cours (${progress || 0}%)...`;
+      } else {
+        viewerCacheBadge.style.display = "none";
+      }
+    };
+
+    if (window.pdfCacheManager) {
+      window.pdfCacheManager.onProgress(docId, (info) => {
+        if (currentActiveDocId === docId) {
+          updateCacheUI(info.status, info.progress);
+        }
+      });
+    }
+
     if (isSameDoc && pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
       goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
       hookAnnotationStorageModified();
       hookIframePinchZoomIsolation();
     } else {
-      const pdfStreamUrl = `/api/pdf/${docId}`;
-      let viewerUrl = `/pdfjs/web/viewer.html?file=${encodeURI(pdfStreamUrl)}#page=${targetPage}`;
-      if (currentSearchQuery) {
-        viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
-      }
+      (async () => {
+        let pdfTargetUrl = `/api/pdf/${docId}`;
 
-      // Micro-différé de 120ms : garantit que les 3-4 vignettes visibles
-      // occupent les slots réseau du navigateur en priorité avant le téléchargement lourd du PDF
-      setTimeout(() => {
-        pdfFrame.src = viewerUrl;
-        pdfFrame.onload = () => {
-          hookIframePinchZoomIsolation();
-          setTimeout(() => {
-            goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
-            hookAnnotationStorageModified();
+        if (window.pdfCacheManager) {
+          const complete = await window.pdfCacheManager.isComplete(docId);
+          if (complete) {
+            const blobUrl = await window.pdfCacheManager.getBlobUrl(docId);
+            if (blobUrl) {
+              pdfTargetUrl = blobUrl;
+              updateCacheUI("complete", 100);
+            }
+          } else {
+            // Lancer ou reprendre le téléchargement résumable en tâche de fond
+            window.pdfCacheManager.startDownload(docId);
+          }
+        }
+
+        let viewerUrl = `/pdfjs/web/viewer.html?file=${encodeURIComponent(pdfTargetUrl)}#page=${targetPage}`;
+        if (currentSearchQuery) {
+          viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
+        }
+
+        // Micro-différé de 120ms : garantit que les 3-4 vignettes visibles
+        // occupent les slots réseau du navigateur en priorité avant le téléchargement lourd du PDF
+        setTimeout(() => {
+          pdfFrame.src = viewerUrl;
+          pdfFrame.onload = () => {
             hookIframePinchZoomIsolation();
-          }, 400);
-        };
-      }, 120);
+            setTimeout(() => {
+              goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
+              hookAnnotationStorageModified();
+              hookIframePinchZoomIsolation();
+            }, 400);
+          };
+        }, 120);
+      })();
     }
   }
 
@@ -3244,6 +3291,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch(`/api/documents/${docId}`, { method: "DELETE" });
       if (res.ok) {
         showToast(`Document "${docTitle}" supprimé.`, "info");
+        if (window.pdfCacheManager) window.pdfCacheManager.invalidate(docId).catch(() => {});
         selectedDocIds.delete(docId);
         updateSelectionUI();
         if (currentActiveDocId === docId) {

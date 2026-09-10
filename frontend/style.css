@@ -531,6 +531,29 @@ body.light-theme {
   flex-shrink: 0;
 }
 
+.viewer-cache-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: var(--transition);
+  cursor: default;
+}
+
+.viewer-cache-badge.downloading {
+  background: #f1f5f9;
+  color: #2563eb;
+  border: 1px solid #cbd5e1;
+}
+
+.viewer-cache-badge.complete {
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #a7f3d0;
+}
+
 .viewer-doc-title {
   font-size: 13px;
   font-weight: 700;
