@@ -2030,12 +2030,13 @@ document.addEventListener("DOMContentLoaded", () => {
     const ribbon = card.querySelector(".vignettes-ribbon-container");
     if (ribbon) {
       let isMouseDown = false;
+      let hasDragged = false;
       let startX;
       let scrollLeftPos;
 
       ribbon.addEventListener("mousedown", (e) => {
-        if (e.target.closest(".vignette-item")) return;
         isMouseDown = true;
+        hasDragged = false;
         startX = e.pageX - ribbon.offsetLeft;
         scrollLeftPos = ribbon.scrollLeft;
       });
@@ -2043,10 +2044,23 @@ document.addEventListener("DOMContentLoaded", () => {
       ribbon.addEventListener("mouseup", () => { isMouseDown = false; });
       ribbon.addEventListener("mousemove", (e) => {
         if (!isMouseDown) return;
-        e.preventDefault();
         const x = e.pageX - ribbon.offsetLeft;
         const walk = (x - startX) * 1.5;
+        if (Math.abs(walk) > 4) hasDragged = true;
+        e.preventDefault();
         ribbon.scrollLeft = scrollLeftPos - walk;
+      });
+
+      // Clics vignettes (délégation d'événements pour toutes les vignettes, initiales et scroll infini)
+      ribbon.addEventListener("click", (e) => {
+        if (hasDragged) return;
+        const vEl = e.target.closest(".vignette-item");
+        if (!vEl) return;
+        const dPage = parseInt(vEl.getAttribute("data-page"), 10);
+        const yRatio = parseFloat(vEl.getAttribute("data-yratio") || 0);
+        let rect = null;
+        try { rect = JSON.parse(vEl.getAttribute("data-rect") || "[]"); } catch(e) {}
+        openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], rect, yRatio);
       });
 
       // Scroll infini horizontal : chargement transparent des occurrences suivantes au scroll vers la droite
@@ -2077,14 +2091,6 @@ document.addEventListener("DOMContentLoaded", () => {
               <img src="${PLACEHOLDER_CROP_SVG}" data-src="${v.crop_url}" class="vignette-crop-img dynamic-main-crop" alt="Extrait p. ${v.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
               <span class="vignette-page-badge">p. ${v.page_number}</span>
             `;
-
-            vEl.addEventListener("click", () => {
-              const dPage = parseInt(vEl.getAttribute("data-page"), 10);
-              const yRatio = parseFloat(vEl.getAttribute("data-yratio") || 0);
-              let rect = null;
-              try { rect = JSON.parse(vEl.getAttribute("data-rect") || "[]"); } catch(e) {}
-              openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], rect, yRatio);
-            });
 
             const img = vEl.querySelector(".dynamic-main-crop");
             if (img) mainGridCropManager.observe(img);
