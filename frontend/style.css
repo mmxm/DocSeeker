@@ -121,8 +121,26 @@ body.light-theme {
   height: 17px;
 }
 
-.brand-text {
-  display: none; /* Masqué pour maximiser l'espace utile pour la recherche et les documents */
+.app-version-pill {
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-color);
+  padding: 2px 7px;
+  border-radius: 12px;
+  letter-spacing: -0.2px;
+  white-space: nowrap;
+  user-select: none;
+  cursor: default;
+  transition: var(--transition);
+}
+
+.app-version-pill:hover {
+  color: var(--text-main);
+  border-color: var(--accent);
+  background: var(--accent-light);
 }
 
 .brand-title {
