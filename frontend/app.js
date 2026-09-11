@@ -2095,41 +2095,67 @@ document.addEventListener("DOMContentLoaded", () => {
       });
 
       // Scroll infini horizontal : chargement transparent des occurrences suivantes au scroll vers la droite
-      if (isSearch && doc.occurrences_by_page && doc.occurrences_by_page.length > (doc.vignettes ? doc.vignettes.length : 0)) {
-        const renderedKeys = new Set((doc.vignettes || []).map(v => `${v.page_number}_${v.occ_id}`));
-        const pendingOccurrences = doc.occurrences_by_page.filter(o => !renderedKeys.has(`${o.page_number}_${o.occ_id}`));
-        let nextIndex = 0;
+      const initialVignettesCount = doc.vignettes ? doc.vignettes.length : 0;
+      const totalAvailableOccurrences = doc.total_occurrences || initialVignettesCount;
+
+      if (isSearch && totalAvailableOccurrences > initialVignettesCount) {
+        let loadedCount = initialVignettesCount;
+        let isLoadingChunk = false;
         const CHUNK_SIZE = 25;
 
-        const loadMoreVignettes = () => {
-          if (nextIndex >= pendingOccurrences.length) return;
-          const chunk = pendingOccurrences.slice(nextIndex, nextIndex + CHUNK_SIZE);
-          nextIndex += CHUNK_SIZE;
+        const loadMoreVignettes = async () => {
+          if (isLoadingChunk || loadedCount >= totalAvailableOccurrences) return;
+          isLoadingChunk = true;
 
-          const fragment = document.createDocumentFragment();
-          chunk.forEach(v => {
-            const vEl = document.createElement("div");
-            vEl.className = "vignette-item";
-            vEl.setAttribute("data-doc-id", doc.id);
-            vEl.setAttribute("data-page", v.page_number);
-            vEl.setAttribute("data-occ", v.occ_id);
-            vEl.setAttribute("data-rect", JSON.stringify((v.highlight_rects && v.highlight_rects.length > 0) ? v.highlight_rects[0] : (v.rect || [])));
-            vEl.setAttribute("data-yratio", v.y_ratio || 0);
-            vEl.setAttribute("data-snippet", encodeURIComponent(v.text_snippet || ''));
-            vEl.title = `Page ${v.page_number} - Cliquer pour ouvrir`;
+          try {
+            const fetchUrl = `/api/doc-search?doc_id=${doc.id}&q=${encodeURIComponent(currentSearchQuery || '')}&offset=${loadedCount}&limit=${CHUNK_SIZE}`;
+            const res = await fetch(fetchUrl);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            const newOccs = data.occurrences || [];
 
-            vEl.innerHTML = `
-              <img src="${PLACEHOLDER_CROP_SVG}" data-src="${v.crop_url}" class="vignette-crop-img dynamic-main-crop" alt="Extrait p. ${v.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
-              <span class="vignette-page-badge">p. ${v.page_number}</span>
-            `;
+            if (newOccs.length === 0) {
+              loadedCount = totalAvailableOccurrences;
+              return;
+            }
 
-            const img = vEl.querySelector(".dynamic-main-crop");
-            if (img) mainGridCropManager.observe(img);
+            loadedCount += newOccs.length;
+            if (doc.occurrences_by_page) {
+              doc.occurrences_by_page.push(...newOccs);
+            }
+            if (doc.vignettes) {
+              doc.vignettes.push(...newOccs);
+            }
 
-            fragment.appendChild(vEl);
-          });
+            const fragment = document.createDocumentFragment();
+            newOccs.forEach(v => {
+              const vEl = document.createElement("div");
+              vEl.className = "vignette-item";
+              vEl.setAttribute("data-doc-id", doc.id);
+              vEl.setAttribute("data-page", v.page_number);
+              vEl.setAttribute("data-occ", v.occ_id);
+              vEl.setAttribute("data-rect", JSON.stringify((v.highlight_rects && v.highlight_rects.length > 0) ? v.highlight_rects[0] : (v.rect || [])));
+              vEl.setAttribute("data-yratio", v.y_ratio || 0);
+              vEl.setAttribute("data-snippet", encodeURIComponent(v.text_snippet || ''));
+              vEl.title = `Page ${v.page_number} - Cliquer pour ouvrir`;
 
-          ribbon.appendChild(fragment);
+              vEl.innerHTML = `
+                <img src="${PLACEHOLDER_CROP_SVG}" data-src="${v.crop_url}" class="vignette-crop-img dynamic-main-crop" alt="Extrait p. ${v.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
+                <span class="vignette-page-badge">p. ${v.page_number}</span>
+              `;
+
+              const img = vEl.querySelector(".dynamic-main-crop");
+              if (img) mainGridCropManager.observe(img);
+
+              fragment.appendChild(vEl);
+            });
+
+            ribbon.appendChild(fragment);
+          } catch (err) {
+            console.error("Erreur chargement vignettes supplémentaires:", err);
+          } finally {
+            isLoadingChunk = false;
+          }
         };
 
         ribbon.addEventListener("scroll", () => {
@@ -3129,6 +3155,37 @@ document.addEventListener("DOMContentLoaded", () => {
       drawerDocCount.textContent = `${occurrences.length} extrait${occurrences.length > 1 ? 's' : ''}`;
     }
     renderDrawerOccurrences(numericDocId, docTitle, occurrences, targetPage);
+
+    // Si ouvert depuis une recherche globale, charger en tâche de fond l'intégralité des occurrences du document
+    // pour un parcours séquentiel complet (stepper et tiroir) sans bloquer l'affichage immédiat
+    if (currentSearchQuery && (!occurrences || occurrences.length >= 25)) {
+      const activeQuery = currentSearchQuery;
+      fetch(`/api/doc-search?doc_id=${numericDocId}&q=${encodeURIComponent(activeQuery)}`)
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then(data => {
+          if (currentActiveDocId !== numericDocId || currentSearchQuery !== activeQuery) return;
+          const fullOccs = data.occurrences || [];
+          if (fullOccs.length > 0 && (!occurrences || fullOccs.length !== occurrences.length)) {
+            currentDocOriginalOccurrences = fullOccs;
+            currentActiveOccurrences = fullOccs;
+            const curPage = getCurrentViewerPage() || targetPage;
+            currentActiveOccurrenceIndex = findClosestOccurrenceIndex(fullOccs, curPage);
+            updateOccurrenceStepperUI();
+            const countLabel = `${fullOccs.length} occurrence${fullOccs.length > 1 ? 's' : ''} dans ce document`;
+            const pillLabel = `${fullOccs.length} extrait${fullOccs.length > 1 ? 's' : ''}`;
+            if (docDetailCount) docDetailCount.textContent = countLabel;
+            if (viewerDocSearchResultCount) viewerDocSearchResultCount.textContent = `${fullOccs.length} résultat${fullOccs.length > 1 ? 's' : ''}`;
+            if (mobileOccurrencesCountText) mobileOccurrencesCountText.textContent = pillLabel;
+            if (drawerDocCount) drawerDocCount.textContent = pillLabel;
+            renderVerticalOccurrences(numericDocId, docTitle, fullOccs, curPage);
+            renderDrawerOccurrences(numericDocId, docTitle, fullOccs, curPage);
+          }
+        })
+        .catch(err => console.warn("Erreur chargement occurrences complètes document:", err));
+    }
 
     viewerDocTitle.textContent = docTitle;
     viewerPageBadge.textContent = `Page ${targetPage}`;

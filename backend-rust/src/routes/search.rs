@@ -22,6 +22,8 @@ pub struct SearchQueryParams {
 pub struct DocSearchQueryParams {
     pub doc_id: i64,
     pub q: Option<String>,
+    pub offset: Option<usize>,
+    pub limit: Option<usize>,
 }
 
 pub async fn search_handler(
@@ -69,7 +71,7 @@ pub async fn doc_search_handler(
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
-    let search_res = search_within_document(&conn, params.doc_id, &query_str)
+    let search_res = search_within_document(&conn, params.doc_id, &query_str, params.offset, params.limit)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response())?;
 
     Ok(Json(serde_json::to_value(search_res).unwrap_or_default()))
