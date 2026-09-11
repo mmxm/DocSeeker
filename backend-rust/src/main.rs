@@ -317,6 +317,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .merge(api_router)
         .fallback(static_handler)
+        .layer(tower_http::compression::CompressionLayer::new())
         .layer(middleware::from_fn(security_headers_middleware))
         .layer(cors)
         .with_state(state);

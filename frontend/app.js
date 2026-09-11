@@ -1091,7 +1091,11 @@ document.addEventListener("DOMContentLoaded", () => {
     currentActiveOccurrences = [];
     currentActiveOccurrenceIndex = -1;
     updateOccurrenceStepperUI();
-    pdfFrame.src = "about:blank";
+    try {
+      if (pdfFrame && pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
+        pdfFrame.contentWindow.PDFViewerApplication.close();
+      }
+    } catch (e) {}
     currentActiveDocId = null;
     showGeneralResultsView();
   }
@@ -3224,12 +3228,71 @@ document.addEventListener("DOMContentLoaded", () => {
           const complete = await window.pdfCacheManager.isComplete(numericDocId);
           if (complete) {
             updateCacheUI("complete", 100);
+          } else {
+            window.pdfCacheManager.getProgress(numericDocId).then(p => {
+              if (Number(currentActiveDocId) === numericDocId) {
+                updateCacheUI(p.status, p.progress, p.downloadedBytes, p.totalBytes);
+              }
+            }).catch(() => {});
           }
         }
 
         let viewerUrl = `/pdfjs/web/viewer.html?file=${encodeURI(pdfTargetUrl)}#page=${targetPage}`;
         if (currentSearchQuery) {
           viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
+        }
+
+        const win = pdfFrame.contentWindow;
+        const isWarm = Boolean(
+          win &&
+          win.PDFViewerApplication &&
+          win.PDFViewerApplication.initialized &&
+          typeof win.PDFViewerApplication.open === "function"
+        );
+
+        if (isWarm) {
+          // --- ACCÉLÉRATION : RÉOUVERTURE À CHAUD SANS RECHARGEMENT D'IFRAME ---
+          // L'iframe, les scripts PDF.js (3.5 Mo) et le WebWorker sont déjà prêts en mémoire.
+          try {
+            win.history.replaceState(null, "", viewerUrl);
+          } catch (e) {}
+
+          try {
+            const app = win.PDFViewerApplication;
+
+            const onDocReady = () => {
+              try {
+                if (app.page !== targetPage) {
+                  app.page = targetPage;
+                }
+              } catch (e) {}
+              setTimeout(() => {
+                goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
+                hookAnnotationStorageModified();
+                hookIframePinchZoomIsolation();
+              }, 60);
+            };
+
+            if (app.eventBus) {
+              app.eventBus._on("pagesinit", onDocReady, { once: true });
+            }
+
+            await app.open({ url: pdfTargetUrl });
+
+            // Sécurité si pagesinit s'est déjà produit ou pour assurer le cadrage exact
+            setTimeout(() => {
+              if (app.page !== targetPage) {
+                try { app.page = targetPage; } catch (e) {}
+              }
+              goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
+              hookAnnotationStorageModified();
+              hookIframePinchZoomIsolation();
+            }, 180);
+
+            return;
+          } catch (warmErr) {
+            console.warn("[DocSeeker] Réouverture à chaud échouée, repli vers rechargement complet :", warmErr);
+          }
         }
 
         // Micro-différé de 120ms : garantit que les 3-4 vignettes visibles

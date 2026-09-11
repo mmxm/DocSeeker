@@ -10,12 +10,34 @@ use std::path::PathBuf;
 #[folder = "../frontend/"]
 pub struct EmbeddedFrontend;
 
+fn get_cache_control(path: &str) -> &'static str {
+    if path.ends_with(".html") || path == "index.html" {
+        "no-cache"
+    } else if path.starts_with("pdfjs/") {
+        // Assets de PDF.js (viewer.mjs, pdf.mjs, pdf.worker.mjs, etc.) : mise en cache forte 7 jours
+        "public, max-age=604800, immutable"
+    } else if path.ends_with(".js")
+        || path.ends_with(".mjs")
+        || path.ends_with(".css")
+        || path.ends_with(".woff2")
+        || path.ends_with(".svg")
+        || path.ends_with(".png")
+        || path.ends_with(".webp")
+    {
+        "public, max-age=86400"
+    } else {
+        "public, max-age=3600"
+    }
+}
+
 pub async fn static_handler(uri: Uri) -> Response<Body> {
     let mut path = uri.path().trim_start_matches('/').to_string();
 
     if path.is_empty() || path == "index.html" {
         path = "index.html".to_string();
     }
+
+    let cache_control = get_cache_control(&path);
 
     // 1. Essayer de servir depuis le disque si le dossier frontend/ existe à proximité
     let local_candidates = [
@@ -30,6 +52,7 @@ pub async fn static_handler(uri: Uri) -> Response<Body> {
                 return Response::builder()
                     .status(StatusCode::OK)
                     .header(header::CONTENT_TYPE, HeaderValue::from_str(mime.as_ref()).unwrap())
+                    .header(header::CACHE_CONTROL, HeaderValue::from_static(cache_control))
                     .body(Body::from(content))
                     .unwrap();
             }
@@ -43,6 +66,7 @@ pub async fn static_handler(uri: Uri) -> Response<Body> {
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, HeaderValue::from_str(mime.as_ref()).unwrap())
+                .header(header::CACHE_CONTROL, HeaderValue::from_static(cache_control))
                 .body(Body::from(content.data))
                 .unwrap()
         }
@@ -53,6 +77,7 @@ pub async fn static_handler(uri: Uri) -> Response<Body> {
                     return Response::builder()
                         .status(StatusCode::OK)
                         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+                        .header(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"))
                         .body(Body::from(index.data))
                         .unwrap();
                 }
