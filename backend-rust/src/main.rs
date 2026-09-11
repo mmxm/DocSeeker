@@ -16,7 +16,7 @@ use axum::{
 };
 use rusqlite::Connection;
 use tower_http::cors::{Any, CorsLayer};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::auth::password::{hash_password, verify_password};
 use crate::auth::rate_limit::LoginRateLimiter;
@@ -284,6 +284,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     info!("[DocSeeker] {} document(s) synchronisé(s) en tâche de fond : {:?}", added, files);
                     if let Ok(mut cache) = bg_cache.lock() {
                         cache.clear();
+                    }
+                }
+
+                // Vérification et génération en arrière-plan des couvertures manquantes
+                if let Ok(mut stmt) = conn.prepare("SELECT id, filename FROM documents WHERE total_pages > 0") {
+                    if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))) {
+                        let missing: Vec<(i64, String)> = rows.flatten()
+                            .filter(|(id, _)| !bg_config.covers_dir.join(format!("{}.webp", id)).exists())
+                            .collect();
+                        if !missing.is_empty() {
+                            info!("[Couvertures] {} couverture(s) manquante(s) détectée(s), génération en tâche de fond...", missing.len());
+                            for (id, fname) in missing {
+                                let pdf_path = bg_config.documents_dir.join(&fname);
+                                let cover_path = bg_config.covers_dir.join(format!("{}.webp", id));
+                                if pdf_path.exists() {
+                                    if let Err(e) = bg_engine.render_cover(&pdf_path, &cover_path) {
+                                        warn!("[Couvertures] Échec génération couverture doc {} : {}", id, e);
+                                    }
+                                }
+                            }
+                            info!("[Couvertures] Toutes les couvertures manquantes ont été générées avec succès !");
+                        }
                     }
                 }
             }

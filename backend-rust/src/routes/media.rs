@@ -74,7 +74,41 @@ pub async fn get_cover(
 ) -> Response {
     let cover_webp = state.config.covers_dir.join(format!("{}.webp", doc_id));
     if !cover_webp.exists() {
-        return (StatusCode::NOT_FOUND, "Couverture introuvable").into_response();
+        let filename: Option<String> = {
+            let conn = match state.db.lock() {
+                Ok(c) => c,
+                Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur DB").into_response(),
+            };
+            conn.query_row("SELECT filename FROM documents WHERE id = ?1", params![doc_id], |r| r.get(0)).ok()
+        };
+
+        let fname = match filename {
+            Some(f) => f,
+            None => return (StatusCode::NOT_FOUND, "Document introuvable en base").into_response(),
+        };
+
+        let file_path = state.config.documents_dir.join(&fname);
+        if !file_path.exists() {
+            return (StatusCode::NOT_FOUND, "Fichier PDF introuvable sur disque").into_response();
+        }
+
+        let state_clone = Arc::clone(&state);
+        let cover_path_clone = cover_webp.clone();
+        let render_res = tokio::task::spawn_blocking(move || {
+            state_clone.pdf_engine.render_cover(&file_path, &cover_path_clone)
+        }).await;
+
+        match render_res {
+            Ok(Ok(())) => {},
+            Ok(Err(e)) => {
+                tracing::warn!("[Media] Échec génération couverture doc {}: {}", doc_id, e);
+                return (StatusCode::NOT_FOUND, "Échec rendu couverture").into_response();
+            },
+            Err(e) => {
+                tracing::warn!("[Media] Erreur tâche bloquante couverture doc {}: {}", doc_id, e);
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur rendu couverture").into_response();
+            }
+        }
     }
 
     let if_none_match = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
