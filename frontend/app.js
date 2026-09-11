@@ -3231,6 +3231,11 @@ document.addEventListener("DOMContentLoaded", () => {
           viewerCacheBadge.textContent = `📥 ${progress}%`;
           viewerCacheBadge.title = `Mise en cache hors-ligne : ${progress}% - Lecture fluide disponible`;
         }
+      } else if (status === "error") {
+        viewerCacheBadge.style.display = "inline-flex";
+        viewerCacheBadge.className = "viewer-doc-badge viewer-cache-badge paused";
+        viewerCacheBadge.textContent = "⚠️ Erreur (Cliquer pour réparer)";
+        viewerCacheBadge.title = "Une erreur est survenue lors du chargement. Cliquez pour vider le cache et recharger.";
       } else {
         viewerCacheBadge.style.display = "none";
       }
@@ -3247,7 +3252,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (viewerCacheBadge && !viewerCacheBadge._hasClickHandler) {
       viewerCacheBadge._hasClickHandler = true;
       viewerCacheBadge.style.cursor = "pointer";
-      viewerCacheBadge.addEventListener("click", async () => {
+      viewerCacheBadge.addEventListener("click", async (e) => {
+        e.stopPropagation();
         if (!currentActiveDocId) return;
         if (confirm("Voulez-vous réinitialiser le cache local pour ce document et le recharger ?")) {
           if (window.pdfCacheManager) {
@@ -3347,14 +3353,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
             if (app.eventBus) {
               app.eventBus._on("pagesinit", onDocReady, { once: true });
-              app.eventBus._on("documenterror", async (err) => {
-                console.warn("[DocSeeker] Erreur réouverture à chaud, repli vers rechargement complet :", err);
-                if (window.pdfCacheManager) {
-                  await window.pdfCacheManager.invalidate(numericDocId);
-                }
-                updateCacheUI("none", 0);
-                pdfFrame.src = viewerUrl;
-              }, { once: true });
             }
 
             await app.open({ url: pdfTargetUrl });
@@ -3424,9 +3422,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   if (window.pdfCacheManager) {
                     await window.pdfCacheManager.invalidate(numericDocId);
                   }
-                  console.log(`[DocSeeker] Rechargement automatique suite à documenterror pour doc ${numericDocId}`);
-                  updateCacheUI("none", 0);
-                  pdfFrame.src = `/pdfjs/web/viewer.html?file=${encodeURI(pdfTargetUrl)}#page=${targetPage}&_nocache=${Date.now()}`;
+                  updateCacheUI("error", 0);
                 }, { once: true });
               }
             } catch (e) {}
