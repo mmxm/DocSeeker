@@ -10019,7 +10019,8 @@ function validateRangeRequestCapabilities({
   if (disableRange || !isHttp) {
     return returnValues;
   }
-  if (responseHeaders.get("Accept-Ranges") !== "bytes") {
+  const acceptRanges = responseHeaders.get("Accept-Ranges");
+  if (acceptRanges && acceptRanges.toLowerCase() !== "bytes") {
     return returnValues;
   }
   const contentEncoding = responseHeaders.get("Content-Encoding") || "identity";
@@ -10062,7 +10063,6 @@ function createFetchOptions(headers, withCredentials, abortController) {
     method: "GET",
     headers,
     signal: abortController.signal,
-    mode: "cors",
     credentials: withCredentials ? "include" : "same-origin",
     redirect: "follow"
   };

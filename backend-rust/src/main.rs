@@ -332,7 +332,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+        .expose_headers([
+            header::ACCEPT_RANGES,
+            header::CONTENT_RANGE,
+            header::CONTENT_LENGTH,
+            header::CONTENT_ENCODING,
+            header::ETAG,
+        ]);
 
     let api_router = create_api_router(Arc::clone(&state));
 
