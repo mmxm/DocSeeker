@@ -211,23 +211,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // =========================================================================
   // =========================================================================
-  // Gestionnaire de Chargement Prioritaire Dynamique avec Annulation (Abort)
-  // et Debounce au défilement pour la grille principale et le volet latéral
+  // Gestionnaire de Chargement Prioritaire Dynamique avec Debounce au défilement
+  // pour la grille principale et le volet latéral
   // =========================================================================
   class DynamicCropManager {
     constructor(rootMargin = "180px 0px", debounceMs = 60) {
       this.rootMargin = rootMargin;
       this.debounceMs = debounceMs;
-      this.activeRequests = new Map(); // img element -> AbortController
       this.pendingDebounce = new Map(); // img element -> timerId
-      this.createdBlobUrls = new Set();
       this.observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
           const img = entry.target;
           if (entry.isIntersecting) {
             this.scheduleLoad(img);
           } else {
-            this.cancelPendingOrInFlight(img);
+            this.cancelPending(img);
           }
         });
       }, {
@@ -237,18 +235,18 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     observe(img) {
+      if (!img) return;
+      if (img.dataset.loaded === "true") {
+        img.style.opacity = "1";
+        return;
+      }
       this.observer.observe(img);
     }
 
-    cancelPendingOrInFlight(img) {
+    cancelPending(img) {
       if (this.pendingDebounce.has(img)) {
         clearTimeout(this.pendingDebounce.get(img));
         this.pendingDebounce.delete(img);
-      }
-      if (this.activeRequests.has(img)) {
-        const controller = this.activeRequests.get(img);
-        controller.abort();
-        this.activeRequests.delete(img);
       }
     }
 
@@ -259,46 +257,35 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       const timer = setTimeout(() => {
         this.pendingDebounce.delete(img);
-        this.loadPriority(img);
+        this.loadImg(img);
       }, this.debounceMs);
       this.pendingDebounce.set(img, timer);
     }
 
-    async loadPriority(img) {
+    loadImg(img) {
       const srcUrl = img.getAttribute("data-src");
       if (!srcUrl || img.dataset.loaded === "true") return;
 
-      this.cancelPendingOrInFlight(img);
-
-      const controller = new AbortController();
-      this.activeRequests.set(img, controller);
-
+      img.dataset.loaded = "true";
+      this.cancelPending(img);
       try {
-        const res = await fetch(srcUrl, {
-          signal: controller.signal,
-          priority: "high"
-        });
+        this.observer.unobserve(img);
+      } catch (e) {}
 
-        if (res.ok) {
-          const blob = await res.blob();
-          const blobUrl = URL.createObjectURL(blob);
-          this.createdBlobUrls.add(blobUrl);
-          img.src = blobUrl;
-          img.dataset.loaded = "true";
-          img.style.opacity = "1";
-          this.observer.unobserve(img);
-        } else {
-          img.src = srcUrl;
+      img.onload = () => {
+        img.style.opacity = "1";
+      };
+      img.onerror = () => {
+        // En cas d'erreur de chargement réseau, réessayer une fois après 500ms
+        if (!img.dataset.retried) {
+          img.dataset.retried = "true";
+          setTimeout(() => {
+            img.src = srcUrl;
+          }, 500);
         }
-      } catch (err) {
-        if (err.name !== "AbortError") {
-          img.src = srcUrl;
-        }
-      } finally {
-        if (this.activeRequests.get(img) === controller) {
-          this.activeRequests.delete(img);
-        }
-      }
+      };
+
+      img.src = srcUrl;
     }
 
     clear() {
@@ -306,14 +293,6 @@ document.addEventListener("DOMContentLoaded", () => {
         clearTimeout(timer);
       }
       this.pendingDebounce.clear();
-      for (const [, controller] of this.activeRequests.entries()) {
-        controller.abort();
-      }
-      this.activeRequests.clear();
-      for (const url of this.createdBlobUrls) {
-        URL.revokeObjectURL(url);
-      }
-      this.createdBlobUrls.clear();
     }
   }
 
