@@ -774,7 +774,7 @@ const defaultOptions = {
     kind: OptionKind.API + OptionKind.PREFERENCE
   },
   disableStream: {
-    value: false,
+    value: true,
     kind: OptionKind.API + OptionKind.PREFERENCE
   },
   docBaseUrl: {
@@ -1500,7 +1500,7 @@ class BasePreferences {
     disableAutoFetch: false,
     disableFontFace: false,
     disableRange: false,
-    disableStream: false,
+    disableStream: true,
     enableHWA: true,
     enableXfa: true,
     viewerCssTheme: 0
@@ -13799,6 +13799,15 @@ const PDFViewerApplication = {
       total
     }) => {
       this.progress(loaded / total);
+      try {
+        this.eventBus?.dispatch("docprogress", { source: this, loaded, total });
+        window.parent?.postMessage({
+          type: "docseeker_pdf_progress",
+          loaded,
+          total,
+          percent: Math.round((loaded / total) * 100)
+        }, "*");
+      } catch (e) {}
     };
     return loadingTask.promise.then(pdfDocument => {
       this.load(pdfDocument);
@@ -13929,6 +13938,13 @@ const PDFViewerApplication = {
     }) => {
       this._contentLength = length;
       this.loadingBar?.hide();
+      try {
+        this.eventBus?.dispatch("doccomplete", { source: this, length });
+        window.parent?.postMessage({
+          type: "docseeker_pdf_complete",
+          length
+        }, "*");
+      } catch (e) {}
       firstPagePromise.then(() => {
         this.eventBus.dispatch("documentloaded", {
           source: this

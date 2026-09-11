@@ -3212,23 +3212,31 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
 
+    // Écouteur global des messages de progression émis par le visualiseur PDF.js
+    if (!window._pdfViewerMessageListenerAttached) {
+      window._pdfViewerMessageListenerAttached = true;
+      window.addEventListener("message", (evt) => {
+        if (!evt.data) return;
+        if (evt.data.type === "docseeker_pdf_progress") {
+          const { loaded, total, percent } = evt.data;
+          if (window.pdfCacheManager && currentActiveDocId) {
+            window.pdfCacheManager.updateProgressFromViewer(currentActiveDocId, loaded, total);
+          }
+          updateCacheUI(percent >= 100 ? "complete" : "downloading", percent, loaded, total);
+        } else if (evt.data.type === "docseeker_pdf_complete") {
+          const { length } = evt.data;
+          if (window.pdfCacheManager && currentActiveDocId) {
+            window.pdfCacheManager.markComplete(currentActiveDocId, length);
+          }
+          updateCacheUI("complete", 100, length, length);
+        }
+      });
+    }
+
     if (isSameDoc && pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
       goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
       hookAnnotationStorageModified();
       hookIframePinchZoomIsolation();
-
-      // S'assurer que le téléchargement résumable continue en tâche de fond s'il n'est pas encore complet
-      if (window.pdfCacheManager) {
-        window.pdfCacheManager.isComplete(numericDocId).then(complete => {
-          if (!complete) {
-            setTimeout(() => {
-              if (Number(currentActiveDocId) === numericDocId) {
-                window.pdfCacheManager.startDownload(numericDocId);
-              }
-            }, 800);
-          }
-        }).catch(() => {});
-      }
     } else {
       (async () => {
         let pdfTargetUrl = `/api/pdf/${numericDocId}`;
@@ -3236,11 +3244,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (window.pdfCacheManager) {
           const complete = await window.pdfCacheManager.isComplete(numericDocId);
           if (complete) {
-            const blobUrl = await window.pdfCacheManager.getBlobUrl(numericDocId);
-            if (blobUrl) {
-              pdfTargetUrl = blobUrl;
-              updateCacheUI("complete", 100);
-            }
+            updateCacheUI("complete", 100);
           }
         }
 
@@ -3250,7 +3254,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         // Micro-différé de 120ms : garantit que les 3-4 vignettes visibles
-        // occupent les slots réseau du navigateur en priorité avant le téléchargement lourd du PDF
+        // occupent les slots réseau du navigateur en priorité avant le chargement lourd du PDF
         setTimeout(() => {
           pdfFrame.src = viewerUrl;
           pdfFrame.onload = () => {
@@ -3265,30 +3269,29 @@ document.addEventListener("DOMContentLoaded", () => {
               }).catch(() => {});
             }
 
-            // Priorité absolue au visualiseur :
-            // Le téléchargement par blocs ne démarre qu'une fois la page cible affichée à l'écran
-            const startBackgroundDownload = () => {
-              if (window.pdfCacheManager && Number(currentActiveDocId) === numericDocId) {
-                window.pdfCacheManager.isComplete(numericDocId).then(complete => {
-                  if (!complete && Number(currentActiveDocId) === numericDocId) {
-                    window.pdfCacheManager.startDownload(numericDocId);
-                  }
-                }).catch(() => {});
-              }
-            };
-
+            // Liaison directe avec l'eventBus de PDF.js (moteur unique avec cache IndexedDB)
             try {
               const win = pdfFrame.contentWindow;
               if (win && win.PDFViewerApplication && win.PDFViewerApplication.eventBus) {
-                win.PDFViewerApplication.eventBus._on("pagerendered", () => {
-                  setTimeout(startBackgroundDownload, 1200);
-                }, { once: true });
-              } else {
-                setTimeout(startBackgroundDownload, 2500);
+                win.PDFViewerApplication.eventBus._on("docprogress", (evt) => {
+                  if (Number(currentActiveDocId) === numericDocId) {
+                    if (window.pdfCacheManager) {
+                      window.pdfCacheManager.updateProgressFromViewer(numericDocId, evt.loaded, evt.total);
+                    }
+                    const percent = Math.min(100, Math.round((evt.loaded / evt.total) * 100));
+                    updateCacheUI(percent >= 100 ? "complete" : "downloading", percent, evt.loaded, evt.total);
+                  }
+                });
+                win.PDFViewerApplication.eventBus._on("doccomplete", (evt) => {
+                  if (Number(currentActiveDocId) === numericDocId) {
+                    if (window.pdfCacheManager) {
+                      window.pdfCacheManager.markComplete(numericDocId, evt.length);
+                    }
+                    updateCacheUI("complete", 100, evt.length, evt.length);
+                  }
+                });
               }
-            } catch (e) {
-              setTimeout(startBackgroundDownload, 2500);
-            }
+            } catch (e) {}
 
             // Fallback résilient en cas d'erreur de chargement (ex: ancien cache corrompu)
             try {

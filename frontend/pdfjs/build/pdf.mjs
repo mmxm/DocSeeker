@@ -10197,6 +10197,62 @@ class PDFFetchStreamReader {
     this._abortController.abort();
   }
 }
+const DOCSEEKER_CHUNK_DB_NAME = "docseeker_pdf_chunks_v2";
+const DOCSEEKER_CHUNK_STORE = "chunks";
+let _chunkDbPromise = null;
+
+function _getDocseekerChunkDb() {
+  if (!_chunkDbPromise) {
+    _chunkDbPromise = new Promise((resolve) => {
+      try {
+        if (typeof indexedDB === "undefined") return resolve(null);
+        const req = indexedDB.open(DOCSEEKER_CHUNK_DB_NAME, 1);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(DOCSEEKER_CHUNK_STORE)) {
+            db.createObjectStore(DOCSEEKER_CHUNK_STORE);
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => resolve(null);
+      } catch (err) {
+        resolve(null);
+      }
+    });
+  }
+  return _chunkDbPromise;
+}
+
+async function _readCachedChunk(key) {
+  try {
+    const db = await _getDocseekerChunkDb();
+    if (!db) return null;
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(DOCSEEKER_CHUNK_STORE, "readonly");
+        const store = tx.objectStore(DOCSEEKER_CHUNK_STORE);
+        const req = store.get(key);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  } catch (err) {
+    return null;
+  }
+}
+
+async function _writeCachedChunk(key, arrayBuffer) {
+  try {
+    const db = await _getDocseekerChunkDb();
+    if (!db) return;
+    const tx = db.transaction(DOCSEEKER_CHUNK_STORE, "readwrite");
+    const store = tx.objectStore(DOCSEEKER_CHUNK_STORE);
+    store.put(arrayBuffer, key);
+  } catch (err) {}
+}
+
 class PDFFetchStreamRangeReader {
   constructor(stream, begin, end) {
     this._stream = stream;
@@ -10210,6 +10266,36 @@ class PDFFetchStreamRangeReader {
     const headers = new Headers(stream.headers);
     headers.append("Range", `bytes=${begin}-${end - 1}`);
     const url = source.url;
+
+    let normUrl = url;
+    try {
+      normUrl = typeof window !== "undefined" && window.location 
+        ? new URL(url, window.location.origin).pathname 
+        : url;
+    } catch (e) {}
+
+    const cacheKey = `${normUrl}#${begin}_${end}`;
+    this._cacheKey = cacheKey;
+    this._fromCache = false;
+    this._cachedData = null;
+    this._accumulatedChunks = null;
+
+    _readCachedChunk(cacheKey).then(cached => {
+      if (cached && (cached.byteLength === (end - begin) || cached.byteLength > 0)) {
+        this._fromCache = true;
+        this._cachedData = cached;
+        this._readCapability.resolve();
+        return;
+      }
+      this._startNetworkFetch(url, headers, stream);
+    }).catch(() => {
+      this._startNetworkFetch(url, headers, stream);
+    });
+
+    this.onProgress = null;
+  }
+
+  _startNetworkFetch(url, headers, stream) {
     fetch(url, createFetchOptions(headers, this._withCredentials, this._abortController)).then(response => {
       const responseOrigin = getResponseOrigin(response.url);
       if (responseOrigin !== stream._responseOrigin) {
@@ -10220,25 +10306,64 @@ class PDFFetchStreamRangeReader {
       }
       this._readCapability.resolve();
       this._reader = response.body.getReader();
+      this._accumulatedChunks = [];
     }).catch(this._readCapability.reject);
-    this.onProgress = null;
   }
+
   get isStreamingSupported() {
     return this._isStreamingSupported;
   }
+
   async read() {
     await this._readCapability.promise;
+    if (this._fromCache) {
+      if (this._cachedData) {
+        const data = this._cachedData;
+        this._cachedData = null;
+        this._loaded += data.byteLength;
+        this.onProgress?.({
+          loaded: this._loaded
+        });
+        return {
+          value: getArrayBuffer(data),
+          done: false
+        };
+      }
+      return {
+        value: undefined,
+        done: true
+      };
+    }
+
     const {
       value,
       done
     } = await this._reader.read();
     if (done) {
+      if (this._accumulatedChunks && this._accumulatedChunks.length > 0 && this._cacheKey) {
+        try {
+          let totalLen = 0;
+          for (const c of this._accumulatedChunks) totalLen += c.byteLength;
+          const merged = new Uint8Array(totalLen);
+          let off = 0;
+          for (const c of this._accumulatedChunks) {
+            merged.set(c, off);
+            off += c.byteLength;
+          }
+          _writeCachedChunk(this._cacheKey, merged.buffer);
+        } catch (e) {}
+        this._accumulatedChunks = null;
+      }
       return {
         value,
         done
       };
     }
+
     this._loaded += value.byteLength;
+    if (this._accumulatedChunks) {
+      this._accumulatedChunks.push(new Uint8Array(value));
+    }
     this.onProgress?.({
       loaded: this._loaded
     });
@@ -10247,9 +10372,12 @@ class PDFFetchStreamRangeReader {
       done: false
     };
   }
+
   cancel(reason) {
-    this._reader?.cancel(reason);
-    this._abortController.abort();
+    if (!this._fromCache) {
+      this._reader?.cancel(reason);
+      this._abortController.abort();
+    }
   }
 }
 
@@ -11331,7 +11459,7 @@ class XfaText {
 
 
 
-const DEFAULT_RANGE_CHUNK_SIZE = 65536;
+const DEFAULT_RANGE_CHUNK_SIZE = 262144;
 const RENDERING_CANCELLED_TIMEOUT = 100;
 const DELAYED_CLEANUP_TIMEOUT = 5000;
 const DefaultCanvasFactory = isNodeJS ? NodeCanvasFactory : DOMCanvasFactory;
