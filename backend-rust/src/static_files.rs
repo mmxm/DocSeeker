@@ -14,8 +14,8 @@ fn get_cache_control(path: &str) -> &'static str {
     if path.ends_with(".html") || path == "index.html" {
         "no-cache"
     } else if path.starts_with("pdfjs/") {
-        // Assets de PDF.js (viewer.mjs, pdf.mjs, pdf.worker.mjs, etc.) : mise en cache forte 7 jours
-        "public, max-age=604800, immutable"
+        // Assets de PDF.js (viewer.mjs, pdf.mjs, pdf.worker.mjs, etc.) : mise en cache avec revalidation
+        "public, max-age=86400, must-revalidate"
     } else if path.ends_with(".js")
         || path.ends_with(".mjs")
         || path.ends_with(".css")

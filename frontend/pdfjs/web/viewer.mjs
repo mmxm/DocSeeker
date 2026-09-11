@@ -831,7 +831,7 @@ const defaultOptions = {
     kind: OptionKind.WORKER
   },
   workerSrc: {
-    value: "../build/pdf.worker.mjs",
+    value: "../build/pdf.worker.mjs?v=5.2",
     kind: OptionKind.WORKER
   }
 };
