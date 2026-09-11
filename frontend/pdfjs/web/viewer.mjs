@@ -13783,6 +13783,7 @@ const PDFViewerApplication = {
     const loadingTask = getDocument({
       ...apiParams,
       withCredentials: true,
+      disableAutoFetch: false,
       ...args
     });
     this.pdfLoadingTask = loadingTask;

@@ -56514,7 +56514,7 @@ class WorkerMessageHandler {
         }
         pdfManagerArgs.source = pdfStream;
         pdfManagerArgs.length = fullRequest.contentLength;
-        pdfManagerArgs.disableAutoFetch ||= fullRequest.isStreamingSupported;
+        pdfManagerArgs.disableAutoFetch = false;
         newPdfManager = new NetworkPdfManager(pdfManagerArgs);
         for (const chunk of cachedChunks) {
           newPdfManager.sendProgressiveData(chunk);

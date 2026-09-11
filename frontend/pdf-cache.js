@@ -100,20 +100,129 @@ class PdfCacheManager {
   }
 
   /**
+   * Sauvegarde les métadonnées d'avancement d'un document dans IndexedDB
+   */
+  async saveMeta(docId, data) {
+    try {
+      const id = Number(docId);
+      const db = await this.init();
+      if (!db) return;
+      const normUrl = this.normalizeUrl(id);
+      const tx = db.transaction(DOCSEEKER_META_STORE, "readwrite");
+      const store = tx.objectStore(DOCSEEKER_META_STORE);
+      const prevReq = store.get(normUrl);
+      prevReq.onsuccess = () => {
+        const prev = prevReq.result || {};
+        store.put({
+          url: normUrl,
+          totalBytes: data.totalBytes || prev.totalBytes || 0,
+          downloadedBytes: data.downloadedBytes || prev.downloadedBytes || 0,
+          completed: Boolean(data.completed ?? prev.completed),
+          updatedAt: Date.now()
+        }, normUrl);
+      };
+    } catch (e) {}
+  }
+
+  /**
+   * Scanne instantanément les fragments existants dans IndexedDB pour ce document (0-2 ms)
+   */
+  async getCachedStats(docId) {
+    const id = Number(docId);
+    const normUrl = this.normalizeUrl(id);
+    const prefix = `${normUrl}#`;
+
+    try {
+      const db = await this.init();
+      if (!db) return null;
+
+      // 1. Lire les métadonnées rapides
+      const meta = await new Promise((resolve) => {
+        try {
+          const tx = db.transaction(DOCSEEKER_META_STORE, "readonly");
+          const req = tx.objectStore(DOCSEEKER_META_STORE).get(normUrl);
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => resolve(null);
+        } catch (e) {
+          resolve(null);
+        }
+      });
+
+      if (meta && meta.completed) {
+        return {
+          status: "complete",
+          progress: 100,
+          downloadedBytes: meta.totalBytes,
+          totalBytes: meta.totalBytes
+        };
+      }
+
+      // 2. Scan ultra-rapide des clés de fragments (sans lire les données binaires)
+      return new Promise((resolve) => {
+        try {
+          const tx = db.transaction(DOCSEEKER_CHUNK_STORE, "readonly");
+          const store = tx.objectStore(DOCSEEKER_CHUNK_STORE);
+          const range = IDBKeyRange.bound(prefix, prefix + "\uffff");
+          const req = store.openKeyCursor(range);
+          let downloadedBytes = 0;
+
+          req.onsuccess = (evt) => {
+            const cursor = evt.target.result;
+            if (cursor) {
+              const key = String(cursor.key);
+              const parts = key.slice(prefix.length).split("_");
+              if (parts.length === 2) {
+                const b = parseInt(parts[0], 10);
+                const e = parseInt(parts[1], 10);
+                if (e > b) downloadedBytes += (e - b);
+              }
+              cursor.continue();
+            } else {
+              const totalBytes = meta?.totalBytes || 0;
+              const progress = totalBytes > 0 
+                ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100))
+                : 0;
+              const status = (progress >= 100 && totalBytes > 0) ? "complete" : (downloadedBytes > 0 ? "downloading" : "none");
+              resolve({
+                status,
+                progress,
+                downloadedBytes,
+                totalBytes
+              });
+            }
+          };
+          req.onerror = () => resolve(null);
+        } catch (e) {
+          resolve(null);
+        }
+      });
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
    * Met à jour la progression reçue depuis le visualiseur PDF.js
    */
   updateProgressFromViewer(docId, loaded, total) {
     if (!docId || !total) return;
-    const percent = Math.min(100, Math.round((loaded / total) * 100));
+    const id = Number(docId);
+    const prev = this.progressCache.get(id) || {};
+    const bestLoaded = Math.max(prev.downloadedBytes || 0, loaded);
+    const percent = Math.min(100, Math.round((bestLoaded / total) * 100));
     const status = percent >= 100 ? "complete" : "downloading";
-    this._notifyProgress(docId, {
+
+    this._notifyProgress(id, {
       status,
       progress: percent,
-      downloadedBytes: loaded,
+      downloadedBytes: bestLoaded,
       totalBytes: total
     });
+
     if (percent >= 100) {
-      this.markComplete(docId, total);
+      this.markComplete(id, total);
+    } else {
+      this.saveMeta(id, { totalBytes: total, downloadedBytes: bestLoaded, completed: false });
     }
   }
 
@@ -128,18 +237,7 @@ class PdfCacheManager {
       downloadedBytes: totalBytes,
       totalBytes
     });
-    try {
-      const db = await this.init();
-      if (!db) return;
-      const tx = db.transaction(DOCSEEKER_META_STORE, "readwrite");
-      const store = tx.objectStore(DOCSEEKER_META_STORE);
-      store.put({
-        url: this.normalizeUrl(id),
-        totalBytes,
-        completed: true,
-        updatedAt: Date.now()
-      }, this.normalizeUrl(id));
-    } catch (e) {}
+    await this.saveMeta(id, { totalBytes, downloadedBytes: totalBytes, completed: true });
   }
 
   /**
@@ -169,17 +267,20 @@ class PdfCacheManager {
   }
 
   /**
-   * Récupère la progression connue d'un document
+   * Récupère la progression connue d'un document (scanne IndexedDB si nécessaire)
    */
   async getProgress(docId) {
     const id = Number(docId);
     if (this.progressCache.has(id)) {
       return this.progressCache.get(id);
     }
-    const complete = await this.isComplete(id);
-    if (complete) {
-      return { status: "complete", progress: 100, downloadedBytes: 0, totalBytes: 0 };
+
+    const stats = await this.getCachedStats(id);
+    if (stats && (stats.downloadedBytes > 0 || stats.status === "complete")) {
+      this.progressCache.set(id, stats);
+      return stats;
     }
+
     return { status: "none", progress: 0, downloadedBytes: 0, totalBytes: 0 };
   }
 
