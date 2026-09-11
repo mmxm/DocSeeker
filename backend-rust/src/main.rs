@@ -15,6 +15,7 @@ use axum::{
     Router,
 };
 use rusqlite::Connection;
+use tower_http::compression::Predicate;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
@@ -343,10 +344,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let api_router = create_api_router(Arc::clone(&state));
 
+    let compression_predicate = tower_http::compression::predicate::DefaultPredicate::new()
+        .and(tower_http::compression::predicate::NotForContentType::const_new("application/pdf"));
+    let compression = tower_http::compression::CompressionLayer::new().compress_when(compression_predicate);
+
     let app = Router::new()
         .merge(api_router)
         .fallback(static_handler)
-        .layer(tower_http::compression::CompressionLayer::new())
+        .layer(compression)
         .layer(middleware::from_fn(security_headers_middleware))
         .layer(cors)
         .with_state(state);
