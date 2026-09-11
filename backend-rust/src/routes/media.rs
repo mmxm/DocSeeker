@@ -292,12 +292,17 @@ pub async fn get_pdf(
     let stream = ReaderStream::new(buf_reader);
     let body = Body::from_stream(stream);
 
+    let safe_ascii_name: String = fname
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/pdf")
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CONTENT_LENGTH, file_size.to_string())
-        .header(header::CONTENT_DISPOSITION, format!("inline; filename=\"{}\"", fname))
+        .header(header::CONTENT_DISPOSITION, format!("inline; filename=\"{}\"", safe_ascii_name))
         .header(header::ETAG, &etag)
         .header(header::CACHE_CONTROL, "public, max-age=86400")
         .header(header::HeaderName::from_static("x-accel-buffering"), "no")

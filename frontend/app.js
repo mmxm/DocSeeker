@@ -206,8 +206,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  const PLACEHOLDER_CROP_SVG = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='250' height='125'%3E%3Crect width='100%25' height='100%25' fill='%23f1f5f9'/%3E%3C/svg%3E";
-  const PLACEHOLDER_COVER_SVG = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='200'%3E%3Crect width='100%25' height='100%25' fill='%23f1f5f9'/%3E%3C/svg%3E";
+  const PLACEHOLDER_CROP_SVG = "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22250%22 height=%22125%22%3E%3Crect width=%22100%25%22 height=%22100%25%22 fill=%22%23f1f5f9%22/%3E%3C/svg%3E";
+  const PLACEHOLDER_COVER_SVG = "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22150%22 height=%22200%22%3E%3Crect width=%22100%25%22 height=%22100%25%22 fill=%22%23f1f5f9%22/%3E%3C/svg%3E";
 
   // =========================================================================
   // =========================================================================
@@ -3244,6 +3244,21 @@ document.addEventListener("DOMContentLoaded", () => {
       } catch (e) {}
     };
 
+    if (viewerCacheBadge && !viewerCacheBadge._hasClickHandler) {
+      viewerCacheBadge._hasClickHandler = true;
+      viewerCacheBadge.style.cursor = "pointer";
+      viewerCacheBadge.addEventListener("click", async () => {
+        if (!currentActiveDocId) return;
+        if (confirm("Voulez-vous réinitialiser le cache local pour ce document et le recharger ?")) {
+          if (window.pdfCacheManager) {
+            await window.pdfCacheManager.invalidate(currentActiveDocId);
+          }
+          updateCacheUI("none", 0);
+          pdfFrame.src = `/pdfjs/web/viewer.html?file=/api/pdf/${currentActiveDocId}#page=${getCurrentViewerPage() || 1}&_nocache=${Date.now()}`;
+        }
+      });
+    }
+
     if (window.pdfCacheManager) {
       window.pdfCacheManager.onProgress(numericDocId, (info) => {
         if (Number(currentActiveDocId) === numericDocId) {
@@ -3332,6 +3347,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
             if (app.eventBus) {
               app.eventBus._on("pagesinit", onDocReady, { once: true });
+              app.eventBus._on("documenterror", async (err) => {
+                console.warn("[DocSeeker] Erreur réouverture à chaud, repli vers rechargement complet :", err);
+                if (window.pdfCacheManager) {
+                  await window.pdfCacheManager.invalidate(numericDocId);
+                }
+                updateCacheUI("none", 0);
+                pdfFrame.src = viewerUrl;
+              }, { once: true });
             }
 
             await app.open({ url: pdfTargetUrl });
@@ -3401,11 +3424,9 @@ document.addEventListener("DOMContentLoaded", () => {
                   if (window.pdfCacheManager) {
                     await window.pdfCacheManager.invalidate(numericDocId);
                   }
-                  if (pdfTargetUrl.startsWith("blob:")) {
-                    console.log(`[DocSeeker] Bascule automatique sur /api/pdf/${numericDocId} suite à erreur Blob`);
-                    updateCacheUI("none", 0);
-                    pdfFrame.src = `/pdfjs/web/viewer.html?file=/api/pdf/${numericDocId}#page=${targetPage}`;
-                  }
+                  console.log(`[DocSeeker] Rechargement automatique suite à documenterror pour doc ${numericDocId}`);
+                  updateCacheUI("none", 0);
+                  pdfFrame.src = `/pdfjs/web/viewer.html?file=${encodeURI(pdfTargetUrl)}#page=${targetPage}&_nocache=${Date.now()}`;
                 }, { once: true });
               }
             } catch (e) {}

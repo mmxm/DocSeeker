@@ -10281,7 +10281,7 @@ class PDFFetchStreamRangeReader {
     this._accumulatedChunks = null;
 
     _readCachedChunk(cacheKey).then(cached => {
-      if (cached && (cached.byteLength === (end - begin) || cached.byteLength > 0)) {
+      if (cached && cached.byteLength === (end - begin)) {
         this._fromCache = true;
         this._cachedData = cached;
         this._readCapability.resolve();
