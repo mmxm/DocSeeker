@@ -241,6 +241,7 @@ pub async fn get_pdf(
                     .header(header::CONTENT_LENGTH, length.to_string())
                     .header(header::ETAG, &etag)
                     .header(header::CACHE_CONTROL, "public, max-age=86400")
+                    .header(header::HeaderName::from_static("x-accel-buffering"), "no")
                     .body(body)
                     .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Erreur réponse").into_response());
             }
@@ -265,6 +266,7 @@ pub async fn get_pdf(
         .header(header::CONTENT_DISPOSITION, format!("inline; filename=\"{}\"", fname))
         .header(header::ETAG, &etag)
         .header(header::CACHE_CONTROL, "public, max-age=86400")
+        .header(header::HeaderName::from_static("x-accel-buffering"), "no")
         .body(body)
         .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Erreur réponse").into_response())
 }

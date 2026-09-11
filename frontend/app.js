@@ -332,6 +332,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
   // Pipeline d'Indexation en Arrière-Plan & Polling
   // =========================================================================
+  let currentPollingDelay = 10000; // 10 secondes par défaut au repos
+
   async function checkPipelineStatus() {
     try {
       const res = await fetch("/api/pipeline/status");
@@ -340,6 +342,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const isProcessing = Boolean(data.is_processing || (data.queue_length > 0) || data.current_job);
       const remaining = (data.queue_length || 0) + (data.current_job ? 1 : 0);
+
+      // Adapter la cadence de polling : 2s pendant une indexation active, 10s au repos
+      const targetDelay = isProcessing ? 2000 : 10000;
+      if (targetDelay !== currentPollingDelay) {
+        currentPollingDelay = targetDelay;
+        if (pipelinePollingInterval) {
+          clearInterval(pipelinePollingInterval);
+          pipelinePollingInterval = setInterval(checkPipelineStatus, currentPollingDelay);
+        }
+      }
 
       if (isProcessing) {
         isPipelineActive = true;
@@ -370,7 +382,6 @@ document.addEventListener("DOMContentLoaded", () => {
           if (!currentSearchQuery) {
             loadFoldersAndDocuments();
           }
-          stopPipelinePolling();
         } else {
           if (pipelineStatusBadge && !isPipelineActive) {
             pipelineStatusBadge.style.display = "none";
@@ -382,11 +393,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function startPipelinePolling() {
+  function startPipelinePolling(delay = null) {
+    if (delay) currentPollingDelay = delay;
     checkPipelineStatus();
-    if (!pipelinePollingInterval) {
-      pipelinePollingInterval = setInterval(checkPipelineStatus, 2000);
+    if (pipelinePollingInterval) {
+      clearInterval(pipelinePollingInterval);
     }
+    pipelinePollingInterval = setInterval(checkPipelineStatus, currentPollingDelay);
   }
 
   function stopPipelinePolling() {
@@ -3145,6 +3158,27 @@ document.addEventListener("DOMContentLoaded", () => {
         viewerCacheBadge.className = "viewer-doc-badge viewer-cache-badge complete";
         viewerCacheBadge.textContent = "⚡ En cache";
         viewerCacheBadge.title = "Document disponible à 100% en cache local (0 ms réseau)";
+      } else if (status === "offline") {
+        viewerCacheBadge.style.display = "inline-flex";
+        viewerCacheBadge.className = "viewer-doc-badge viewer-cache-badge paused";
+        viewerCacheBadge.textContent = "⏸️ Hors-ligne";
+        viewerCacheBadge.title = "Connexion réseau coupée. Le téléchargement reprendra automatiquement dès la reconnexion.";
+      } else if (status === "retrying") {
+        viewerCacheBadge.style.display = "inline-flex";
+        viewerCacheBadge.className = "viewer-doc-badge viewer-cache-badge downloading";
+        viewerCacheBadge.textContent = "🔄 Reconnexion...";
+        viewerCacheBadge.title = "Tentative de reconnexion au serveur...";
+      } else if (status === "paused" && progress > 0) {
+        viewerCacheBadge.style.display = "inline-flex";
+        viewerCacheBadge.className = "viewer-doc-badge viewer-cache-badge paused";
+        const mbDl = downloadedBytes > 0 ? (downloadedBytes / (1024 * 1024)).toFixed(1) : null;
+        const mbTot = totalBytes > 0 ? (totalBytes / (1024 * 1024)).toFixed(0) : null;
+        if (mbDl && mbTot) {
+          viewerCacheBadge.textContent = `⏸️ ${progress}% (${mbDl}/${mbTot} Mo)`;
+        } else {
+          viewerCacheBadge.textContent = `⏸️ ${progress}%`;
+        }
+        viewerCacheBadge.title = `Téléchargement suspendu : ${progress}%`;
       } else if (status === "downloading" && progress > 0) {
         viewerCacheBadge.style.display = "inline-flex";
         viewerCacheBadge.className = "viewer-doc-badge viewer-cache-badge downloading";
@@ -3187,7 +3221,11 @@ document.addEventListener("DOMContentLoaded", () => {
       if (window.pdfCacheManager) {
         window.pdfCacheManager.isComplete(numericDocId).then(complete => {
           if (!complete) {
-            window.pdfCacheManager.startDownload(numericDocId);
+            setTimeout(() => {
+              if (Number(currentActiveDocId) === numericDocId) {
+                window.pdfCacheManager.startDownload(numericDocId);
+              }
+            }, 800);
           }
         }).catch(() => {});
       }
@@ -3203,9 +3241,6 @@ document.addEventListener("DOMContentLoaded", () => {
               pdfTargetUrl = blobUrl;
               updateCacheUI("complete", 100);
             }
-          } else {
-            // Lancer ou reprendre le téléchargement résumable en tâche de fond
-            window.pdfCacheManager.startDownload(numericDocId);
           }
         }
 
@@ -3228,6 +3263,31 @@ document.addEventListener("DOMContentLoaded", () => {
                   updateCacheUI(p.status, p.progress, p.downloadedBytes, p.totalBytes);
                 }
               }).catch(() => {});
+            }
+
+            // Priorité absolue au visualiseur :
+            // Le téléchargement par blocs ne démarre qu'une fois la page cible affichée à l'écran
+            const startBackgroundDownload = () => {
+              if (window.pdfCacheManager && Number(currentActiveDocId) === numericDocId) {
+                window.pdfCacheManager.isComplete(numericDocId).then(complete => {
+                  if (!complete && Number(currentActiveDocId) === numericDocId) {
+                    window.pdfCacheManager.startDownload(numericDocId);
+                  }
+                }).catch(() => {});
+              }
+            };
+
+            try {
+              const win = pdfFrame.contentWindow;
+              if (win && win.PDFViewerApplication && win.PDFViewerApplication.eventBus) {
+                win.PDFViewerApplication.eventBus._on("pagerendered", () => {
+                  setTimeout(startBackgroundDownload, 1200);
+                }, { once: true });
+              } else {
+                setTimeout(startBackgroundDownload, 2500);
+              }
+            } catch (e) {
+              setTimeout(startBackgroundDownload, 2500);
             }
 
             // Fallback résilient en cas d'erreur de chargement (ex: ancien cache corrompu)

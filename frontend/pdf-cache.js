@@ -8,6 +8,28 @@
  * - Vérifie la validité du cache via l'ETag du serveur pour détecter toute modification du fichier.
  */
 
+function createTimeoutSignal(parentSignal, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(new DOMException("Timeout du bloc réseau", "TimeoutError"));
+  }, timeoutMs);
+
+  if (parentSignal) {
+    if (parentSignal.aborted) {
+      clearTimeout(timer);
+      controller.abort(parentSignal.reason);
+    } else {
+      parentSignal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        controller.abort(parentSignal.reason);
+      }, { once: true });
+    }
+  }
+
+  const cleanup = () => clearTimeout(timer);
+  return { signal: controller.signal, cleanup };
+}
+
 class PdfCacheManager {
   constructor() {
     this.dbName = "docseeker_pdf_cache_v1";
@@ -17,6 +39,27 @@ class PdfCacheManager {
     this.activeDownloads = new Map(); // docId -> AbortController
     this.progressListeners = new Map(); // docId -> Set of callbacks
     this._initPromise = null;
+    this.chunkTimeoutMs = 15000; // 15 secondes max par bloc de 2 Mo (évite les connexions zombies)
+    this.interChunkDelayMs = 50; // Micro-pause pour laisser respirer le réseau et les requêtes prioritaires du lecteur
+    this._setupNetworkListeners();
+  }
+
+  _setupNetworkListeners() {
+    if (typeof window === "undefined") return;
+
+    window.addEventListener("offline", () => {
+      console.warn("[PdfCacheManager] Connexion Internet perdue. Téléchargements en pause.");
+      for (const [docId] of this.activeDownloads) {
+        this._notifyProgress(docId, { status: "offline" });
+      }
+    });
+
+    window.addEventListener("online", () => {
+      console.log("[PdfCacheManager] Connexion Internet rétablie. Reprise automatique.");
+      for (const [docId] of this.activeDownloads) {
+        this._notifyProgress(docId, { status: "resuming" });
+      }
+    });
   }
 
   async init() {
@@ -364,8 +407,112 @@ class PdfCacheManager {
   }
 
   /**
+   * Télécharge un bloc d'octets délimité (Range: bytes=start-end) avec timeout (15s),
+   * détection de déconnexion et auto-retry avec backoff exponentiel.
+   */
+  async _fetchChunkWithRetry(id, start, end, parentSignal) {
+    const url = `/api/pdf/${id}`;
+    let attempt = 0;
+    const maxAttempts = 5;
+
+    while (attempt < maxAttempts) {
+      if (parentSignal.aborted) {
+        throw new DOMException("Téléchargement annulé", "AbortError");
+      }
+
+      // Si le navigateur est hors-ligne, suspendre et attendre le retour du réseau
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        this._notifyProgress(id, { status: "offline" });
+        await new Promise((resolve) => {
+          const onOnline = () => {
+            window.removeEventListener("online", onOnline);
+            resolve();
+          };
+          window.addEventListener("online", onOnline);
+          parentSignal.addEventListener("abort", () => {
+            window.removeEventListener("online", onOnline);
+            resolve();
+          }, { once: true });
+        });
+        if (parentSignal.aborted) {
+          throw new DOMException("Téléchargement annulé", "AbortError");
+        }
+      }
+
+      const { signal, cleanup } = createTimeoutSignal(parentSignal, this.chunkTimeoutMs);
+
+      try {
+        const response = await fetch(url, {
+          headers: {
+            "Range": `bytes=${start}-${end}`
+          },
+          signal: signal
+        });
+
+        cleanup();
+
+        // 416 = Fin du fichier atteinte
+        if (response.status === 416) {
+          return { eof: true };
+        }
+
+        if (!response.ok && response.status !== 206) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const serverEtag = response.headers.get("ETag") || `doc-${id}`;
+        let totalBytes = 0;
+        const contentRange = response.headers.get("Content-Range");
+        if (contentRange) {
+          const match = contentRange.match(/\/(\d+)$/);
+          if (match) totalBytes = parseInt(match[1], 10);
+        } else {
+          const clen = response.headers.get("Content-Length");
+          if (clen) totalBytes = parseInt(clen, 10);
+        }
+
+        const arrayBuf = await response.arrayBuffer();
+        const uint8 = new Uint8Array(arrayBuf);
+
+        return {
+          data: uint8,
+          serverEtag: serverEtag,
+          totalBytes: totalBytes,
+          eof: false
+        };
+
+      } catch (err) {
+        cleanup();
+
+        if (parentSignal.aborted) {
+          throw new DOMException("Téléchargement annulé", "AbortError");
+        }
+
+        attempt++;
+        if (attempt >= maxAttempts) {
+          throw err;
+        }
+
+        // Backoff exponentiel (1s, 2s, 4s, 8s) + jitter aléatoire
+        const backoffMs = Math.min(8000, 1000 * Math.pow(2, attempt - 1)) + Math.floor(Math.random() * 300);
+        console.warn(`[PdfCacheManager] Échec bloc ${start}-${end} doc ${id} (${attempt}/${maxAttempts}: ${err.message}). Réessai dans ${backoffMs}ms...`);
+        this._notifyProgress(id, { status: "retrying", attempt, maxAttempts });
+
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, backoffMs);
+          parentSignal.addEventListener("abort", () => {
+            clearTimeout(timer);
+            resolve();
+          }, { once: true });
+        });
+      }
+    }
+  }
+
+  /**
    * Démarre ou reprend le téléchargement d'un document en tâche de fond.
-   * Utilise des requêtes par plages (Range) et enregistre les blocs dans IndexedDB.
+   * Télécharge bloc par bloc de 2 Mo via HTTP Range pour ne jamais saturer le canal HTTP/2,
+   * avec micro-pause de 50ms et tolérance totale aux coupures réseau.
    */
   async startDownload(docId, onProgressCb = null) {
     const id = Number(docId);
@@ -412,162 +559,104 @@ class PdfCacheManager {
     this.activeDownloads.set(id, abortController);
 
     try {
-      const url = `/api/pdf/${id}`;
-      const headers = {};
-
-      // Si nous avons déjà téléchargé une partie, demander uniquement la suite !
-      if (meta.downloadedBytes > 0) {
-        headers["Range"] = `bytes=${meta.downloadedBytes}-`;
-      }
+      let downloadedSoFar = meta.downloadedBytes || 0;
+      let chunkIndex = meta.chunkCount || 0;
+      let totalBytes = meta.totalBytes || 0;
+      let serverEtag = meta.etag || null;
 
       this._notifyProgress(id, {
         status: "downloading",
-        progress: meta.totalBytes > 0 ? Math.round((meta.downloadedBytes / meta.totalBytes) * 100) : 0,
-        downloadedBytes: meta.downloadedBytes,
-        totalBytes: meta.totalBytes
+        progress: totalBytes > 0 ? Math.round((downloadedSoFar / totalBytes) * 100) : 0,
+        downloadedBytes: downloadedSoFar,
+        totalBytes: totalBytes
       });
 
-      const response = await fetch(url, {
-        headers: headers,
-        signal: abortController.signal
-      });
-
-      // Si le serveur répond 416 (Range invalide ou fin atteinte)
-      if (response.status === 416) {
-        console.warn(`[PdfCacheManager] Status 416 pour doc ${id}, vérification intégrité...`);
-        const allChunks = await this.getAllChunks(id);
-        const fullBlob = new Blob(allChunks, { type: "application/pdf" });
-        if (meta.totalBytes > 0 && fullBlob.size === meta.totalBytes) {
-          await this.finalizeBlob(id, fullBlob, meta.etag || serverEtag, fullBlob.size);
-          this._notifyProgress(id, {
-            status: "complete",
-            progress: 100,
-            downloadedBytes: fullBlob.size,
-            totalBytes: fullBlob.size
-          });
-        } else {
-          console.warn(`[PdfCacheManager] Données incomplètes lors du statut 416 (${fullBlob.size} != ${meta.totalBytes}). Invalidation.`);
-          await this.invalidate(id);
-        }
-        this.activeDownloads.delete(id);
-        return;
-      }
-
-      if (!response.ok && response.status !== 206) {
-        throw new Error(`HTTP ${response.status} lors de la requête PDF`);
-      }
-
-      const serverEtag = response.headers.get("ETag") || `doc-${id}`;
-      
-      // Si l'ETag a changé par rapport aux chunks précédents, le document a changé : on réinitialise
-      if (meta.etag && meta.etag !== serverEtag && response.status !== 206) {
-        console.log(`[PdfCacheManager] Le fichier sur le serveur a changé pour doc ${id}. Réinitialisation du cache.`);
-        await this.deleteChunks(id);
-        meta.downloadedBytes = 0;
-        meta.chunkCount = 0;
-      }
-      meta.etag = serverEtag;
-
-      // Calcul de la taille totale
-      let totalBytes = meta.totalBytes;
-      const contentRange = response.headers.get("Content-Range");
-      if (contentRange) {
-        // Ex: "bytes 4194304-10485759/10485760"
-        const match = contentRange.match(/\/(\d+)$/);
-        if (match) {
-          totalBytes = parseInt(match[1], 10);
-          meta.totalBytes = totalBytes;
-        }
-      } else {
-        const clen = response.headers.get("Content-Length");
-        if (clen) {
-          totalBytes = parseInt(clen, 10);
-          meta.totalBytes = totalBytes;
-        }
-      }
-
-      const reader = response.body.getReader();
-      let buffer = [];
-      let bufferSize = 0;
-      let downloadedSoFar = meta.downloadedBytes;
-      let chunkIndex = meta.chunkCount || 0;
-
-      while (true) {
-        const { done, value } = await reader.read();
-
-        if (done) {
-          // Flush du buffer résiduel si non vide
-          if (bufferSize > 0) {
-            const finalChunk = this._mergeBuffers(buffer, bufferSize);
-            await this.saveChunk(id, chunkIndex, finalChunk);
-            chunkIndex++;
-            downloadedSoFar += bufferSize;
-          }
-
-          meta.downloadedBytes = downloadedSoFar;
-          meta.chunkCount = chunkIndex;
-          meta.updatedAt = Date.now();
-          await this.saveMetadata(meta);
-
-          // Si le flux réseau s'est arrêté avant que la totalité du fichier ne soit reçue
-          if (totalBytes > 0 && downloadedSoFar < totalBytes) {
-            console.warn(`[PdfCacheManager] Flux terminé avant la fin pour doc ${id} : ${downloadedSoFar}/${totalBytes} octets.`);
-            this._notifyProgress(id, {
-              status: "paused",
-              progress: Math.min(99, Math.round((downloadedSoFar / totalBytes) * 100)),
-              downloadedBytes: downloadedSoFar,
-              totalBytes: totalBytes
-            });
-            break;
-          }
-
-          // Assemblage final du Blob uniquement si 100% complet
-          const allChunks = await this.getAllChunks(id);
-          const fullBlob = new Blob(allChunks, { type: "application/pdf" });
-          
-          if (totalBytes > 0 && fullBlob.size !== totalBytes) {
-            console.error(`[PdfCacheManager] Incohérence taille finale doc ${id} (${fullBlob.size} != ${totalBytes}). Invalidation.`);
-            await this.invalidate(id);
-            break;
-          }
-
-          await this.finalizeBlob(id, fullBlob, serverEtag, totalBytes);
-          
-          this._notifyProgress(id, {
-            status: "complete",
-            progress: 100,
-            downloadedBytes: totalBytes,
-            totalBytes: totalBytes
-          });
+      while (!abortController.signal.aborted) {
+        if (totalBytes > 0 && downloadedSoFar >= totalBytes) {
           break;
         }
 
-        buffer.push(value);
-        bufferSize += value.byteLength;
+        const start = downloadedSoFar;
+        const end = (totalBytes > 0)
+          ? Math.min(start + this.chunkSize - 1, totalBytes - 1)
+          : start + this.chunkSize - 1;
 
-        // Dès que le buffer atteint la taille d'un chunk (2 Mo), on persiste dans IndexedDB
-        if (bufferSize >= this.chunkSize) {
-          const chunkData = this._mergeBuffers(buffer, bufferSize);
-          await this.saveChunk(id, chunkIndex, chunkData);
-          
-          downloadedSoFar += bufferSize;
-          chunkIndex++;
-          buffer = [];
-          bufferSize = 0;
+        const result = await this._fetchChunkWithRetry(id, start, end, abortController.signal);
 
-          meta.downloadedBytes = downloadedSoFar;
-          meta.chunkCount = chunkIndex;
-          meta.updatedAt = Date.now();
-          await this.saveMetadata(meta);
-
-          const pct = totalBytes > 0 ? Math.min(99, Math.round((downloadedSoFar / totalBytes) * 100)) : 0;
-          this._notifyProgress(id, {
-            status: "downloading",
-            progress: pct,
-            downloadedBytes: downloadedSoFar,
-            totalBytes: totalBytes
-          });
+        if (result.eof) {
+          break;
         }
+
+        // Vérification de changement de version du fichier sur le serveur
+        if (meta.etag && result.serverEtag && meta.etag !== result.serverEtag) {
+          console.log(`[PdfCacheManager] Fichier distant modifié pour doc ${id}. Réinitialisation du cache.`);
+          await this.deleteChunks(id);
+          downloadedSoFar = 0;
+          chunkIndex = 0;
+          meta.downloadedBytes = 0;
+          meta.chunkCount = 0;
+        }
+
+        serverEtag = result.serverEtag || serverEtag;
+        meta.etag = serverEtag;
+
+        if (result.totalBytes > 0) {
+          totalBytes = result.totalBytes;
+          meta.totalBytes = totalBytes;
+        }
+
+        // Sauvegarde du fragment de 2 Mo dans IndexedDB
+        await this.saveChunk(id, chunkIndex, result.data);
+
+        downloadedSoFar += result.data.byteLength;
+        chunkIndex++;
+
+        meta.downloadedBytes = downloadedSoFar;
+        meta.chunkCount = chunkIndex;
+        meta.updatedAt = Date.now();
+        await this.saveMetadata(meta);
+
+        const pct = totalBytes > 0 ? Math.min(99, Math.round((downloadedSoFar / totalBytes) * 100)) : 0;
+        this._notifyProgress(id, {
+          status: "downloading",
+          progress: pct,
+          downloadedBytes: downloadedSoFar,
+          totalBytes: totalBytes
+        });
+
+        if (totalBytes > 0 && downloadedSoFar >= totalBytes) {
+          break;
+        }
+
+        // Micro-pause de 50ms pour laisser respirer le réseau et les requêtes du visualiseur
+        if (this.interChunkDelayMs > 0) {
+          await new Promise(r => setTimeout(r, this.interChunkDelayMs));
+        }
+      }
+
+      if (abortController.signal.aborted) {
+        return;
+      }
+
+      // Assemblage final du Blob une fois 100% terminé
+      if (totalBytes > 0 && downloadedSoFar >= totalBytes) {
+        const allChunks = await this.getAllChunks(id);
+        const fullBlob = new Blob(allChunks, { type: "application/pdf" });
+
+        if (fullBlob.size !== totalBytes) {
+          console.error(`[PdfCacheManager] Incohérence taille finale doc ${id} (${fullBlob.size} != ${totalBytes}). Invalidation.`);
+          await this.invalidate(id);
+          return;
+        }
+
+        await this.finalizeBlob(id, fullBlob, serverEtag, totalBytes);
+
+        this._notifyProgress(id, {
+          status: "complete",
+          progress: 100,
+          downloadedBytes: totalBytes,
+          totalBytes: totalBytes
+        });
       }
 
     } catch (err) {
