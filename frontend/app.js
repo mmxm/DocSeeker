@@ -3240,17 +3240,6 @@ document.addEventListener("DOMContentLoaded", () => {
         viewerCacheBadge.style.display = "none";
       }
 
-      // Synchronisation directe et dédupliquée avec la barre de progression bleue dans le lecteur PDF.js
-      if (viewerCacheBadge._lastSentStatus !== status || viewerCacheBadge._lastSentProgress !== progress) {
-        viewerCacheBadge._lastSentStatus = status;
-        viewerCacheBadge._lastSentProgress = progress;
-        try {
-          const win = pdfFrame.contentWindow;
-          if (win && win.PDFViewerApplication && typeof win.PDFViewerApplication.setDownloadProgress === "function") {
-            win.PDFViewerApplication.setDownloadProgress(status, progress);
-          }
-        } catch (e) {}
-      }
     };
 
     if (viewerCacheBadge && !viewerCacheBadge._hasClickHandler) {
@@ -3264,7 +3253,7 @@ document.addEventListener("DOMContentLoaded", () => {
             await window.pdfCacheManager.invalidate(currentActiveDocId);
           }
           updateCacheUI("none", 0);
-          pdfFrame.src = `/pdfjs/web/viewer.html?v=5.4&file=/api/pdf/${currentActiveDocId}#page=${getCurrentViewerPage() || 1}&_nocache=${Date.now()}`;
+          pdfFrame.src = `/pdfjs/web/viewer.html?v=5.5&file=/api/pdf/${currentActiveDocId}#page=${getCurrentViewerPage() || 1}&_nocache=${Date.now()}`;
         }
       });
     }
@@ -3319,7 +3308,7 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         }
 
-        let viewerUrl = `/pdfjs/web/viewer.html?v=5.4&file=${encodeURI(pdfTargetUrl)}#page=${targetPage}`;
+        let viewerUrl = `/pdfjs/web/viewer.html?v=5.5&file=${encodeURI(pdfTargetUrl)}#page=${targetPage}`;
         if (currentSearchQuery) {
           viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
         }

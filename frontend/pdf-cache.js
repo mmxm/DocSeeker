@@ -148,16 +148,7 @@ class PdfCacheManager {
         }
       });
 
-      if (meta && meta.completed) {
-        return {
-          status: "complete",
-          progress: 100,
-          downloadedBytes: meta.totalBytes,
-          totalBytes: meta.totalBytes
-        };
-      }
-
-      // 2. Scan ultra-rapide des clés de fragments (sans lire les données binaires)
+      // 2. Scan ultra-rapide des clés de fragments réels (0-2 ms, sans lire les gros binaires)
       return new Promise((resolve) => {
         try {
           const tx = db.transaction(DOCSEEKER_CHUNK_STORE, "readonly");
@@ -179,10 +170,18 @@ class PdfCacheManager {
               cursor.continue();
             } else {
               const totalBytes = meta?.totalBytes || 0;
+              // Vérification stricte : le document n'est "complete" que si la somme des fragments réels couvre la totalité
+              const isTrulyComplete = totalBytes > 0 && downloadedBytes >= totalBytes;
               const progress = totalBytes > 0 
                 ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100))
-                : 0;
-              const status = (progress >= 100 && totalBytes > 0) ? "complete" : (downloadedBytes > 0 ? "downloading" : "none");
+                : (isTrulyComplete ? 100 : 0);
+              const status = isTrulyComplete ? "complete" : (downloadedBytes > 0 ? "downloading" : "none");
+
+              // Auto-réparation si meta.completed était incohérent avec les fragments réels
+              if (meta && meta.completed !== isTrulyComplete && totalBytes > 0) {
+                this.saveMeta(id, { totalBytes, downloadedBytes, completed: isTrulyComplete });
+              }
+
               resolve({
                 status,
                 progress,
@@ -208,6 +207,13 @@ class PdfCacheManager {
     if (!docId || !total) return;
     const id = Number(docId);
     const prev = this.progressCache.get(id) || {};
+
+    // Si le document est déjà vérifié comme 100% complet avec tous ses fragments,
+    // on interdit formellement de le rétrograder en mode "téléchargement" lors du parcours local
+    if (prev.status === "complete" && prev.progress >= 100) {
+      return;
+    }
+
     const bestLoaded = Math.max(prev.downloadedBytes || 0, loaded);
     const percent = Math.min(100, Math.round((bestLoaded / total) * 100));
     const status = percent >= 100 ? "complete" : "downloading";
@@ -241,29 +247,19 @@ class PdfCacheManager {
   }
 
   /**
-   * Vérifie si un document est 100% en cache
+   * Vérifie si un document est 100% en cache (validé par la somme réelle des fragments stockés)
    */
   async isComplete(docId) {
     const id = Number(docId);
     const cached = this.progressCache.get(id);
-    if (cached && cached.status === "complete") return true;
+    if (cached && cached.status === "complete" && cached.progress >= 100) return true;
 
-    try {
-      const db = await this.init();
-      if (!db) return false;
-      return new Promise((resolve) => {
-        const tx = db.transaction(DOCSEEKER_META_STORE, "readonly");
-        const store = tx.objectStore(DOCSEEKER_META_STORE);
-        const req = store.get(this.normalizeUrl(id));
-        req.onsuccess = () => {
-          const res = req.result;
-          resolve(!!(res && res.completed));
-        };
-        req.onerror = () => resolve(false);
-      });
-    } catch (e) {
-      return false;
+    const stats = await this.getCachedStats(id);
+    if (stats && stats.status === "complete" && stats.progress >= 100) {
+      this.progressCache.set(id, stats);
+      return true;
     }
+    return false;
   }
 
   /**
