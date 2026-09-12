@@ -452,6 +452,9 @@ class ProgressBar {
     if (!this.#visible) {
       return;
     }
+    if (typeof PDFViewerApplication !== "undefined" && PDFViewerApplication._externalProgressManaged && this.#percent < 100) {
+      return;
+    }
     this.#visible = false;
     this.#classList.add("hidden");
   }
@@ -831,7 +834,7 @@ const defaultOptions = {
     kind: OptionKind.WORKER
   },
   workerSrc: {
-    value: "../build/pdf.worker.mjs?v=5.3",
+    value: "../build/pdf.worker.mjs?v=5.4",
     kind: OptionKind.WORKER
   }
 };
@@ -13909,12 +13912,14 @@ const PDFViewerApplication = {
     if (!this.loadingBar) return;
     if (status === "downloading") {
       this.loadingBar.show();
-      this.loadingBar.percent = Math.max(0, Math.min(100, percent));
+      const currentPct = this.loadingBar.percent || 0;
+      const targetPct = Math.max(currentPct, Math.min(100, percent));
+      this.loadingBar.percent = targetPct;
     } else if (status === "complete") {
       this.loadingBar.percent = 100;
       setTimeout(() => {
         if (this.loadingBar) this.loadingBar.hide();
-      }, 400);
+      }, 600);
     } else if (status === "paused" || status === "error") {
       this.loadingBar.hide();
     }
@@ -13938,7 +13943,9 @@ const PDFViewerApplication = {
       length
     }) => {
       this._contentLength = length;
-      this.loadingBar?.hide();
+      if (!this._externalProgressManaged || (this.loadingBar && this.loadingBar.percent >= 100)) {
+        this.loadingBar?.hide();
+      }
       try {
         this.eventBus?.dispatch("doccomplete", { source: this, length });
         window.parent?.postMessage({
