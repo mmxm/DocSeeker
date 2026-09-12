@@ -583,7 +583,7 @@ document.addEventListener("DOMContentLoaded", () => {
     mobileDrawerOverlay.addEventListener("click", closeMobileOccurrencesDrawer);
   }
 
-  function renderDrawerOccurrences(docId, docTitle, occurrences, activePage) {
+  function renderDrawerOccurrences(docId, docTitle, occurrences, activePage, activeOccId = null) {
     if (!drawerOccurrencesList) return;
     drawerOccurrencesList.innerHTML = "";
     if (!occurrences || occurrences.length === 0) {
@@ -593,9 +593,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const placeholderSvg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='120'%3E%3Crect width='100%25' height='100%25' fill='%23f1f5f9'/%3E%3C/svg%3E";
 
+    let activeTargetIndex = -1;
+    if (activeOccId && occurrences) {
+      activeTargetIndex = occurrences.findIndex(o => String(o.occ_id) === String(activeOccId));
+    }
+    if (activeTargetIndex === -1 && activePage && occurrences) {
+      activeTargetIndex = occurrences.findIndex(o => o.page_number === activePage);
+    }
+    if (activeTargetIndex === -1 && occurrences && occurrences.length > 0) {
+      activeTargetIndex = 0;
+    }
+
     occurrences.forEach((occ, index) => {
       const item = document.createElement("div");
-      const isActive = (occ.page_number === activePage);
+      const isActive = (index === activeTargetIndex);
       item.className = `vertical-occ-card ${isActive ? 'active' : ''}`;
       item.innerHTML = `
         <div class="vertical-occ-img-wrapper">
@@ -611,7 +622,7 @@ document.addEventListener("DOMContentLoaded", () => {
         currentActiveOccurrenceIndex = index;
         updateOccurrenceStepperUI();
         const targetRect = (occ.highlight_rects && occ.highlight_rects.length > 0) ? occ.highlight_rects[0] : occ.rect;
-        openDocumentInSplitView(docId, docTitle, occ.page_number, occurrences, targetRect, occ.y_ratio || 0);
+        openDocumentInSplitView(docId, docTitle, occ.page_number, occurrences, targetRect, occ.y_ratio || 0, occ.occ_id);
       });
       drawerOccurrencesList.appendChild(item);
       const img = item.querySelector(".dynamic-crop");
@@ -1289,6 +1300,26 @@ document.addEventListener("DOMContentLoaded", () => {
     return bestIdx;
   }
 
+  function scrollActiveCardIntoView(card) {
+    if (!card) return;
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        if (!card || !card.isConnected) return;
+        if (resultsPane && resultsPane.contains(card)) {
+          const paneRect = resultsPane.getBoundingClientRect();
+          const cardRect = card.getBoundingClientRect();
+          const targetScrollTop = resultsPane.scrollTop + (cardRect.top - paneRect.top) - (paneRect.height / 2) + (cardRect.height / 2);
+          resultsPane.scrollTo({
+            top: Math.max(0, targetScrollTop),
+            behavior: "smooth"
+          });
+        } else {
+          card.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      }, 50);
+    });
+  }
+
   function jumpToOccurrenceByIndex(index) {
     if (!currentActiveOccurrences || currentActiveOccurrences.length === 0) return;
     if (index < 0) index = currentActiveOccurrences.length - 1;
@@ -1304,7 +1335,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const isCardActive = (idx === index);
       el.classList.toggle("active", isCardActive);
       if (isCardActive) {
-        el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        scrollActiveCardIntoView(el);
       }
     });
 
@@ -1314,7 +1345,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const isCardActive = (idx === index);
         el.classList.toggle("active", isCardActive);
         if (isCardActive) {
-          el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          scrollActiveCardIntoView(el);
         }
       });
     }
@@ -2089,9 +2120,10 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!vEl) return;
         const dPage = parseInt(vEl.getAttribute("data-page"), 10);
         const yRatio = parseFloat(vEl.getAttribute("data-yratio") || 0);
+        const occId = vEl.getAttribute("data-occ");
         let rect = null;
         try { rect = JSON.parse(vEl.getAttribute("data-rect") || "[]"); } catch(e) {}
-        openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], rect, yRatio);
+        openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], rect, yRatio, occId);
       });
 
       // Scroll infini horizontal : chargement transparent des occurrences suivantes au scroll vers la droite
@@ -2185,7 +2217,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const firstPage = firstOcc ? firstOcc.page_number : 1;
       const firstRect = firstOcc ? ((firstOcc.highlight_rects && firstOcc.highlight_rects.length > 0) ? firstOcc.highlight_rects[0] : firstOcc.rect) : null;
       const yRatio = firstOcc ? firstOcc.y_ratio : 0;
-      openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], firstRect, yRatio);
+      const firstOccId = firstOcc ? firstOcc.occ_id : null;
+      openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], firstRect, yRatio, firstOccId);
     };
 
     card.querySelector(".doc-cover-wrapper").addEventListener("click", openDocAction);
@@ -3089,7 +3122,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
   // Split View & Lecteur PDF
   // =========================================================================
-  function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0) {
+  function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0, targetOccId = null) {
     const numericDocId = Number(docId);
     const isSameDoc = (Number(currentActiveDocId) === numericDocId);
     if (!isSameDoc && currentActiveDocId && window.pdfCacheManager) {
@@ -3123,7 +3156,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     currentActiveOccurrences = occurrences || [];
     let initialIdx = 0;
-    if (targetPage && occurrences && occurrences.length > 0) {
+    if (targetOccId && occurrences && occurrences.length > 0) {
+      const foundIdx = occurrences.findIndex(o => String(o.occ_id) === String(targetOccId));
+      if (foundIdx !== -1) initialIdx = foundIdx;
+    } else if (targetPage && occurrences && occurrences.length > 0) {
       const foundIdx = occurrences.findIndex(o => o.page_number === targetPage);
       if (foundIdx !== -1) initialIdx = foundIdx;
     }
@@ -3142,7 +3178,7 @@ document.addEventListener("DOMContentLoaded", () => {
     docDetailTitle.textContent = docTitle;
     docDetailCount.textContent = `${occurrences.length} occurrence${occurrences.length > 1 ? 's' : ''} dans ce document`;
 
-    renderVerticalOccurrences(numericDocId, docTitle, occurrences, targetPage);
+    renderVerticalOccurrences(numericDocId, docTitle, occurrences, targetPage, targetOccId);
 
     // Synchronisation du tiroir mobile d'extraits
     if (mobileOccurrencesCountText) {
@@ -3154,7 +3190,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (drawerDocCount) {
       drawerDocCount.textContent = `${occurrences.length} extrait${occurrences.length > 1 ? 's' : ''}`;
     }
-    renderDrawerOccurrences(numericDocId, docTitle, occurrences, targetPage);
+    renderDrawerOccurrences(numericDocId, docTitle, occurrences, targetPage, targetOccId);
 
     // Si ouvert depuis une recherche globale, charger en tâche de fond l'intégralité des occurrences du document
     // pour un parcours séquentiel complet (stepper et tiroir) sans bloquer l'affichage immédiat
@@ -3171,17 +3207,30 @@ document.addEventListener("DOMContentLoaded", () => {
           if (fullOccs.length > 0 && (!occurrences || fullOccs.length !== occurrences.length)) {
             currentDocOriginalOccurrences = fullOccs;
             currentActiveOccurrences = fullOccs;
-            const curPage = getCurrentViewerPage() || targetPage;
-            currentActiveOccurrenceIndex = findClosestOccurrenceIndex(fullOccs, curPage);
+            // Priorité absolue à l'extrait sélectionné ou à la page cible tant que le visualiseur n'a pas été manipulé
+            let activeIdx = -1;
+            if (targetOccId) {
+              activeIdx = fullOccs.findIndex(o => String(o.occ_id) === String(targetOccId));
+            }
+            if (activeIdx === -1 && targetPage) {
+              activeIdx = fullOccs.findIndex(o => o.page_number === targetPage);
+            }
+            if (activeIdx === -1) {
+              const curPage = getCurrentViewerPage() || targetPage;
+              activeIdx = findClosestOccurrenceIndex(fullOccs, curPage);
+            }
+            currentActiveOccurrenceIndex = activeIdx >= 0 ? activeIdx : 0;
             updateOccurrenceStepperUI();
+            const activeOcc = fullOccs[currentActiveOccurrenceIndex];
+            const curPage = activeOcc ? activeOcc.page_number : targetPage;
             const countLabel = `${fullOccs.length} occurrence${fullOccs.length > 1 ? 's' : ''} dans ce document`;
             const pillLabel = `${fullOccs.length} extrait${fullOccs.length > 1 ? 's' : ''}`;
             if (docDetailCount) docDetailCount.textContent = countLabel;
             if (viewerDocSearchResultCount) viewerDocSearchResultCount.textContent = `${fullOccs.length} résultat${fullOccs.length > 1 ? 's' : ''}`;
             if (mobileOccurrencesCountText) mobileOccurrencesCountText.textContent = pillLabel;
             if (drawerDocCount) drawerDocCount.textContent = pillLabel;
-            renderVerticalOccurrences(numericDocId, docTitle, fullOccs, curPage);
-            renderDrawerOccurrences(numericDocId, docTitle, fullOccs, curPage);
+            renderVerticalOccurrences(numericDocId, docTitle, fullOccs, curPage, targetOccId);
+            renderDrawerOccurrences(numericDocId, docTitle, fullOccs, curPage, targetOccId);
           }
         })
         .catch(err => console.warn("Erreur chargement occurrences complètes document:", err));
@@ -3193,6 +3242,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const viewerCacheBadge = document.getElementById("viewerCacheBadge");
     const updateCacheUI = (status, progress, downloadedBytes = 0, totalBytes = 0) => {
       if (!viewerCacheBadge) return;
+      // Si le document est déjà validé 100% en cache, interdire la régression vers "downloading" (due à la lecture locale des chunks par PDF.js)
+      if (viewerCacheBadge.classList.contains("complete") && status === "downloading") {
+        return;
+      }
       if (status === "complete") {
         viewerCacheBadge.style.display = "inline-flex";
         viewerCacheBadge.className = "viewer-doc-badge viewer-cache-badge complete";
@@ -3253,7 +3306,7 @@ document.addEventListener("DOMContentLoaded", () => {
             await window.pdfCacheManager.invalidate(currentActiveDocId);
           }
           updateCacheUI("none", 0);
-          pdfFrame.src = `/pdfjs/web/viewer.html?v=5.5&file=/api/pdf/${currentActiveDocId}#page=${getCurrentViewerPage() || 1}&_nocache=${Date.now()}`;
+          pdfFrame.src = `/pdfjs/web/viewer.html?v=5.6&file=/api/pdf/${currentActiveDocId}#page=${getCurrentViewerPage() || 1}&_nocache=${Date.now()}`;
         }
       });
     }
@@ -3308,7 +3361,7 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         }
 
-        let viewerUrl = `/pdfjs/web/viewer.html?v=5.5&file=${encodeURI(pdfTargetUrl)}#page=${targetPage}`;
+        let viewerUrl = `/pdfjs/web/viewer.html?v=5.6&file=${encodeURI(pdfTargetUrl)}#page=${targetPage}`;
         if (currentSearchQuery) {
           viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
         }
@@ -3431,7 +3484,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function renderVerticalOccurrences(docId, docTitle, occurrences, activePage) {
+  function renderVerticalOccurrences(docId, docTitle, occurrences, activePage, activeOccId = null) {
     verticalCropManager.clear();
     docOccurrencesList.innerHTML = "";
 
@@ -3442,9 +3495,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const placeholderSvg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='120'%3E%3Crect width='100%25' height='100%25' fill='%23f1f5f9'/%3E%3C/svg%3E";
 
+    let activeTargetIndex = -1;
+    if (activeOccId && occurrences) {
+      activeTargetIndex = occurrences.findIndex(o => String(o.occ_id) === String(activeOccId));
+    }
+    if (activeTargetIndex === -1 && activePage && occurrences) {
+      activeTargetIndex = occurrences.findIndex(o => o.page_number === activePage);
+    }
+    if (activeTargetIndex === -1 && occurrences && occurrences.length > 0) {
+      activeTargetIndex = 0;
+    }
+
     occurrences.forEach((occ, index) => {
       const card = document.createElement("div");
-      const isActive = (occ.page_number === activePage);
+      const isActive = (index === activeTargetIndex);
       card.className = `vertical-occ-card ${isActive ? 'active' : ''}`;
       card.setAttribute("data-page", occ.page_number);
       card.setAttribute("data-occ-id", occ.occ_id);
@@ -3476,7 +3540,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const activeCard = docOccurrencesList.querySelector(".vertical-occ-card.active");
     if (activeCard) {
-      activeCard.scrollIntoView({ behavior: "smooth", block: "center" });
+      scrollActiveCardIntoView(activeCard);
     }
   }
 
