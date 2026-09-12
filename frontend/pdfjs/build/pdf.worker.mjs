@@ -56621,7 +56621,7 @@ class WorkerMessageHandler {
           throw new Error("Worker was terminated");
         }
         pdfManager = newPdfManager;
-        pdfManager.requestLoadedStream(false).then(stream => {
+        pdfManager.requestLoadedStream(true).then(stream => {
           handler.send("DataLoaded", {
             length: stream.bytes.byteLength
           });
