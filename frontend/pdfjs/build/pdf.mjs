@@ -10304,6 +10304,20 @@ class PDFFetchStreamRangeReader {
       if (!validateResponseStatus(response.status)) {
         throw createResponseStatusError(response.status, url);
       }
+      try {
+        const cr = response.headers.get("Content-Range");
+        if (cr) {
+          const m = cr.match(/\/(\d+)$/);
+          if (m) {
+            this._totalLength = parseInt(m[1], 10);
+          }
+        } else {
+          const cl = response.headers.get("Content-Length");
+          if (cl) {
+            this._totalLength = parseInt(cl, 10);
+          }
+        }
+      } catch (e) {}
       this._readCapability.resolve();
       this._reader = response.body.getReader();
       this._accumulatedChunks = [];
@@ -10351,6 +10365,14 @@ class PDFFetchStreamRangeReader {
             off += c.byteLength;
           }
           _writeCachedChunk(this._cacheKey, merged.buffer);
+          if (typeof window !== "undefined") {
+            window.parent?.postMessage({
+              type: "docseeker_chunk_saved",
+              cacheKey: this._cacheKey,
+              chunkSize: totalLen,
+              totalBytes: this._totalLength || 0
+            }, "*");
+          }
         } catch (e) {}
         this._accumulatedChunks = null;
       }

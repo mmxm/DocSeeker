@@ -3093,17 +3093,23 @@ document.addEventListener("DOMContentLoaded", () => {
           viewerCacheBadge.textContent = `⏸️ ${progress}%`;
         }
         viewerCacheBadge.title = `Téléchargement suspendu : ${progress}%`;
-      } else if (status === "downloading" && progress > 0) {
+      } else if (status === "downloading") {
         viewerCacheBadge.style.display = "inline-flex";
         viewerCacheBadge.className = "viewer-doc-badge viewer-cache-badge downloading";
         const mbDl = downloadedBytes > 0 ? (downloadedBytes / (1024 * 1024)).toFixed(1) : null;
         const mbTot = totalBytes > 0 ? (totalBytes / (1024 * 1024)).toFixed(0) : null;
-        if (mbDl && mbTot) {
+        if (mbDl && mbTot && progress > 0) {
           viewerCacheBadge.textContent = `📥 ${progress}% (${mbDl}/${mbTot} Mo)`;
           viewerCacheBadge.title = `Mise en cache hors-ligne : ${mbDl} Mo sur ${mbTot} Mo (${progress}%) - Lecture fluide disponible`;
-        } else {
+        } else if (mbDl) {
+          viewerCacheBadge.textContent = `📥 ${mbDl} Mo`;
+          viewerCacheBadge.title = `Mise en cache hors-ligne : ${mbDl} Mo reçus - Lecture fluide disponible`;
+        } else if (progress > 0) {
           viewerCacheBadge.textContent = `📥 ${progress}%`;
           viewerCacheBadge.title = `Mise en cache hors-ligne : ${progress}% - Lecture fluide disponible`;
+        } else {
+          viewerCacheBadge.textContent = `📥 Téléchargement...`;
+          viewerCacheBadge.title = `Mise en cache hors-ligne en cours...`;
         }
       } else if (status === "error") {
         viewerCacheBadge.style.display = "inline-flex";
@@ -3127,7 +3133,7 @@ document.addEventListener("DOMContentLoaded", () => {
             await window.pdfCacheManager.invalidate(currentActiveDocId);
           }
           updateCacheUI("none", 0);
-          pdfFrame.src = `/pdfjs/web/viewer.html?v=5.7&file=/api/pdf/${currentActiveDocId}#page=${getCurrentViewerPage() || 1}&_nocache=${Date.now()}`;
+          pdfFrame.src = `/pdfjs/web/viewer.html?v=5.8&file=/api/pdf/${currentActiveDocId}#page=${getCurrentViewerPage() || 1}&_nocache=${Date.now()}`;
         }
       });
     }
@@ -3140,7 +3146,7 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
 
-    // Écouteur global des messages de progression émis par le visualiseur PDF.js
+    // Écouteur global des messages de progression et fragments émis par le visualiseur PDF.js
     if (!window._pdfViewerMessageListenerAttached) {
       window._pdfViewerMessageListenerAttached = true;
       window.addEventListener("message", (evt) => {
@@ -3151,6 +3157,16 @@ document.addEventListener("DOMContentLoaded", () => {
             window.pdfCacheManager.updateProgressFromViewer(currentActiveDocId, loaded, total);
           }
           updateCacheUI(percent >= 100 ? "complete" : "downloading", percent, loaded, total);
+        } else if (evt.data.type === "docseeker_pdf_meta") {
+          const { total } = evt.data;
+          if (window.pdfCacheManager && currentActiveDocId && total > 0) {
+            window.pdfCacheManager.setDocumentTotalBytes(currentActiveDocId, total);
+          }
+        } else if (evt.data.type === "docseeker_chunk_saved") {
+          const { chunkSize, totalBytes } = evt.data;
+          if (window.pdfCacheManager && currentActiveDocId) {
+            window.pdfCacheManager.recordChunkDownloaded(currentActiveDocId, chunkSize, totalBytes);
+          }
         } else if (evt.data.type === "docseeker_pdf_complete") {
           const { length } = evt.data;
           if (window.pdfCacheManager && currentActiveDocId) {
@@ -3165,6 +3181,13 @@ document.addEventListener("DOMContentLoaded", () => {
       goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
       hookIframePinchZoomIsolation();
       hookIframeScrollAutoHide();
+      if (window.pdfCacheManager) {
+        window.pdfCacheManager.getProgress(numericDocId).then(p => {
+          if (Number(currentActiveDocId) === numericDocId) {
+            updateCacheUI(p.status, p.progress, p.downloadedBytes, p.totalBytes);
+          }
+        }).catch(() => {});
+      }
     } else {
       (async () => {
         let pdfTargetUrl = `/api/pdf/${numericDocId}`;
@@ -3182,7 +3205,7 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         }
 
-        let viewerUrl = `/pdfjs/web/viewer.html?v=5.7&file=${encodeURI(pdfTargetUrl)}#page=${targetPage}`;
+        let viewerUrl = `/pdfjs/web/viewer.html?v=5.8&file=${encodeURI(pdfTargetUrl)}#page=${targetPage}`;
         if (currentSearchQuery) {
           viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
         }

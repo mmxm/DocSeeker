@@ -834,7 +834,7 @@ const defaultOptions = {
     kind: OptionKind.WORKER
   },
   workerSrc: {
-    value: "../build/pdf.worker.mjs?v=5.5",
+    value: "../build/pdf.worker.mjs?v=5.8",
     kind: OptionKind.WORKER
   }
 };
@@ -14173,6 +14173,14 @@ const PDFViewerApplication = {
     this.metadata = metadata;
     this._contentDispositionFilename ??= contentDispositionFilename;
     this._contentLength ??= contentLength;
+    if (this._contentLength && this._contentLength > 0) {
+      try {
+        window.parent?.postMessage({
+          type: "docseeker_pdf_meta",
+          total: this._contentLength
+        }, "*");
+      } catch (e) {}
+    }
     console.log(`PDF ${pdfDocument.fingerprints[0]} [${info.PDFFormatVersion} ` + `${(info.Producer || "-").trim()} / ${(info.Creator || "-").trim()}] ` + `(PDF.js: ${version || "?"} [${build || "?"}])`);
     let pdfTitle = info.Title;
     const metadataTitle = metadata?.get("dc:title");

@@ -233,6 +233,58 @@ class PdfCacheManager {
   }
 
   /**
+   * Enregistre la taille totale exacte du document dès lecture des métadonnées ou headers
+   */
+  async setDocumentTotalBytes(docId, totalBytes) {
+    if (!docId || !totalBytes || totalBytes <= 0) return;
+    const id = Number(docId);
+    const prev = this.progressCache.get(id) || {};
+    if (prev.totalBytes && prev.totalBytes === totalBytes && prev.status === "complete") {
+      return;
+    }
+    await this.saveMeta(id, { totalBytes });
+    const stats = await this.getCachedStats(id);
+    if (stats) {
+      this._notifyProgress(id, stats);
+    }
+  }
+
+  /**
+   * Notifie l'enregistrement physique d'un nouveau fragment de données sur le disque
+   */
+  async recordChunkDownloaded(docId, chunkSize, totalBytes = 0) {
+    if (!docId) return;
+    const id = Number(docId);
+    const prev = this.progressCache.get(id) || {};
+    const tot = (totalBytes > 0) ? totalBytes : (prev.totalBytes || 0);
+
+    // Déclencher un scan réel rapide des fragments stockés pour une précision absolue
+    const stats = await this.getCachedStats(id);
+    if (stats) {
+      const bestTot = tot > 0 ? tot : (stats.totalBytes || 0);
+      const isComplete = bestTot > 0 && stats.downloadedBytes >= bestTot;
+      const progress = bestTot > 0 
+        ? Math.min(100, Math.round((stats.downloadedBytes / bestTot) * 100))
+        : (isComplete ? 100 : 0);
+      const status = isComplete ? "complete" : (stats.downloadedBytes > 0 ? "downloading" : "none");
+
+      const updatePayload = {
+        status,
+        progress,
+        downloadedBytes: stats.downloadedBytes,
+        totalBytes: bestTot
+      };
+
+      this._notifyProgress(id, updatePayload);
+      if (isComplete) {
+        await this.markComplete(id, bestTot);
+      } else if (bestTot > 0) {
+        await this.saveMeta(id, { totalBytes: bestTot, downloadedBytes: stats.downloadedBytes, completed: false });
+      }
+    }
+  }
+
+  /**
    * Marque un document comme 100% complet
    */
   async markComplete(docId, totalBytes) {
