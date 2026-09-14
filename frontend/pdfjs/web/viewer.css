@@ -5192,3 +5192,27 @@ dialog :link{
     display:none;
   }
 }
+
+/* ==========================================================================
+   Mesure 3A : Optimisation et compacité barre d'outils PDF.js (DocSeeker)
+   ========================================================================== */
+:root {
+  --toolbar-height: 28px !important;
+}
+
+#toolbarContainer {
+  --toolbar-height: 28px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+}
+
+#viewerContainer {
+  top: 28px !important;
+}
+
+#editorModeButtons,
+#editorModeSeparator,
+#secondaryOpenFile {
+  display: none !important;
+}
+

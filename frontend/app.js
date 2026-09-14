@@ -67,11 +67,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const clearDocSearchBtn = document.getElementById("clearDocSearchBtn");
 
   // Visualiseur Latéral
+  const viewerPane = document.getElementById("viewerPane");
   const viewerDocTitle = document.getElementById("viewerDocTitle");
   const viewerPageBadge = document.getElementById("viewerPageBadge");
   const pdfFrame = document.getElementById("pdfFrame");
   const closeViewerBtn = document.getElementById("closeViewerBtn");
-  const saveAnnotationsBtn = document.getElementById("saveAnnotationsBtn");
   const viewerBackBtn = document.getElementById("viewerBackBtn");
   const mobileOccurrencesBtn = document.getElementById("mobileOccurrencesBtn");
   const mobileOccurrencesCountText = document.getElementById("mobileOccurrencesCountText");
@@ -997,13 +997,6 @@ document.addEventListener("DOMContentLoaded", () => {
     closeSplitViewer();
   });
 
-  if (saveAnnotationsBtn) {
-    saveAnnotationsBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      saveAnnotationsToServer(true);
-    });
-  }
-
   // Changement du critère de tri
   if (sortSelect) {
     sortSelect.addEventListener("change", (e) => {
@@ -1087,7 +1080,41 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // Masquage dynamique et réactif du header viewer au défilement (Mobile & Tablette - Mesure 4)
+  let lastViewerScrollTop = 0;
+  function hookIframeScrollAutoHide() {
+    try {
+      const win = pdfFrame ? pdfFrame.contentWindow : null;
+      if (!win || !win.document) return;
+      const viewerContainer = win.document.getElementById("viewerContainer");
+      if (!viewerContainer || viewerContainer.__autoHideHooked) return;
+      viewerContainer.__autoHideHooked = true;
+
+      viewerContainer.addEventListener("scroll", () => {
+        if (window.innerWidth > 900) {
+          if (viewerPane && viewerPane.classList.contains("header-hidden")) {
+            viewerPane.classList.remove("header-hidden");
+          }
+          return;
+        }
+        const st = viewerContainer.scrollTop;
+        if (st <= 15) {
+          if (viewerPane) viewerPane.classList.remove("header-hidden");
+        } else if (st > lastViewerScrollTop + 20) {
+          if (viewerPane) viewerPane.classList.add("header-hidden");
+        } else if (st < lastViewerScrollTop - 20) {
+          if (viewerPane) viewerPane.classList.remove("header-hidden");
+        }
+        lastViewerScrollTop = Math.max(0, st);
+      }, { passive: true });
+    } catch (e) {
+      console.warn("[Viewer Auto-Hide Hook]", e);
+    }
+  }
+
   function closeSplitViewer() {
+    if (viewerPane) viewerPane.classList.remove("header-hidden");
+    lastViewerScrollTop = 0;
     if (currentActiveDocId && window.pdfCacheManager) {
       window.pdfCacheManager.pauseDownload(currentActiveDocId);
     }
@@ -2895,213 +2922,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
-  // Sauvegarde Légère des Annotations & Surlignages (Économe en bande passante)
-  // =========================================================================
-  async function saveAnnotationsToServer(showFeedback = true) {
-    if (!currentActiveDocId) {
-      if (showFeedback) showToast("Aucun document ouvert dans le visualiseur.", "info");
-      return;
-    }
-
-    const btn = saveAnnotationsBtn;
-    const span = btn ? btn.querySelector("span") : null;
-    const origText = span ? span.textContent : "Sauvegarder";
-
-    try {
-      if (btn) {
-        btn.disabled = true;
-        if (span) span.textContent = "Sauvegarde...";
-      }
-
-      const win = pdfFrame ? pdfFrame.contentWindow : null;
-      if (!win) {
-        if (showFeedback) showToast("Le visualiseur PDF n'est pas accessible.", "warning");
-        return;
-      }
-
-      const app = win.PDFViewerApplication;
-      if (!app) {
-        if (showFeedback) showToast("Le lecteur PDF n'est pas encore prêt.", "warning");
-        return;
-      }
-
-      // 1. Déclencher le hook willSave pour forcer les éditeurs en cours (surlignage, texte, dessin) à commiter
-      try {
-        if (app.pdfScriptingManager && typeof app.pdfScriptingManager.dispatchWillSave === "function") {
-          await app.pdfScriptingManager.dispatchWillSave();
-        }
-      } catch (e) {
-        console.warn("[Annotations] dispatchWillSave warning:", e);
-      }
-
-      const doc = app.pdfDocument;
-      if (!doc) {
-        if (showFeedback) showToast("Le document PDF n'est pas encore complètement chargé.", "warning");
-        return;
-      }
-
-      // 2. Générer les octets du PDF mis à jour avec les annotations directement cuites par PDF.js
-      let pdfBytes;
-      try {
-        if (typeof doc.saveDocument === "function") {
-          pdfBytes = await doc.saveDocument();
-        } else if (typeof doc.getData === "function") {
-          pdfBytes = await doc.getData();
-        }
-      } catch (e) {
-        console.warn("[Annotations] saveDocument fallback to getData:", e);
-        if (typeof doc.getData === "function") {
-          pdfBytes = await doc.getData();
-        }
-      }
-
-      if (!pdfBytes || pdfBytes.length === 0) {
-        throw new Error("Impossible d'extraire les données du document PDF.");
-      }
-
-      // 3. Envoyer directement le fichier PDF sauvegardé au serveur (/api/documents/{id}/save-pdf)
-      const response = await fetch(`/api/documents/${currentActiveDocId}/save-pdf`, {
-        method: "POST",
-        headers: { "Content-Type": "application/pdf" },
-        body: pdfBytes
-      });
-
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err.detail || `Erreur serveur HTTP ${response.status}`);
-      }
-
-      // 4. Récupérer et sauvegarder également le JSON d'annotations pour SQLite
-      const storage = doc.annotationStorage;
-      let annots = [];
-      if (storage) {
-        try {
-          const ser = storage.serializable;
-          if (ser && ser.map) {
-            const m = ser.map;
-            if (typeof m.values === "function") {
-              for (const val of m.values()) {
-                if (val && !val.deleted) annots.push(val);
-              }
-            } else if (typeof m.forEach === "function") {
-              m.forEach(val => {
-                if (val && !val.deleted) annots.push(val);
-              });
-            } else if (typeof m === "object") {
-              for (const k in m) {
-                if (m[k] && !m[k].deleted) annots.push(m[k]);
-              }
-            }
-          }
-        } catch (e) {
-          console.warn("[Annotations] Erreur extraction JSON:", e);
-        }
-
-        fetch(`/api/documents/${currentActiveDocId}/annotations`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ annotations: annots })
-        }).catch(e => console.warn("[Annotations] Sync JSON optionnelle:", e));
-
-        if (typeof storage.resetModified === "function") {
-          storage.resetModified();
-        }
-      }
-      if (app) delete app._annotationStorageModified;
-
-      // Invalider le cache du navigateur pour ce PDF spécifique afin de recharger la version modifiée
-      if ("caches" in window) {
-        caches.open("docseeker-pdf-v1").then(cache => {
-          cache.delete(`/api/pdf/${currentActiveDocId}`);
-        }).catch(() => {});
-      }
-      if (window.pdfCacheManager) {
-        window.pdfCacheManager.invalidate(currentActiveDocId).catch(() => {});
-      }
-
-      // Mettre à jour updated_at localement
-      const docItem = currentLoadedDocs.find(d => d.id === currentActiveDocId);
-      if (docItem) {
-        docItem.updated_at = new Date().toISOString();
-      }
-
-      if (btn) {
-        btn.style.backgroundColor = "#059669";
-        btn.style.borderColor = "#047857";
-        if (span) span.textContent = "Enregistré ✓";
-      }
-
-      if (showFeedback) {
-        showToast("✓ Modifications enregistrées avec succès dans le PDF !", "success", 4000);
-      }
-
-    } catch (err) {
-      console.error("[Annotations] Erreur saveAnnotationsToServer:", err);
-      if (btn) {
-        btn.style.backgroundColor = "#dc2626";
-        btn.style.borderColor = "#b91c1c";
-        if (span) span.textContent = "Erreur !";
-      }
-      if (showFeedback) {
-        showToast("Erreur lors de l'enregistrement : " + err.message, "error");
-      }
-      setTimeout(() => {
-        if (btn) {
-          btn.style.backgroundColor = "";
-          btn.style.borderColor = "";
-          if (span) span.textContent = origText;
-        }
-      }, 3000);
-    } finally {
-      if (btn) {
-        btn.disabled = false;
-        if (span && span.textContent === "Sauvegarde...") {
-          span.textContent = origText;
-        }
-      }
-    }
-  }
-
-  // Exposer pour les appels directs depuis l'iframe PDF.js
-  window.saveAnnotationsToServer = saveAnnotationsToServer;
-
-  function resetSaveButtonState() {
-    if (saveAnnotationsBtn) {
-      saveAnnotationsBtn.style.backgroundColor = "";
-      saveAnnotationsBtn.style.borderColor = "";
-      const span = saveAnnotationsBtn.querySelector("span");
-      if (span) span.textContent = "Sauvegarder";
-    }
-  }
-
-  function markAnnotationsUnsaved() {
-    if (saveAnnotationsBtn) {
-      saveAnnotationsBtn.style.backgroundColor = "";
-      saveAnnotationsBtn.style.borderColor = "";
-      const span = saveAnnotationsBtn.querySelector("span");
-      if (span && span.textContent !== "Sauvegarder *") {
-        span.textContent = "Sauvegarder *";
-      }
-    }
-  }
-
-  function hookAnnotationStorageModified() {
-    try {
-      const win = pdfFrame ? pdfFrame.contentWindow : null;
-      if (!win) return;
-      const app = win.PDFViewerApplication;
-      if (!app || !app.pdfDocument) return;
-      const storage = app.pdfDocument.annotationStorage;
-      if (storage) {
-        storage.onSetModified = () => {
-          markAnnotationsUnsaved();
-        };
-      }
-    } catch (e) {
-      console.warn("[Hook Modified]", e);
-    }
-  }
-
   // Cache dans le CacheStorage du navigateur pour réouverture instantanée et support hors-ligne
   async function cacheDocumentPdf(docId) {
     if (!("caches" in window)) return;
@@ -3132,7 +2952,6 @@ document.addEventListener("DOMContentLoaded", () => {
     currentActiveDocTitle = docTitle;
     currentDocOriginalOccurrences = occurrences;
 
-    resetSaveButtonState();
     // Le streaming HTTP 206 et le cache natif HTTP du navigateur gèrent le chargement et la mise en cache de manière optimale sans collision réseau.
 
     // Support de l'historique de navigation pour le bouton retour mobile
@@ -3141,6 +2960,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     workspace.classList.add("split-active");
+    if (viewerPane) viewerPane.classList.remove("header-hidden");
+    lastViewerScrollTop = 0;
     document.documentElement.classList.add("doc-open");
     document.body.classList.add("doc-open");
     const appEl = document.getElementById("app");
@@ -3306,7 +3127,7 @@ document.addEventListener("DOMContentLoaded", () => {
             await window.pdfCacheManager.invalidate(currentActiveDocId);
           }
           updateCacheUI("none", 0);
-          pdfFrame.src = `/pdfjs/web/viewer.html?v=5.6&file=/api/pdf/${currentActiveDocId}#page=${getCurrentViewerPage() || 1}&_nocache=${Date.now()}`;
+          pdfFrame.src = `/pdfjs/web/viewer.html?v=5.7&file=/api/pdf/${currentActiveDocId}#page=${getCurrentViewerPage() || 1}&_nocache=${Date.now()}`;
         }
       });
     }
@@ -3342,8 +3163,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (isSameDoc && pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
       goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
-      hookAnnotationStorageModified();
       hookIframePinchZoomIsolation();
+      hookIframeScrollAutoHide();
     } else {
       (async () => {
         let pdfTargetUrl = `/api/pdf/${numericDocId}`;
@@ -3361,7 +3182,7 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         }
 
-        let viewerUrl = `/pdfjs/web/viewer.html?v=5.6&file=${encodeURI(pdfTargetUrl)}#page=${targetPage}`;
+        let viewerUrl = `/pdfjs/web/viewer.html?v=5.7&file=${encodeURI(pdfTargetUrl)}#page=${targetPage}`;
         if (currentSearchQuery) {
           viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
         }
@@ -3392,8 +3213,8 @@ document.addEventListener("DOMContentLoaded", () => {
               } catch (e) {}
               setTimeout(() => {
                 goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
-                hookAnnotationStorageModified();
                 hookIframePinchZoomIsolation();
+                hookIframeScrollAutoHide();
               }, 60);
             };
 
@@ -3409,8 +3230,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 try { app.page = targetPage; } catch (e) {}
               }
               goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
-              hookAnnotationStorageModified();
               hookIframePinchZoomIsolation();
+              hookIframeScrollAutoHide();
             }, 180);
 
             return;
@@ -3425,6 +3246,7 @@ document.addEventListener("DOMContentLoaded", () => {
           pdfFrame.src = viewerUrl;
           pdfFrame.onload = () => {
             hookIframePinchZoomIsolation();
+            hookIframeScrollAutoHide();
 
             // Synchronisation de la progression dès le chargement de l'iframe
             if (window.pdfCacheManager) {
@@ -3475,8 +3297,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
             setTimeout(() => {
               goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
-              hookAnnotationStorageModified();
               hookIframePinchZoomIsolation();
+              hookIframeScrollAutoHide();
             }, 400);
           };
         }, 120);

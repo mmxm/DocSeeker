@@ -419,6 +419,18 @@ body.light-theme {
   display: none !important;
 }
 
+/* Mesure 2 : Mode Immersion Desktop - Masquage de l'App Header quand la vue est repliée */
+.app-layout:has(.main-workspace.split-active.sidebar-collapsed) .app-header,
+body:has(.main-workspace.split-active.sidebar-collapsed) .app-header {
+  display: none !important;
+}
+
+.app-layout:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace,
+body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
+  height: 100vh !important;
+  height: 100dvh !important;
+}
+
 /* Séparateur redimensionnable Split-View (Desktop) */
 .split-resizer {
   display: none;
@@ -475,18 +487,31 @@ body.light-theme {
   to { opacity: 1; transform: translateX(0); }
 }
 
+.viewer-pane {
+  position: relative;
+  overflow: hidden;
+}
+
+.viewer-pane.header-hidden .viewer-header {
+  margin-top: -34px;
+  transform: translateY(-100%);
+  pointer-events: none;
+}
+
 .viewer-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 0 12px;
+  padding: 0 10px;
   background-color: var(--bg-surface);
   border-bottom: 1px solid var(--border-color);
-  min-height: 40px;
-  height: 40px;
+  min-height: 34px;
+  height: 34px;
   box-shadow: var(--shadow-sm);
   flex-shrink: 0;
+  transition: margin-top 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 4;
 }
 
 .viewer-doc-info {
@@ -501,13 +526,13 @@ body.light-theme {
   display: none; /* Visible sur mobile/tablette via media query */
   align-items: center;
   gap: 5px;
-  height: 30px;
-  padding: 0 10px;
+  height: 26px;
+  padding: 0 8px;
   background: var(--bg-subtle);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   color: var(--text-main);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   cursor: pointer;
   flex-shrink: 0;
@@ -522,9 +547,9 @@ body.light-theme {
 .viewer-doc-badge {
   background: linear-gradient(135deg, #2563eb, #3b82f6);
   color: white;
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 700;
-  padding: 2px 7px;
+  padding: 1px 6px;
   border-radius: var(--radius-sm);
   white-space: nowrap;
   box-shadow: 0 1px 3px rgba(37, 99, 235, 0.2);
@@ -532,9 +557,9 @@ body.light-theme {
 }
 
 .viewer-cache-badge {
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 600;
-  padding: 2px 6px;
+  padding: 1px 5px;
   border-radius: var(--radius-sm);
   white-space: nowrap;
   flex-shrink: 0;
@@ -554,8 +579,8 @@ body.light-theme {
 .viewer-cache-badge.downloading::before {
   content: '';
   display: inline-block;
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: #2563eb;
   animation: pulse-dot 1.2s ease-in-out infinite;
@@ -573,7 +598,7 @@ body.light-theme {
 }
 
 .viewer-doc-title {
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 700;
   color: var(--text-main);
   white-space: nowrap;
@@ -584,17 +609,27 @@ body.light-theme {
 .viewer-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   flex-shrink: 0;
+}
+
+.viewer-actions .btn-icon {
+  width: 26px;
+  height: 26px;
+}
+
+.viewer-actions .btn-icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 .btn-occurrences-pill {
   display: none; /* Affiché sur smartphone */
-  height: 30px;
-  padding: 0 9px;
-  font-size: 11.5px;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 11px;
   font-weight: 700;
-  gap: 5px;
+  gap: 4px;
   background: var(--accent-light);
   border: 1px solid var(--accent-border);
   color: var(--accent);
@@ -602,13 +637,6 @@ body.light-theme {
 
 .btn-occurrences-pill:hover {
   background: #dbeafe;
-}
-
-.btn-save-annotations {
-  height: 30px;
-  padding: 0 10px;
-  font-size: 12px;
-  gap: 5px;
 }
 
 /* Barre de recherche interne au document (Collapsible) */
@@ -676,14 +704,14 @@ body.light-theme {
   background: var(--bg-subtle);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  padding: 2px 4px;
-  gap: 2px;
-  height: 32px;
+  padding: 1px 3px;
+  gap: 1px;
+  height: 26px;
 }
 
 .btn-stepper {
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   display: inline-flex;
   align-items: center;
@@ -706,12 +734,12 @@ body.light-theme {
 }
 
 .occurrence-counter {
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 700;
   color: var(--text-main);
-  padding: 0 5px;
+  padding: 0 4px;
   white-space: nowrap;
-  min-width: 44px;
+  min-width: 36px;
   text-align: center;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.2px;
@@ -2531,9 +2559,10 @@ body.light-theme {
   }
 
   .viewer-header {
-    padding: 6px 10px;
+    padding: 0 8px;
     gap: 6px;
-    min-height: 46px;
+    min-height: 34px;
+    height: 34px;
     touch-action: manipulation;
   }
 
@@ -2542,7 +2571,7 @@ body.light-theme {
   }
 
   .occurrence-stepper {
-    height: 30px;
+    height: 26px;
     padding: 1px 3px;
     gap: 1px;
   }
@@ -2656,10 +2685,6 @@ body.light-theme {
 
   .viewer-doc-title {
     max-width: min(150px, 35vw);
-  }
-
-  .btn-save-annotations .btn-save-label {
-    display: none !important;
   }
 
   .btn-back-viewer .back-text {
