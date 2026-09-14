@@ -16,7 +16,7 @@ const DOCSEEKER_META_STORE = "meta";
 class PdfCacheManager {
   constructor() {
     this.dbName = DOCSEEKER_CHUNK_DB_NAME;
-    this.dbVersion = 1;
+    this.dbVersion = 2;
     this.db = null;
     this._initPromise = null;
     this.progressListeners = new Map(); // docId -> Set of callbacks
@@ -106,7 +106,7 @@ class PdfCacheManager {
     try {
       const id = Number(docId);
       const db = await this.init();
-      if (!db) return;
+      if (!db || !db.objectStoreNames.contains(DOCSEEKER_META_STORE)) return;
       const normUrl = this.normalizeUrl(id);
       const tx = db.transaction(DOCSEEKER_META_STORE, "readwrite");
       const store = tx.objectStore(DOCSEEKER_META_STORE);
@@ -136,17 +136,24 @@ class PdfCacheManager {
       const db = await this.init();
       if (!db) return null;
 
-      // 1. Lire les métadonnées rapides
-      const meta = await new Promise((resolve) => {
-        try {
-          const tx = db.transaction(DOCSEEKER_META_STORE, "readonly");
-          const req = tx.objectStore(DOCSEEKER_META_STORE).get(normUrl);
-          req.onsuccess = () => resolve(req.result || null);
-          req.onerror = () => resolve(null);
-        } catch (e) {
-          resolve(null);
-        }
-      });
+      // 1. Lire les métadonnées rapides en toute sécurité
+      let meta = null;
+      if (db.objectStoreNames.contains(DOCSEEKER_META_STORE)) {
+        meta = await new Promise((resolve) => {
+          try {
+            const tx = db.transaction(DOCSEEKER_META_STORE, "readonly");
+            const req = tx.objectStore(DOCSEEKER_META_STORE).get(normUrl);
+            req.onsuccess = () => resolve(req.result || null);
+            req.onerror = () => resolve(null);
+          } catch (e) {
+            resolve(null);
+          }
+        });
+      }
+
+      if (!db.objectStoreNames.contains(DOCSEEKER_CHUNK_STORE)) {
+        return { status: "none", progress: 0, downloadedBytes: 0, totalBytes: meta?.totalBytes || 0 };
+      }
 
       // 2. Scan ultra-rapide des clés de fragments réels (0-2 ms, sans lire les gros binaires)
       return new Promise((resolve) => {

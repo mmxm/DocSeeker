@@ -10199,6 +10199,7 @@ class PDFFetchStreamReader {
 }
 const DOCSEEKER_CHUNK_DB_NAME = "docseeker_pdf_chunks_v2";
 const DOCSEEKER_CHUNK_STORE = "chunks";
+const DOCSEEKER_META_STORE = "meta";
 let _chunkDbPromise = null;
 
 function _getDocseekerChunkDb() {
@@ -10206,11 +10207,14 @@ function _getDocseekerChunkDb() {
     _chunkDbPromise = new Promise((resolve) => {
       try {
         if (typeof indexedDB === "undefined") return resolve(null);
-        const req = indexedDB.open(DOCSEEKER_CHUNK_DB_NAME, 1);
+        const req = indexedDB.open(DOCSEEKER_CHUNK_DB_NAME, 2);
         req.onupgradeneeded = (e) => {
           const db = e.target.result;
           if (!db.objectStoreNames.contains(DOCSEEKER_CHUNK_STORE)) {
             db.createObjectStore(DOCSEEKER_CHUNK_STORE);
+          }
+          if (!db.objectStoreNames.contains(DOCSEEKER_META_STORE)) {
+            db.createObjectStore(DOCSEEKER_META_STORE);
           }
         };
         req.onsuccess = () => resolve(req.result);

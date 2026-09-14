@@ -2953,6 +2953,20 @@ document.addEventListener("DOMContentLoaded", () => {
     currentDocOriginalOccurrences = occurrences;
 
     // Le streaming HTTP 206 et le cache natif HTTP du navigateur gèrent le chargement et la mise en cache de manière optimale sans collision réseau.
+    if (window.pdfCacheManager) {
+      const matchedDoc = Array.isArray(currentLoadedDocs) ? currentLoadedDocs.find(d => Number(d.id) === numericDocId) : null;
+      const knownSize = matchedDoc && matchedDoc.file_size ? matchedDoc.file_size : 0;
+      if (knownSize > 0) {
+        window.pdfCacheManager.setDocumentTotalBytes(numericDocId, knownSize);
+      } else {
+        fetch(`/api/pdf/${numericDocId}`, { method: 'HEAD' }).then(res => {
+          const cl = res.headers.get("Content-Length");
+          if (cl && Number(cl) > 0 && window.pdfCacheManager) {
+            window.pdfCacheManager.setDocumentTotalBytes(numericDocId, Number(cl));
+          }
+        }).catch(() => {});
+      }
+    }
 
     // Support de l'historique de navigation pour le bouton retour mobile
     if (!workspace.classList.contains("split-active")) {
@@ -3133,7 +3147,7 @@ document.addEventListener("DOMContentLoaded", () => {
             await window.pdfCacheManager.invalidate(currentActiveDocId);
           }
           updateCacheUI("none", 0);
-          pdfFrame.src = `/pdfjs/web/viewer.html?v=5.8&file=/api/pdf/${currentActiveDocId}#page=${getCurrentViewerPage() || 1}&_nocache=${Date.now()}`;
+          pdfFrame.src = `/pdfjs/web/viewer.html?v=5.9&file=/api/pdf/${currentActiveDocId}#page=${getCurrentViewerPage() || 1}&_nocache=${Date.now()}`;
         }
       });
     }
@@ -3205,7 +3219,7 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         }
 
-        let viewerUrl = `/pdfjs/web/viewer.html?v=5.8&file=${encodeURI(pdfTargetUrl)}#page=${targetPage}`;
+        let viewerUrl = `/pdfjs/web/viewer.html?v=5.9&file=${encodeURI(pdfTargetUrl)}#page=${targetPage}`;
         if (currentSearchQuery) {
           viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
         }
