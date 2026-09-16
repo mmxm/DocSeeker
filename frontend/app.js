@@ -1644,29 +1644,37 @@ document.addEventListener("DOMContentLoaded", () => {
     if (index < 0) index = currentActiveOccurrences.length - 1;
     if (index >= currentActiveOccurrences.length) index = 0;
 
+    const prevIndex = currentActiveOccurrenceIndex;
     currentActiveOccurrenceIndex = index;
     const occ = currentActiveOccurrences[index];
 
     updateOccurrenceStepperUI();
 
-    // Mettre à jour la sélection visuelle dans la liste latérale
-    document.querySelectorAll(".vertical-occ-card").forEach((el, idx) => {
-      const isCardActive = (idx === index);
-      el.classList.toggle("active", isCardActive);
-      if (isCardActive) {
-        scrollActiveCardIntoView(el);
+    // Mettre à jour la sélection visuelle dans la liste latérale — C6 :
+    // Ciblage par index (nth-child) au lieu de querySelectorAll complet
+    const cards = docOccurrencesList ? docOccurrencesList.children : [];
+    if (cards.length > 0) {
+      if (prevIndex >= 0 && prevIndex < cards.length) {
+        cards[prevIndex].classList.remove('active');
       }
-    });
+      if (index < cards.length) {
+        cards[index].classList.add('active');
+        scrollActiveCardIntoView(cards[index]);
+      }
+    }
 
-    // Mettre à jour la sélection visuelle dans le tiroir mobile
+    // Mettre à jour la sélection visuelle dans le tiroir mobile — même optimisation
     if (drawerOccurrencesList) {
-      drawerOccurrencesList.querySelectorAll(".vertical-occ-card").forEach((el, idx) => {
-        const isCardActive = (idx === index);
-        el.classList.toggle("active", isCardActive);
-        if (isCardActive) {
-          scrollActiveCardIntoView(el);
+      const drawerCards = drawerOccurrencesList.children;
+      if (drawerCards.length > 0) {
+        if (prevIndex >= 0 && prevIndex < drawerCards.length) {
+          drawerCards[prevIndex].classList.remove('active');
         }
-      });
+        if (index < drawerCards.length) {
+          drawerCards[index].classList.add('active');
+          scrollActiveCardIntoView(drawerCards[index]);
+        }
+      }
     }
 
     if (occ) {
