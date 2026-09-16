@@ -114,9 +114,21 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3. Streaming PDF (/api/pdf/{id}) : PDF.js lit nativement depuis IndexedDB
+  // 3. Streaming PDF (/api/pdf/{id}) : Network First avec fallback 503 propre.
+  //    Le SW ne sert pas le binaire PDF depuis IndexedDB (c'est app.js qui pilote
+  //    crop-worker.js via les chunks IndexedDB en mode hors-ligne). On se contente
+  //    ici de laisser passer la requête réseau avec un .catch() pour éviter que
+  //    le SW crashe avec "unexpected error" lorsque le réseau est absent.
   if (url.pathname.startsWith('/api/pdf/')) {
-    event.respondWith(fetch(event.request));
+    event.respondWith(
+      fetch(event.request).catch(() =>
+        new Response('PDF non disponible hors-ligne', {
+          status: 503,
+          statusText: 'PDF Offline Unavailable',
+          headers: { 'Content-Type': 'text/plain' },
+        })
+      )
+    );
     return;
   }
 
