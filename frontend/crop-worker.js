@@ -1,8 +1,6 @@
 import './worker-setup.js';
 import * as pdfjsLib from './pdfjs/build/pdf.mjs';
 import * as pdfjsWorker from './pdfjs/build/pdf.worker.mjs';
-import initSearchWasm, { calculate_crop_bounds_wasm, get_shared_constants_wasm } from './wasm/search_wasm/search_wasm.js';
-import { CLIENT_CONCURRENT_CROP_TASKS } from './environment-limits.js';
 
 if (typeof globalThis !== 'undefined') {
   globalThis.pdfjsWorker = pdfjsWorker;
@@ -10,24 +8,43 @@ if (typeof globalThis !== 'undefined') {
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs/build/pdf.worker.mjs';
 
-let wasmInitPromise = null;
-let wasmReady = false;
-let sharedConstants = null;
+// ─── Constantes partagées (traduction exacte de search-core/src/constants.rs) ───
+// Ces valeurs DOIVENT rester en sync avec les constantes Rust du backend.
+const CROP_RENDER_SCALE   = 1.5;
+const DEFAULT_CROP_WIDTH  = 300.0;
+const DEFAULT_CROP_HEIGHT = 120.0;
+const GOODNOTES_YELLOW_CSS = 'rgba(255, 226, 0, 0.45)';
 
-async function ensureWasm() {
-  if (wasmReady) return; // Court-circuit immédiat après la première init
-  if (!wasmInitPromise) {
-    wasmInitPromise = (async () => {
-      await initSearchWasm();
-      sharedConstants = JSON.parse(get_shared_constants_wasm());
-      wasmReady = true;
-    })();
-  }
-  return wasmInitPromise;
+/**
+ * Calcul pur JS de la sous-région de crop — traduction fidèle de crop.rs::calculate_crop_bounds().
+ * Logique STRICTEMENT identique au backend Rust (Pdfium) et au frontend Wasm (search-core).
+ */
+function calculateCropBounds(x0, y0, x1, y1, pageWidth, pageHeight,
+                              targetW = DEFAULT_CROP_WIDTH, targetH = DEFAULT_CROP_HEIGHT) {
+  const centerX = (x0 + x1) / 2;
+  const centerY = (y0 + y1) / 2;
+
+  let cropX0 = Math.max(0, centerX - targetW / 2);
+  let cropX1 = Math.min(cropX0 + targetW, pageWidth);
+  if (cropX1 === pageWidth) cropX0 = Math.max(0, cropX1 - targetW);
+
+  let cropY0 = Math.max(0, centerY - targetH / 2);
+  let cropY1 = Math.min(cropY0 + targetH, pageHeight);
+  if (cropY1 === pageHeight) cropY0 = Math.max(0, cropY1 - targetH);
+
+  return {
+    x0: cropX0,
+    y0: cropY0,
+    width:  Math.max(1, cropX1 - cropX0),
+    height: Math.max(1, cropY1 - cropY0),
+  };
 }
 
-// Sémaphore / File d'attente (limite définie dans environment-limits.js)
-const MAX_CONCURRENT_RENDERS = CLIENT_CONCURRENT_CROP_TASKS;
+let wasmReady = true; // Wasm supprimé de ce worker — flag toujours vrai pour compatibilité
+
+
+// Sémaphore / File d'attente (1 tâche séquentielle pour préserver la fluidité sur mobile/tablette)
+const MAX_CONCURRENT_RENDERS = 1;
 let activeRenders = 0;
 const renderQueue = [];
 
@@ -209,7 +226,7 @@ function enqueueCrop(task) {
 async function executeCropRender(task) {
   const { docId, pageNumber, highlightRects, rect } = task;
 
-  await ensureWasm();
+  // Wasm supprimé — calcul effectué en JS pur (traduction fidèle de crop.rs)
   const doc = await loadPdfDoc(docId);
   const page = await doc.getPage(pageNumber);
 
@@ -218,39 +235,34 @@ async function executeCropRender(task) {
     const pw = page.view[2] - page.view[0];
     const ph = page.view[3] - page.view[1];
 
-    const scale = sharedConstants ? sharedConstants.crop_render_scale : 1.5;
-    const targetW = sharedConstants ? sharedConstants.default_crop_width : 300.0;
-    const targetH = sharedConstants ? sharedConstants.default_crop_height : 120.0;
-    const yellowCss = sharedConstants ? sharedConstants.goodnotes_yellow_css : "rgba(255, 226, 0, 0.45)";
-
-    // Calcul spatial unifié exécuté par Rust WebAssembly (search-core)
-    const bounds = JSON.parse(calculate_crop_bounds_wasm(x0, y0, x1, y1, pw, ph, targetW, targetH));
+    // Calcul spatial unifié en JS (logique identique à crop.rs::calculate_crop_bounds)
+    const bounds = calculateCropBounds(x0, y0, x1, y1, pw, ph);
     const cropX0 = bounds.x0;
     const cropY0 = bounds.y0;
-    const cropW = bounds.width * scale;
-    const cropH = bounds.height * scale;
+    const cropW = bounds.width * CROP_RENDER_SCALE;
+    const cropH = bounds.height * CROP_RENDER_SCALE;
 
     const canvas = new OffscreenCanvas(Math.max(1, Math.round(cropW)), Math.max(1, Math.round(cropH)));
     const ctx = canvas.getContext('2d');
 
-    const viewport = page.getViewport({ scale });
+    const viewport = page.getViewport({ scale: CROP_RENDER_SCALE });
 
     // Rendu avec translation négative pour ne dessiner que la sous-région
     await page.render({
       canvasContext: ctx,
       viewport: viewport,
-      transform: [1, 0, 0, 1, -cropX0 * scale, -cropY0 * scale],
+      transform: [1, 0, 0, 1, -cropX0 * CROP_RENDER_SCALE, -cropY0 * CROP_RENDER_SCALE],
     }).promise;
 
     // Application du surlignage jaune Goodnotes translucide unifié
-    ctx.fillStyle = yellowCss;
+    ctx.fillStyle = GOODNOTES_YELLOW_CSS;
     const rects = (highlightRects && highlightRects.length > 0) ? highlightRects : [rect];
 
     for (const hl of rects) {
-      const rx0 = (hl[0] - cropX0) * scale;
-      const ry0 = (hl[1] - cropY0) * scale;
-      const rw = (hl[2] - hl[0]) * scale;
-      const rh = (hl[3] - hl[1]) * scale;
+      const rx0 = (hl[0] - cropX0) * CROP_RENDER_SCALE;
+      const ry0 = (hl[1] - cropY0) * CROP_RENDER_SCALE;
+      const rw = (hl[2] - hl[0]) * CROP_RENDER_SCALE;
+      const rh = (hl[3] - hl[1]) * CROP_RENDER_SCALE;
       ctx.fillRect(rx0, ry0, rw, rh);
     }
 
