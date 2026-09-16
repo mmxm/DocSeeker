@@ -2380,6 +2380,9 @@ document.addEventListener("DOMContentLoaded", () => {
       .replace(/'/g, "&#039;");
   }
 
+  // Cache LRU de RegExp compilées par query (max 5 entrées) — C3
+  const _highlightRegexpCache = new Map();
+
   function highlightTitle(title, query) {
     if (!title) return "";
     if (!query || !query.trim()) return escapeHtml(title);
@@ -2388,40 +2391,54 @@ document.addEventListener("DOMContentLoaded", () => {
       const rawTerms = query.trim().split(/\s+/).filter(t => t.length >= 1);
       if (rawTerms.length === 0) return escapeHtml(title);
 
-      const accentMap = {
-        'a': '[aàáâãäåAÀÁÂÃÄÅ]',
-        'e': '[eèéêëEÈÉÊË]',
-        'i': '[iìíîïIÌÍÎÏ]',
-        'o': '[oòóôõöOÒÓÔÕÖ]',
-        'u': '[uùúûüUÙÚÛÜ]',
-        'c': '[cçCÇ]',
-        'n': '[nñNÑ]'
-      };
+      // Chercher dans le cache avant de compiler
+      const cacheKey = query.trim().toLowerCase();
+      let pattern = _highlightRegexpCache.get(cacheKey);
 
-      const patterns = [];
-      rawTerms.forEach(term => {
-        const variants = [term];
-        if ((term.endsWith('s') || term.endsWith('x')) && term.length > 3) {
-          variants.push(term.slice(0, -1));
-        }
-        variants.forEach(v => {
-          const normalized = v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-          const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          const regexStr = escaped.split('').map(ch => accentMap[ch] || `[${ch.toUpperCase()}${ch.toLowerCase()}]`).join('');
-          if (v.length <= 2) {
-            patterns.push(`(?<!\\w)${regexStr}(?!\\w)`);
-          } else {
-            patterns.push(`(?<!\\w)${regexStr}`);
+      if (!pattern) {
+        const accentMap = {
+          'a': '[aàáâãäåAÀÁÂÃÄÅ]',
+          'e': '[eèéêëEÈÉÊË]',
+          'i': '[iìíîïIÌÍÎÏ]',
+          'o': '[oòóôõöOÒÓÔÕÖ]',
+          'u': '[uùúûüUÙÚÛÜ]',
+          'c': '[cçCÇ]',
+          'n': '[nñNÑ]'
+        };
+
+        const patterns = [];
+        rawTerms.forEach(term => {
+          const variants = [term];
+          if ((term.endsWith('s') || term.endsWith('x')) && term.length > 3) {
+            variants.push(term.slice(0, -1));
           }
+          variants.forEach(v => {
+            const normalized = v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+            const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const regexStr = escaped.split('').map(ch => accentMap[ch] || `[${ch.toUpperCase()}${ch.toLowerCase()}]`).join('');
+            if (v.length <= 2) {
+              patterns.push(`(?<!\\w)${regexStr}(?!\\w)`);
+            } else {
+              patterns.push(`(?<!\\w)${regexStr}`);
+            }
+          });
         });
-      });
 
-      if (patterns.length === 0) return escapeHtml(title);
+        if (patterns.length === 0) return escapeHtml(title);
 
-      // Trier par longueur décroissante pour privilégier la variante la plus longue (ex: 'complications' avant 'complication')
-      patterns.sort((a, b) => b.length - a.length);
+        // Trier par longueur décroissante pour privilégier la variante la plus longue (ex: 'complications' avant 'complication')
+        patterns.sort((a, b) => b.length - a.length);
+        pattern = new RegExp(`(${patterns.join('|')})`, 'gi');
 
-      const pattern = new RegExp(`(${patterns.join('|')})`, 'gi');
+        // Insérer dans le cache LRU (éviction de la plus ancienne entrée si > 5)
+        _highlightRegexpCache.set(cacheKey, pattern);
+        if (_highlightRegexpCache.size > 5) {
+          _highlightRegexpCache.delete(_highlightRegexpCache.keys().next().value);
+        }
+      }
+
+      // Réinitialiser l'index pour la recherche (la RegExp est sticky via 'g')
+      pattern.lastIndex = 0;
       let lastIndex = 0;
       let result = '';
       let match;
