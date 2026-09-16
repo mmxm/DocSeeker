@@ -57,7 +57,11 @@ async function init() {
           console.warn('[OfflineSearchWorker] Impossible de lire search_wasm depuis CacheStorage:', e);
         }
       }
-      await initSearchWasm(wasmBuffer);
+      if (wasmBuffer) {
+        await initSearchWasm({ module_or_path: wasmBuffer });
+      } else {
+        await initSearchWasm();
+      }
 
       // 2. Initialiser SQLite-Wasm officiel (binaire depuis CacheStorage pour éviter l'échec XHR synchrone offline)
       let sqliteWasmBinary = undefined;

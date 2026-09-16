@@ -156,7 +156,9 @@ async function loadPdfDoc(docId) {
           disableAutoFetch: false,
           disableStream: false,
           ownerDocument: null,
-          disableFontFace: true,
+          useSystemFonts: true,
+          verbosity: 0,
+          isEvalSupported: false,
         });
       } else {
         // 2. Fallback réseau si en ligne (avec credentials obligatoires pour l'authentification)
@@ -167,7 +169,9 @@ async function loadPdfDoc(docId) {
           disableAutoFetch: false,
           disableStream: false,
           ownerDocument: null,
-          disableFontFace: true,
+          useSystemFonts: true,
+          verbosity: 0,
+          isEvalSupported: false,
         });
       }
 

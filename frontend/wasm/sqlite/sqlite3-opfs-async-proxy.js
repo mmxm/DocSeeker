@@ -53,15 +53,14 @@
 	usage of those methods to remove the "await".
 	*/
 	const urlParams = new URL(globalThis.location.href).searchParams;
-	const vfsName = urlParams.get("vfs");
-	if (!vfsName) throw new Error("Expecting vfs=opfs|opfs-wl URL argument for this worker");
+	const vfsName = urlParams.get("vfs") || "opfs";
 	/**
 	We use this to allow us to differentiate debug output from
 	multiple instances, e.g. multiple Workers to the "opfs"
 	VFS or both the "opfs" and "opfs-wl" VFSes.
 	*/
 	const workerId = Math.random() * 1e7 | 0;
-	const isWebLocker = "opfs-wl" === urlParams.get("vfs");
+	const isWebLocker = "opfs-wl" === vfsName;
 	const wPost = (type, ...args) => postMessage({
 		type,
 		payload: args

@@ -7,7 +7,7 @@
  * 3. Routage résilient avec fallback automatique sur incident réseau.
  */
 
-const CACHE_NAME = 'docseeker-app-shell-v14';
+const CACHE_NAME = 'docseeker-app-shell-v15';
 const CROP_CACHE_NAME = 'docseeker_offline_crops';
 const COVER_CACHE_NAME = 'docseeker_covers';
 
@@ -27,6 +27,8 @@ const APP_SHELL_ASSETS = [
   '/wasm/search_wasm/search_wasm_bg.wasm',
   '/wasm/sqlite/index.mjs',
   '/wasm/sqlite/sqlite3.wasm',
+  '/wasm/sqlite/sqlite3-opfs-async-proxy.js',
+  '/wasm/sqlite/sqlite3-worker1.mjs',
   '/pdfjs/build/pdf.mjs',
   '/pdfjs/build/pdf.worker.mjs',
   '/pdfjs/web/viewer.html',
@@ -100,7 +102,14 @@ self.addEventListener('activate', (event) => {
 
 // Interception des requêtes HTTP (Reverse Proxy Local)
 self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
+  if (!event.request || !event.request.url) return;
+  let url;
+  try {
+    url = new URL(event.request.url);
+  } catch (e) {
+    return;
+  }
+  if (!url.protocol.startsWith('http')) return;
 
   // 1. Couvertures (/api/cover/{id}) : Cache First avec Network Fallback
   if (url.pathname.startsWith('/api/cover/')) {
@@ -253,7 +262,13 @@ self.addEventListener('fetch', (event) => {
   if (!url.pathname.startsWith('/api/')) {
     event.respondWith(
       (async () => {
-        const cached = await caches.match(event.request, { ignoreSearch: true }) || await caches.match(url.pathname, { ignoreSearch: true });
+        let cached = await caches.match(event.request, { ignoreSearch: true }) || await caches.match(url.pathname, { ignoreSearch: true });
+        if (!cached && url.pathname.endsWith('sqlite3-opfs-async-proxy.js')) {
+          cached = await caches.match('/wasm/sqlite/sqlite3-opfs-async-proxy.js', { ignoreSearch: true });
+        }
+        if (!cached && url.pathname.endsWith('sqlite3-worker1.mjs')) {
+          cached = await caches.match('/wasm/sqlite/sqlite3-worker1.mjs', { ignoreSearch: true });
+        }
         if (cached) {
           if (typeof navigator !== 'undefined' && navigator.onLine) {
             fetch(event.request).then((netRes) => {
