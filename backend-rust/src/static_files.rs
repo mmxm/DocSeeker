@@ -30,6 +30,30 @@ fn get_cache_control(path: &str) -> &'static str {
     }
 }
 
+fn get_content_type(path: &str) -> &'static str {
+    if path.ends_with(".wasm") {
+        "application/wasm"
+    } else if path.ends_with(".js") || path.ends_with(".mjs") {
+        "text/javascript; charset=utf-8"
+    } else if path.ends_with(".css") {
+        "text/css; charset=utf-8"
+    } else if path.ends_with(".json") {
+        "application/json; charset=utf-8"
+    } else if path.ends_with(".html") {
+        "text/html; charset=utf-8"
+    } else if path.ends_with(".svg") {
+        "image/svg+xml"
+    } else if path.ends_with(".png") {
+        "image/png"
+    } else if path.ends_with(".webp") {
+        "image/webp"
+    } else if path.ends_with(".ico") {
+        "image/x-icon"
+    } else {
+        "application/octet-stream"
+    }
+}
+
 pub async fn static_handler(uri: Uri) -> Response<Body> {
     let mut path = uri.path().trim_start_matches('/').to_string();
 
@@ -38,6 +62,7 @@ pub async fn static_handler(uri: Uri) -> Response<Body> {
     }
 
     let cache_control = get_cache_control(&path);
+    let content_type = get_content_type(&path);
 
     // 1. Essayer de servir depuis le disque si le dossier frontend/ existe à proximité
     let local_candidates = [
@@ -48,10 +73,9 @@ pub async fn static_handler(uri: Uri) -> Response<Body> {
     for local_path in &local_candidates {
         if local_path.exists() && local_path.is_file() {
             if let Ok(content) = tokio::fs::read(local_path).await {
-                let mime = mime_guess::from_path(local_path).first_or_octet_stream();
                 return Response::builder()
                     .status(StatusCode::OK)
-                    .header(header::CONTENT_TYPE, HeaderValue::from_str(mime.as_ref()).unwrap())
+                    .header(header::CONTENT_TYPE, HeaderValue::from_static(content_type))
                     .header(header::CACHE_CONTROL, HeaderValue::from_static(cache_control))
                     .body(Body::from(content))
                     .unwrap();
@@ -62,10 +86,9 @@ pub async fn static_handler(uri: Uri) -> Response<Body> {
     // 2. Fallback sur les assets embarqués (rust-embed)
     match EmbeddedFrontend::get(&path) {
         Some(content) => {
-            let mime = mime_guess::from_path(&path).first_or_octet_stream();
             Response::builder()
                 .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, HeaderValue::from_str(mime.as_ref()).unwrap())
+                .header(header::CONTENT_TYPE, HeaderValue::from_static(content_type))
                 .header(header::CACHE_CONTROL, HeaderValue::from_static(cache_control))
                 .body(Body::from(content.data))
                 .unwrap()

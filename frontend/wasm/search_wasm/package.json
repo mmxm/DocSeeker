@@ -1,0 +1,16 @@
+{
+  "name": "search-wasm",
+  "type": "module",
+  "description": "Moteur de recherche et découpage spatial d'occurrences pour DocSeeker compilé en WebAssembly",
+  "version": "0.1.0",
+  "files": [
+    "search_wasm_bg.wasm",
+    "search_wasm.js",
+    "search_wasm.d.ts"
+  ],
+  "main": "search_wasm.js",
+  "types": "search_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
