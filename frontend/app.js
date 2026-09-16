@@ -1412,6 +1412,7 @@ document.addEventListener("DOMContentLoaded", () => {
     lastViewerScrollTop = 0;
     if (currentActiveDocId && window.pdfCacheManager) {
       window.pdfCacheManager.pauseDownload(currentActiveDocId);
+      window.pdfCacheManager.cleanup(currentActiveDocId); // Libère les listeners zombie (P6)
     }
     workspace.classList.remove("split-active");
     document.documentElement.classList.remove("doc-open");

@@ -351,6 +351,21 @@ class PdfCacheManager {
     // No-op : géré par le cycle de vie de l'iframe PDF.js
   }
 
+  /**
+   * Libère les écouteurs de progression et le cache en mémoire pour un document fermé.
+   * À appeler quand l'utilisateur ferme le viewer pour éviter l'accumulation d'entrées zombie.
+   */
+  cleanup(docId) {
+    const id = Number(docId);
+    if (!id) return;
+    this.progressListeners.delete(id);
+    // Conserver progressCache si le doc est complet (utile pour le prochain affichage)
+    const cached = this.progressCache.get(id);
+    if (!cached || cached.status !== 'complete') {
+      this.progressCache.delete(id);
+    }
+  }
+
   async getBlobUrl(docId) {
     // PDF.js lit directement les fragments depuis IndexedDB
     return null;
