@@ -470,8 +470,9 @@ document.addEventListener("DOMContentLoaded", () => {
       const isProcessing = Boolean(data.is_processing || (data.queue_length > 0) || data.current_job);
       const remaining = (data.queue_length || 0) + (data.current_job ? 1 : 0);
 
-      // Adapter la cadence de polling : 2s pendant une indexation active, 10s au repos
-      const targetDelay = isProcessing ? 2000 : 10000;
+      // Adapter la cadence de polling : 5s pendant une indexation active, 10s au repos
+      // (2s était trop agressif : un wakeup CPU + requête réseau toutes les 2s pendant l'indexation)
+      const targetDelay = isProcessing ? 5000 : 10000;
       if (targetDelay !== currentPollingDelay) {
         currentPollingDelay = targetDelay;
         if (pipelinePollingInterval) {
