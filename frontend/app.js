@@ -1010,26 +1010,35 @@ document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
   // Gestion de la Sélection Multiple & Presse-Papier
   // =========================================================================
+  // Map docId -> cardElement pour mise à jour O(1) de la sélection (C4)
+  const _docCardMap = new Map();
+
   function updateSelectionUI() {
-    // Mettre à jour la classe .selected sur toutes les cartes affichées
-    document.querySelectorAll(".doc-card").forEach(card => {
-      const docId = parseInt(card.getAttribute("data-doc-id"), 10);
-      const isSelected = selectedDocIds.has(docId);
-      if (isSelected) {
-        card.classList.add("selected");
-      } else {
-        card.classList.remove("selected");
+    if (_docCardMap.size > 0) {
+      // Chemin rapide : mettre à jour seulement les cartes connues en O(1) par doc
+      for (const [docId, card] of _docCardMap) {
+        const isSelected = selectedDocIds.has(docId);
+        card.classList.toggle('selected', isSelected);
+        const chk = card.querySelector('.doc-selection-checkbox');
+        if (chk) chk.checked = isSelected;
       }
-      const chk = card.querySelector(".doc-selection-checkbox");
-      if (chk) chk.checked = isSelected;
-    });
+    } else {
+      // Chemin fallback si la Map n'est pas encore peuplée
+      document.querySelectorAll('.doc-card').forEach(card => {
+        const docId = parseInt(card.getAttribute('data-doc-id'), 10);
+        const isSelected = selectedDocIds.has(docId);
+        card.classList.toggle('selected', isSelected);
+        const chk = card.querySelector('.doc-selection-checkbox');
+        if (chk) chk.checked = isSelected;
+      });
+    }
 
     const count = selectedDocIds.size;
     if (count > 0) {
-      selectionActionBar.style.display = "flex";
+      selectionActionBar.style.display = 'flex';
       selectionCountText.textContent = `${count} document${count > 1 ? 's' : ''} sélectionné${count > 1 ? 's' : ''}`;
     } else {
-      selectionActionBar.style.display = "none";
+      selectionActionBar.style.display = 'none';
     }
   }
 
@@ -2361,8 +2370,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const sortedDocs = sortDocumentsList(rawLoadedDocs, currentSortMode);
     currentLoadedDocs = sortedDocs;
 
+    _docCardMap.clear();
     sortedDocs.forEach(doc => {
       const card = createDocCardElement(doc, false);
+      _docCardMap.set(doc.id, card);
       resultsContainer.appendChild(card);
     });
 
