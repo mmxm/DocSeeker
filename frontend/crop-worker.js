@@ -11,13 +11,16 @@ if (typeof globalThis !== 'undefined') {
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs/build/pdf.worker.mjs';
 
 let wasmInitPromise = null;
+let wasmReady = false;
 let sharedConstants = null;
 
 async function ensureWasm() {
+  if (wasmReady) return; // Court-circuit immédiat après la première init
   if (!wasmInitPromise) {
     wasmInitPromise = (async () => {
       await initSearchWasm();
       sharedConstants = JSON.parse(get_shared_constants_wasm());
+      wasmReady = true;
     })();
   }
   return wasmInitPromise;
