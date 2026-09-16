@@ -1,11 +1,8 @@
-mod auth;
-mod config;
-mod db;
-mod pdf;
-mod pipeline;
-mod routes;
-mod search;
-mod static_files;
+use docseeker_backend::*;
+use docseeker_backend::auth::password::{hash_password, verify_password};
+use docseeker_backend::pdf::indexer::scan_and_sync_documents;
+use docseeker_backend::routes::create_api_router;
+use docseeker_backend::static_files::static_handler;
 
 use std::sync::{Arc, Mutex};
 use axum::{
@@ -14,33 +11,13 @@ use axum::{
     response::Response,
     Router,
 };
-use rusqlite::Connection;
 use tower_http::compression::Predicate;
 use tower_http::cors::{Any, CorsLayer};
+
 use tracing::{info, warn};
-
-use crate::auth::password::{hash_password, verify_password};
-use crate::auth::rate_limit::LoginRateLimiter;
-use crate::config::Config;
-use crate::pdf::engine::PdfEngine;
-use crate::pdf::indexer::scan_and_sync_documents;
-use crate::pipeline::IndexingPipeline;
-use crate::routes::create_api_router;
-use crate::static_files::static_handler;
-
 use std::num::NonZeroUsize;
 use lru::LruCache;
-use crate::search::types::SearchResponse;
 
-pub struct AppState {
-    pub config: Config,
-    pub db: Arc<Mutex<Connection>>,
-    pub pdf_engine: Arc<PdfEngine>,
-    pub pipeline: Arc<IndexingPipeline>,
-    pub rate_limiter: Arc<LoginRateLimiter>,
-    pub crop_semaphore: Arc<tokio::sync::Semaphore>,
-    pub search_cache: Arc<Mutex<LruCache<String, SearchResponse>>>,
-}
 
 fn setup_panic_hook(data_dir: std::path::PathBuf) {
     let crash_file = data_dir.join("crash.log");
@@ -323,6 +300,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         headers.insert(
             header::HeaderName::from_static("permissions-policy"),
             HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+        );
+        headers.insert(
+            header::HeaderName::from_static("cross-origin-opener-policy"),
+            HeaderValue::from_static("same-origin"),
+        );
+        headers.insert(
+            header::HeaderName::from_static("cross-origin-embedder-policy"),
+            HeaderValue::from_static("require-corp"),
+        );
+        headers.insert(
+            header::HeaderName::from_static("cross-origin-resource-policy"),
+            HeaderValue::from_static("same-origin"),
         );
         // Retrait de la signature serveur
         headers.remove(header::SERVER);

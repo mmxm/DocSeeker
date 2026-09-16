@@ -31,3 +31,8 @@ target/
 backend-rust/lib/
 *.dylib
 *.so
+
+# Node & Tests UI
+node_modules/
+test-results/
+playwright-report/

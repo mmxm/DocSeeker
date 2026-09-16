@@ -40,6 +40,111 @@ document.addEventListener("DOMContentLoaded", () => {
   const filterCurrentFolderOnly = document.getElementById("filterCurrentFolderOnly");
   const filterFolderChip = document.getElementById("filterFolderChip");
   const filterFolderLabel = document.getElementById("filterFolderLabel");
+  const filterOfflineOnly = document.getElementById("filterOfflineOnly");
+  const offlineNoticeBanner = document.getElementById("offlineNoticeBanner");
+
+  // =========================================================================
+  // État Global de l'Application (Déclaré au sommet pour éliminer le TDZ)
+  // =========================================================================
+  let debounceTimer = null;
+  let docSearchDebounceTimer = null;
+  let currentSearchQuery = "";
+  let currentActiveDocId = null;
+  let currentActiveDocTitle = "";
+  let currentDocOriginalOccurrences = [];
+  let savedGeneralResultsScrollTop = 0;
+  let isRestoringScroll = false;
+  let currentFolderId = null; // null = racine
+  let currentFolderName = "Documents";
+  let folderBreadcrumbs = [{ id: null, name: "Documents" }];
+  let allFolders = [];
+  let currentLoadedDocs = [];
+  let rawLoadedDocs = [];
+  let lastSearchResultsData = null;
+  let selectedFolderColor = "#3b82f6";
+  let currentSortMode = "name_asc";
+  let userManuallyChangedSort = false;
+  let isSearchActive = false;
+
+  class OfflineCropRenderer {
+    constructor() {
+      this.worker = null;
+      this.reqId = 0;
+      this.callbacks = new Map();
+      if (typeof Worker !== 'undefined') {
+        this.worker = new Worker('/crop-worker.js?v=8.0', { type: 'module' });
+        this.worker.onmessage = (e) => {
+          const { id, success, blob, error } = e.data;
+          if (this.callbacks.has(id)) {
+            const { resolve, reject } = this.callbacks.get(id);
+            this.callbacks.delete(id);
+            if (success) resolve(blob);
+            else reject(new Error(error));
+          }
+        };
+        this.worker.onerror = (err) => {
+          console.warn('[OfflineCropRenderer] Worker error:', err);
+          for (const [, { resolve }] of this.callbacks.entries()) {
+            resolve(null);
+          }
+          this.callbacks.clear();
+        };
+      }
+    }
+
+    clearQueue() {
+      if (this.worker) {
+        this.worker.postMessage({ type: 'CLEAR_QUEUE' });
+      }
+      for (const [, { resolve }] of this.callbacks.entries()) {
+        resolve(null);
+      }
+      this.callbacks.clear();
+    }
+
+    async renderAndCache(docId, pageNumber, highlightRects, rect, cropUrl) {
+      // 1. Vérification immédiate dans CacheStorage (0ms, évite tout calcul PDF redondant)
+      if (cropUrl && typeof caches !== 'undefined') {
+        try {
+          const cache = await caches.open('docseeker_offline_crops');
+          const cached = await cache.match(cropUrl);
+          if (cached) {
+            const blob = await cached.blob();
+            if (blob && blob.size > 0) return blob;
+          }
+        } catch (e) {}
+      }
+
+      if (!this.worker) return null;
+      const id = ++this.reqId;
+      const blobPromise = new Promise((resolve, reject) => {
+        this.callbacks.set(id, { resolve, reject });
+        this.worker.postMessage({
+          id,
+          type: 'RENDER_CROP',
+          payload: { docId, pageNumber, highlightRects, rect }
+        });
+      });
+
+      const blob = await blobPromise;
+      if (blob && typeof caches !== 'undefined') {
+        try {
+          const cache = await caches.open('docseeker_offline_crops');
+          const response = new Response(blob, {
+            headers: {
+              'Content-Type': 'image/webp',
+              'Cache-Control': 'public, max-age=604800, immutable'
+            }
+          });
+          await cache.put(cropUrl, response);
+        } catch (e) {}
+      }
+      return blob;
+    }
+  }
+
+  const offlineCropRenderer = new OfflineCropRenderer();
+  window.offlineCropRenderer = offlineCropRenderer;
 
   // Navigation par dossiers & fil d'Ariane
   const breadcrumbsNav = document.getElementById("breadcrumbsNav");
@@ -55,6 +160,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const selectionCountText = document.getElementById("selectionCountText");
   const batchMoveBtn = document.getElementById("batchMoveBtn");
   const batchCutBtn = document.getElementById("batchCutBtn");
+  const batchCacheBtn = document.getElementById("batchCacheBtn");
+  const batchUncacheBtn = document.getElementById("batchUncacheBtn");
   const batchDeleteBtn = document.getElementById("batchDeleteBtn");
   const clearSelectionBtn = document.getElementById("clearSelectionBtn");
 
@@ -173,32 +280,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const toastContainer = document.getElementById("toastContainer");
 
   // =========================================================================
-  // État de l'Application
+  // État de l'Application (Variables déclarées au sommet)
   // =========================================================================
-  let debounceTimer = null;
-  let docSearchDebounceTimer = null;
-  let currentSearchQuery = "";
-  let currentActiveDocId = null;
-  let currentActiveDocTitle = "";
-  let currentDocOriginalOccurrences = [];
-  let savedGeneralResultsScrollTop = 0;
-  let isRestoringScroll = false;
-
-  // État des dossiers
-  let currentFolderId = null; // null = racine
-  let currentFolderName = "Documents";
-  let folderBreadcrumbs = [{ id: null, name: "Documents" }];
-  let allFolders = [];
-  let currentLoadedDocs = [];
-  let rawLoadedDocs = [];
-  let lastSearchResultsData = null;
-  let selectedFolderColor = "#3b82f6"; // Uniforme bleu par défaut
 
   // Tri des documents et résultats
   const sortSelect = document.getElementById("sortSelect");
   const sortPillCurrent = document.getElementById("sortPillCurrent");
-  let currentSortMode = "name_asc";
-  let userManuallyChangedSort = false;
 
   function updateSortPillLabel() {
     if (sortPillCurrent && sortSelect && sortSelect.selectedOptions && sortSelect.selectedOptions[0]) {
@@ -272,11 +359,54 @@ document.addEventListener("DOMContentLoaded", () => {
         this.observer.unobserve(img);
       } catch (e) {}
 
+      const isOfflineMode = !navigator.onLine || (document.getElementById("filterOfflineOnly") && document.getElementById("filterOfflineOnly").checked);
+
+      const renderOfflineCrop = () => {
+        if (srcUrl.startsWith('/api/crop/') && window.offlineCropRenderer) {
+          const vEl = img.closest('.vignette-item') || img.closest('.vertical-occ-card');
+          if (vEl && vEl.dataset.docId) {
+            const docId = Number(vEl.dataset.docId);
+            const pageNum = Number(vEl.dataset.page);
+            let rect = [];
+            let hlRects = [];
+            try { rect = JSON.parse(vEl.dataset.rect || '[]'); } catch (e) {}
+            try { hlRects = JSON.parse(vEl.dataset.hlRects || '[]'); } catch (e) {}
+            if (!hlRects || hlRects.length === 0) {
+              if (rect && rect.length === 4) hlRects = [rect];
+            }
+            if (rect && rect.length === 4) {
+              window.offlineCropRenderer.renderAndCache(docId, pageNum, hlRects, rect, srcUrl).then(blob => {
+                if (blob) {
+                  img.src = URL.createObjectURL(blob);
+                  img.dataset.loaded = "true";
+                  img.style.opacity = "1";
+                } else {
+                  img.dataset.loaded = "false";
+                }
+              }).catch(err => {
+                console.warn('[DynamicCropManager] offlineCropRenderer error:', err);
+                img.dataset.loaded = "false";
+              });
+              return true;
+            }
+          }
+        }
+        return false;
+      };
+
+      // Si hors-ligne, déléguer immédiatement au crop worker local sans timeout réseau
+      if (isOfflineMode && srcUrl.startsWith('/api/crop/')) {
+        if (renderOfflineCrop()) return;
+      }
+
       img.onload = () => {
         img.style.opacity = "1";
       };
+
       img.onerror = () => {
-        // En cas d'erreur de chargement réseau, réessayer une fois après 500ms
+        if (renderOfflineCrop()) return;
+
+        // En cas d'erreur standard, réessayer une fois après 500ms
         if (!img.dataset.retried) {
           img.dataset.retried = "true";
           setTimeout(() => {
@@ -293,6 +423,9 @@ document.addEventListener("DOMContentLoaded", () => {
         clearTimeout(timer);
       }
       this.pendingDebounce.clear();
+      if (window.offlineCropRenderer) {
+        window.offlineCropRenderer.clearQueue();
+      }
     }
   }
 
@@ -398,11 +531,24 @@ document.addEventListener("DOMContentLoaded", () => {
       contextMenuTitle.textContent = docTitle;
     }
 
+    const ctxMenuToggleCache = document.getElementById("ctxMenuToggleCache");
+    const ctxMenuToggleCacheText = document.getElementById("ctxMenuToggleCacheText");
+    if (ctxMenuToggleCache && ctxMenuToggleCacheText && window.downloadQueueManager) {
+      const isCached = window.downloadQueueManager.isDocumentCached(docId);
+      if (isCached) {
+        ctxMenuToggleCacheText.textContent = "Supprimer du cache local";
+        ctxMenuToggleCache.classList.add("danger");
+      } else {
+        ctxMenuToggleCacheText.textContent = "Mettre en cache local";
+        ctxMenuToggleCache.classList.remove("danger");
+      }
+    }
+
     if (!cardContextMenu) return;
 
     cardContextMenu.style.display = "flex";
-    const popoverWidth = 180;
-    const popoverHeight = 160;
+    const popoverWidth = 195;
+    const popoverHeight = 190;
 
     const target = e.currentTarget;
     const rect = target.getBoundingClientRect();
@@ -462,6 +608,33 @@ document.addEventListener("DOMContentLoaded", () => {
       const { id, title } = activeContextMenuDoc;
       closeContextMenu();
       handleReindexDocument(id, title, null);
+    });
+  }
+
+  const ctxMenuToggleCache = document.getElementById("ctxMenuToggleCache");
+  const ctxMenuToggleCacheText = document.getElementById("ctxMenuToggleCacheText");
+  if (ctxMenuToggleCache) {
+    ctxMenuToggleCache.addEventListener("click", async () => {
+      if (!activeContextMenuDoc) return;
+      const { id, title } = activeContextMenuDoc;
+      closeContextMenu();
+      if (!window.downloadQueueManager) return;
+      const isCached = window.downloadQueueManager.isDocumentCached(id);
+      if (isCached) {
+        if (confirm(`Supprimer "${title}" du cache local hors-ligne ?`)) {
+          await window.downloadQueueManager.removeDocumentFromCache(id);
+          showToast(`"${title}" supprimé du cache local`, "info");
+          updateDocCardCacheUI(id);
+          if (filterOfflineOnly && filterOfflineOnly.checked) {
+            if (currentSearchQuery) performSearch(currentSearchQuery);
+            else loadFoldersAndDocuments();
+          }
+        }
+      } else {
+        await window.downloadQueueManager.enqueueDocument(id);
+        updateDocCardCacheUI(id);
+        showToast(`Document "${title}" ajouté à la file de téléchargement`, "info");
+      }
     });
   }
 
@@ -608,6 +781,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const item = document.createElement("div");
       const isActive = (index === activeTargetIndex);
       item.className = `vertical-occ-card ${isActive ? 'active' : ''}`;
+      item.setAttribute("data-doc-id", docId);
+      item.setAttribute("data-page", occ.page_number);
+      item.setAttribute("data-occ-id", occ.occ_id || '');
+      item.setAttribute("data-rect", JSON.stringify(occ.rect || []));
+      item.setAttribute("data-hl-rects", JSON.stringify(occ.highlight_rects || (occ.rect ? [occ.rect] : [])));
+
       item.innerHTML = `
         <div class="vertical-occ-img-wrapper">
           <img src="${placeholderSvg}" data-src="${occ.crop_url}" class="vertical-occ-img dynamic-crop" alt="Extrait p. ${occ.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
@@ -677,18 +856,39 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function checkAuthStatus() {
+    const localSessionExpiry = parseInt(localStorage.getItem('docseeker_session_valid_until') || '0', 10);
+    const isLocallyValid = localSessionExpiry > Date.now();
+
+    if (!navigator.onLine && isLocallyValid) {
+      console.log('[Auth] Mode hors-ligne actif avec session locale valide');
+      hideLoginModal();
+      loadFoldersAndDocuments();
+      return;
+    }
+
     try {
       const res = await fetch(cleanOrigin() + "/api/auth/status");
       if (res.ok) {
         const data = await res.json();
         if (data.authenticated) {
+          localStorage.setItem('docseeker_session_valid_until', String(Date.now() + 30 * 24 * 3600 * 1000));
           hideLoginModal();
           loadFoldersAndDocuments();
           return;
         }
       }
+      if (!navigator.onLine && isLocallyValid) {
+        hideLoginModal();
+        loadFoldersAndDocuments();
+        return;
+      }
       showLoginModal();
     } catch (_) {
+      if (!navigator.onLine && isLocallyValid) {
+        hideLoginModal();
+        loadFoldersAndDocuments();
+        return;
+      }
       showLoginModal();
     }
   }
@@ -714,6 +914,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
+          localStorage.setItem('docseeker_session_valid_until', String(Date.now() + 30 * 24 * 3600 * 1000));
           hideLoginModal();
           showToast("Connexion réussie", "success");
           loadFoldersAndDocuments();
@@ -850,6 +1051,49 @@ document.addEventListener("DOMContentLoaded", () => {
     openBatchMoveModal(Array.from(selectedDocIds));
   });
 
+  if (batchCacheBtn) {
+    batchCacheBtn.addEventListener("click", async () => {
+      if (selectedDocIds.size === 0 || !window.downloadQueueManager) return;
+      const ids = Array.from(selectedDocIds);
+      let enqueuedCount = 0;
+      for (const id of ids) {
+        if (!window.downloadQueueManager.isDocumentCached(id)) {
+          await window.downloadQueueManager.enqueueDocument(id);
+          updateDocCardCacheUI(id);
+          enqueuedCount++;
+        }
+      }
+      if (enqueuedCount > 0) {
+        showToast(`${enqueuedCount} document${enqueuedCount > 1 ? 's' : ''} ajouté${enqueuedCount > 1 ? 's' : ''} à la file de téléchargement.`, "info");
+      } else {
+        showToast("Tous les documents sélectionnés sont déjà en cache.", "info");
+      }
+    });
+  }
+
+  if (batchUncacheBtn) {
+    batchUncacheBtn.addEventListener("click", async () => {
+      if (selectedDocIds.size === 0 || !window.downloadQueueManager) return;
+      const ids = Array.from(selectedDocIds);
+      const cachedIds = ids.filter(id => window.downloadQueueManager.isDocumentCached(id));
+      if (cachedIds.length === 0) {
+        showToast("Aucun des documents sélectionnés n'est actuellement en cache.", "info");
+        return;
+      }
+      if (!confirm(`Retirer ${cachedIds.length} document${cachedIds.length > 1 ? 's' : ''} du cache local hors-ligne ?`)) return;
+
+      for (const id of cachedIds) {
+        await window.downloadQueueManager.removeDocumentFromCache(id);
+        updateDocCardCacheUI(id);
+      }
+      showToast(`${cachedIds.length} document${cachedIds.length > 1 ? 's' : ''} retiré${cachedIds.length > 1 ? 's' : ''} du cache local.`, "info");
+      if (filterOfflineOnly && filterOfflineOnly.checked) {
+        if (currentSearchQuery) performSearch(currentSearchQuery);
+        else loadFoldersAndDocuments();
+      }
+    });
+  }
+
   batchDeleteBtn.addEventListener("click", async () => {
     const count = selectedDocIds.size;
     if (count === 0) return;
@@ -938,16 +1182,27 @@ document.addEventListener("DOMContentLoaded", () => {
     const val = e.target.value.trim();
     clearSearchBtn.style.display = val ? "flex" : "none";
 
-    // Si le champ est entièrement vidé alors qu'une recherche était active, réinitialiser
-    if (!val && currentSearchQuery) {
-      currentSearchQuery = "";
-      document.querySelectorAll(".doc-card").forEach(card => card.style.opacity = "1");
-      loadFoldersAndDocuments();
+    // Si le champ est entièrement vidé alors qu'une recherche était active, réinitialiser immédiatement
+    if (!val) {
+      if (currentSearchQuery || isSearchActive) {
+        currentSearchQuery = "";
+        isSearchActive = false;
+        lastSearchResultsData = null;
+        document.querySelectorAll(".doc-card").forEach(card => card.style.opacity = "1");
+        loadFoldersAndDocuments();
+      }
     }
   });
 
   searchInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
+    if (e.key === "Escape") {
+      searchInput.value = "";
+      clearSearchBtn.style.display = "none";
+      currentSearchQuery = "";
+      isSearchActive = false;
+      lastSearchResultsData = null;
+      loadFoldersAndDocuments();
+    } else if (e.key === "Enter") {
       e.preventDefault();
       document.querySelectorAll(".doc-card").forEach(card => card.style.opacity = "1");
       performSearch(searchInput.value.trim());
@@ -958,6 +1213,9 @@ document.addEventListener("DOMContentLoaded", () => {
     searchInput.value = "";
     clearSearchBtn.style.display = "none";
     searchInput.focus();
+    currentSearchQuery = "";
+    isSearchActive = false;
+    lastSearchResultsData = null;
     loadFoldersAndDocuments();
   });
 
@@ -977,9 +1235,26 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // Filtre : Hors-ligne uniquement
+  if (filterOfflineOnly) {
+    filterOfflineOnly.addEventListener("change", () => {
+      if (filterOfflineChip) {
+        filterOfflineChip.classList.toggle("active", filterOfflineOnly.checked);
+      }
+      if (searchInput.value.trim()) {
+        performSearch(searchInput.value.trim());
+      } else {
+        loadFoldersAndDocuments();
+      }
+    });
+  }
+
   brandBtn.addEventListener("click", () => {
     searchInput.value = "";
     clearSearchBtn.style.display = "none";
+    currentSearchQuery = "";
+    isSearchActive = false;
+    lastSearchResultsData = null;
     currentFolderId = null;
     currentFolderName = "Documents";
     folderBreadcrumbs = [{ id: null, name: "Documents" }];
@@ -1456,6 +1731,11 @@ document.addEventListener("DOMContentLoaded", () => {
       if (mobileOccurrencesCountText) mobileOccurrencesCountText.textContent = pillText;
       if (drawerDocCount) drawerDocCount.textContent = pillText;
 
+      if (workspace && workspace.classList.contains("split-active")) {
+        generalView.style.display = "none";
+        docDetailView.style.display = "block";
+      }
+
       currentActiveOccurrences = currentDocOriginalOccurrences || [];
       renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentDocOriginalOccurrences);
       renderDrawerOccurrences(currentActiveDocId, currentActiveDocTitle, currentDocOriginalOccurrences);
@@ -1473,9 +1753,32 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     try {
-      const res = await fetch(`/api/doc-search?doc_id=${currentActiveDocId}&q=${encodeURIComponent(query)}`);
-      const data = await res.json();
-      const occs = data.occurrences || [];
+      let occs = [];
+      const isDocCached = window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(currentActiveDocId);
+      const isOfflineMode = !navigator.onLine || (filterOfflineOnly && filterOfflineOnly.checked);
+
+      if (isDocCached || isOfflineMode) {
+        console.log(`[DocSearch] Recherche locale SQLite-Wasm pour le document ${currentActiveDocId}`);
+        if (window.downloadQueueManager) {
+          const res = await window.downloadQueueManager.sendToWorker('DOC_SEARCH', {
+            docId: currentActiveDocId,
+            query: query
+          });
+          occs = res ? (res.occurrences || []) : [];
+        }
+      } else {
+        console.log(`[DocSearch] Recherche en ligne backend pour le document ${currentActiveDocId}`);
+        const res = await fetch(`/api/doc-search?doc_id=${currentActiveDocId}&q=${encodeURIComponent(query)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        occs = data.occurrences || [];
+      }
+
+      // S'assurer que le volet de gauche affiche les résultats du document ouvert
+      if (workspace && workspace.classList.contains("split-active")) {
+        generalView.style.display = "none";
+        docDetailView.style.display = "block";
+      }
 
       const resultLabel = `${occs.length} résultat${occs.length > 1 ? 's' : ''}`;
       const pillLabel = `${occs.length} extrait${occs.length > 1 ? 's' : ''}`;
@@ -1559,12 +1862,19 @@ document.addEventListener("DOMContentLoaded", () => {
         item.textContent = crumb.name;
       }
 
-      // Clic pour naviguer en arrière
-      if (!isLast) {
-        item.addEventListener("click", () => {
+      // Clic pour naviguer en arrière ou réinitialiser la recherche
+      item.addEventListener("click", () => {
+        if (!isLast || isSearchActive) {
+          if (isSearchActive) {
+            searchInput.value = "";
+            clearSearchBtn.style.display = "none";
+            currentSearchQuery = "";
+            isSearchActive = false;
+            lastSearchResultsData = null;
+          }
           navigateToCrumb(index);
-        });
-      }
+        }
+      });
 
       // Drop Zone sur TOUS les éléments du fil d'ariane (y compris la racine Documents)
       item.addEventListener("dragover", (e) => {
@@ -1601,6 +1911,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function navigateToCrumb(index) {
+    currentSearchQuery = "";
+    isSearchActive = false;
+    lastSearchResultsData = null;
     folderBreadcrumbs = folderBreadcrumbs.slice(0, index + 1);
     const target = folderBreadcrumbs[index];
     currentFolderId = target.id;
@@ -1619,9 +1932,15 @@ document.addEventListener("DOMContentLoaded", () => {
     loadFoldersAndDocuments();
   }
 
+  let loadFoldersSeq = 0;
+
   async function loadFoldersAndDocuments() {
+    const currentSeq = ++loadFoldersSeq;
+    isSearchActive = false;
     currentSearchQuery = "";
+    lastSearchResultsData = null;
     savedGeneralResultsScrollTop = 0;
+    foldersSection.style.display = "";
     showGeneralResultsView();
     renderBreadcrumbs();
     updateFolderFilterVisibility();
@@ -1631,29 +1950,116 @@ document.addEventListener("DOMContentLoaded", () => {
     searchStats.textContent = "";
 
     try {
+      // S'assurer que le gestionnaire hors-ligne est initialisé
+      if (window.downloadQueueManager) {
+        await window.downloadQueueManager.ensureInitialized();
+      }
+
+      // Si complètement hors-ligne réseau : charger directement depuis SQLite-Wasm local
+      if (!navigator.onLine) {
+        let cachedDocs = [];
+        let cachedFolders = [];
+        if (window.downloadQueueManager) {
+          cachedDocs = await window.downloadQueueManager.getAllCachedDocs().catch(() => []);
+          cachedFolders = await window.downloadQueueManager.getAllCachedFolders().catch(() => []);
+        }
+        allFolders = cachedFolders || [];
+
+        // Filtrer les dossiers du niveau courant (currentFolderId ou root)
+        const currentLocalFolders = (cachedFolders || []).filter(f => {
+          if (currentFolderId === null) {
+            return f.parent_id === null || f.parent_id === undefined;
+          }
+          return Number(f.parent_id) === Number(currentFolderId);
+        });
+
+        // Filtrer les dossiers contenant au moins 1 document en cache
+        const visibleFolders = currentLocalFolders.filter(f => {
+          return window.downloadQueueManager ? window.downloadQueueManager.getCachedDocsCountForFolder(f.id) > 0 : true;
+        });
+
+        renderFolders(visibleFolders);
+
+        if (currentFolderId !== null) {
+          currentLoadedDocs = (cachedDocs || []).filter(d => Number(d.folder_id) === Number(currentFolderId));
+        } else {
+          currentLoadedDocs = (cachedDocs || []).filter(d => d.folder_id === null || d.folder_id === undefined);
+        }
+        renderDocumentLibrary(currentLoadedDocs);
+        return;
+      }
+
       // 1. Récupérer les dossiers
       const parentParam = currentFolderId ? currentFolderId : "root";
       const foldersRes = await fetch(`/api/folders?parent_id=${parentParam}`);
       const foldersData = await foldersRes.json();
       const currentFolders = foldersData.folders || [];
 
-      // Charger également tous les dossiers en mémoire pour le déplacement
+      // Charger également tous les dossiers en mémoire pour le déplacement et le cache
       const allFoldersRes = await fetch("/api/folders");
       const allFoldersData = await allFoldersRes.json();
       allFolders = allFoldersData.folders || [];
-
-      renderFolders(currentFolders);
+      if (window.downloadQueueManager) {
+        await window.downloadQueueManager.syncFolders(allFolders);
+      }
 
       // 2. Récupérer les documents du dossier courant
       const docFolderParam = currentFolderId ? currentFolderId : "root";
       const docsRes = await fetch(`/api/documents?folder_id=${docFolderParam}`);
       const docsData = await docsRes.json();
-      currentLoadedDocs = docsData.documents || [];
+      const fetchedDocs = docsData.documents || [];
+      if (window.downloadQueueManager && fetchedDocs.length > 0) {
+        await window.downloadQueueManager.syncDocFolders(fetchedDocs);
+      }
+
+      // Si le filtre "Hors-ligne uniquement" est coché, restreindre l'affichage
+      if (filterOfflineOnly && filterOfflineOnly.checked && window.downloadQueueManager) {
+        const visibleFolders = currentFolders.filter(f => window.downloadQueueManager.getCachedDocsCountForFolder(f.id) > 0);
+        renderFolders(visibleFolders);
+        currentLoadedDocs = fetchedDocs.filter(d => window.downloadQueueManager.isDocumentCached(d.id));
+      } else {
+        renderFolders(currentFolders);
+        currentLoadedDocs = fetchedDocs;
+      }
+
+      // Si une recherche a été lancée entre-temps par l'utilisateur, ne pas écraser l'affichage
+      if (currentSeq !== loadFoldersSeq || currentSearchQuery || isSearchActive) {
+        return;
+      }
+
       renderDocumentLibrary(currentLoadedDocs);
 
     } catch (err) {
       console.error("Erreur chargement arborescence:", err);
-      showToast("Erreur de chargement des documents et dossiers", "error");
+      // Fallback automatique vers SQLite-Wasm en cas d'erreur de requête
+      if (window.downloadQueueManager) {
+        const cachedDocs = await window.downloadQueueManager.getAllCachedDocs().catch(() => []);
+        const cachedFolders = await window.downloadQueueManager.getAllCachedFolders().catch(() => []);
+        allFolders = cachedFolders || [];
+
+        const currentLocalFolders = (cachedFolders || []).filter(f => {
+          if (currentFolderId === null) {
+            return f.parent_id === null || f.parent_id === undefined;
+          }
+          return Number(f.parent_id) === Number(currentFolderId);
+        });
+
+        const visibleFolders = currentLocalFolders.filter(f => {
+          return window.downloadQueueManager ? window.downloadQueueManager.getCachedDocsCountForFolder(f.id) > 0 : true;
+        });
+
+        renderFolders(visibleFolders);
+
+        if (currentFolderId !== null) {
+          currentLoadedDocs = (cachedDocs || []).filter(d => Number(d.folder_id) === Number(currentFolderId));
+        } else {
+          currentLoadedDocs = (cachedDocs || []).filter(d => d.folder_id === null || d.folder_id === undefined);
+        }
+
+        renderDocumentLibrary(currentLoadedDocs);
+      } else {
+        showToast("Erreur de chargement des documents et dossiers", "error");
+      }
     }
   }
 
@@ -1683,8 +2089,42 @@ document.addEventListener("DOMContentLoaded", () => {
       const card = document.createElement("div");
       card.className = "folder-card";
       card.setAttribute("data-folder-id", folder.id);
+      card.setAttribute("data-doc-count", folder.doc_count || 0);
 
       const folderColor = "#3b82f6";
+      const totalDocsInFolder = folder.doc_count || 0;
+      const cachedDocsInFolder = window.downloadQueueManager ? window.downloadQueueManager.getCachedDocsCountForFolder(folder.id) : 0;
+      const isFolderComplete = totalDocsInFolder > 0 && cachedDocsInFolder >= totalDocsInFolder;
+      const isFolderPartial = cachedDocsInFolder > 0 && (!totalDocsInFolder || cachedDocsInFolder < totalDocsInFolder);
+
+      let folderCacheBadgeHtml = "";
+      if (isFolderComplete) {
+        folderCacheBadgeHtml = `<span class="folder-cache-badge complete" title="Tous les documents (${totalDocsInFolder}) sont disponibles hors-ligne">✓</span>`;
+      } else if (isFolderPartial) {
+        folderCacheBadgeHtml = `<span class="folder-cache-badge partial" title="${cachedDocsInFolder}${totalDocsInFolder ? '/' + totalDocsInFolder : ''} document(s) disponible(s) hors-ligne">✓ ${cachedDocsInFolder}${totalDocsInFolder ? '/' + totalDocsInFolder : ''}</span>`;
+      }
+
+      let folderActionBtnHtml = "";
+      if (isFolderComplete) {
+        folderActionBtnHtml = `
+          <button class="folder-btn-action btn-delete-folder-cache" title="Supprimer tous les documents de ce dossier du cache local" data-id="${folder.id}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
+              <line x1="2" y1="2" x2="22" y2="22"></line>
+            </svg>
+          </button>
+        `;
+      } else {
+        folderActionBtnHtml = `
+          <button class="folder-btn-action btn-download-folder" title="${isFolderPartial ? 'Télécharger les documents manquants de ce dossier' : 'Télécharger tous les documents de ce dossier pour consultation hors-ligne'}" data-id="${folder.id}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+          </button>
+        `;
+      }
 
       card.innerHTML = `
         <div class="folder-icon-wrapper" style="background-color: ${folderColor};">
@@ -1694,9 +2134,13 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
         <div class="folder-info">
           <div class="folder-name" title="${escapeHtml(folder.name)}">${escapeHtml(folder.name)}</div>
-          <div class="folder-meta">${folder.doc_count || 0} document${(folder.doc_count || 0) > 1 ? 's' : ''}</div>
+          <div class="folder-meta" style="display: flex; align-items: center; gap: 4px;">
+            <span>${totalDocsInFolder > 0 ? `${totalDocsInFolder} document${totalDocsInFolder > 1 ? 's' : ''}` : (cachedDocsInFolder > 0 ? `${cachedDocsInFolder} document${cachedDocsInFolder > 1 ? 's' : ''}` : '0 document')}</span>
+            ${folderCacheBadgeHtml}
+          </div>
         </div>
         <div class="folder-actions">
+          ${folderActionBtnHtml}
           <button class="folder-btn-action btn-delete-folder" title="Supprimer ce dossier" data-id="${folder.id}">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6"></polyline>
@@ -1717,12 +2161,40 @@ document.addEventListener("DOMContentLoaded", () => {
         enterFolder(folder);
       });
 
+      // Bouton télécharger dossier pour le mode hors-ligne
+      const downloadFolderBtn = card.querySelector(".btn-download-folder");
+      if (downloadFolderBtn) {
+        downloadFolderBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          if (window.downloadQueueManager) {
+            await window.downloadQueueManager.enqueueFolder(folder.id);
+            showToast(`Téléchargement de l'ensemble du dossier "${folder.name}" enclenché`, "info");
+          }
+        });
+      }
+
+      // Bouton supprimer le dossier du cache local
+      const deleteFolderCacheBtn = card.querySelector(".btn-delete-folder-cache");
+      if (deleteFolderCacheBtn) {
+        deleteFolderCacheBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          if (confirm(`Supprimer tous les documents du dossier "${folder.name}" du cache local hors-ligne ?`)) {
+            if (window.downloadQueueManager) {
+              await window.downloadQueueManager.removeFolderFromCache(folder.id);
+              showToast(`Dossier "${folder.name}" retiré du cache local`, "info");
+              loadFoldersAndDocuments();
+            }
+          }
+        });
+      }
+
       // Bouton supprimer dossier
       const delBtn = card.querySelector(".btn-delete-folder");
       delBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         confirmDeleteFolder(folder.id, folder.name);
       });
+
 
       // Drop Zone pour Glisser-Déposer de documents (multi ou unique)
       card.addEventListener("dragover", (e) => {
@@ -1996,7 +2468,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (doc.vignettes && doc.vignettes.length > 0) {
         doc.vignettes.forEach(v => {
           vignettesHtml += `
-            <div class="vignette-item" data-doc-id="${doc.id}" data-page="${v.page_number}" data-occ="${v.occ_id}" data-rect='${JSON.stringify((v.highlight_rects && v.highlight_rects.length > 0) ? v.highlight_rects[0] : (v.rect || []))}' data-yratio="${v.y_ratio || 0}" data-snippet="${encodeURIComponent(v.text_snippet || '')}" title="Page ${v.page_number}${v.font_size >= 14 ? ' (Titre)' : ''} - Cliquer pour ouvrir">
+            <div class="vignette-item" data-doc-id="${doc.id}" data-page="${v.page_number}" data-occ="${v.occ_id}" data-rect='${JSON.stringify(v.rect || [])}' data-hl-rects='${JSON.stringify(v.highlight_rects || (v.rect ? [v.rect] : []))}' data-yratio="${v.y_ratio || 0}" data-snippet="${encodeURIComponent(v.text_snippet || '')}" title="Page ${v.page_number}${v.font_size >= 14 ? ' (Titre)' : ''} - Cliquer pour ouvrir">
               <img src="${PLACEHOLDER_CROP_SVG}" data-src="${v.crop_url}" class="vignette-crop-img dynamic-main-crop" alt="Extrait p. ${v.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
               <span class="vignette-page-badge">${v.font_size >= 14 ? '📌 ' : ''}p. ${v.page_number}</span>
             </div>
@@ -2031,6 +2503,25 @@ document.addEventListener("DOMContentLoaded", () => {
           ${isSearch ? `<span class="doc-badge-pill highlight">${doc.total_occurrences} occ.</span>` : ''}
           ${isIndexing ? `<span class="doc-badge-pill" style="background:rgba(37,99,235,0.1); color:var(--accent);">${doc.status === 'indexing' ? '⏳ Indexation...' : '⌛ En attente'}</span>` : `<span class="doc-badge-pill">${doc.total_pages} p.</span>`}
           
+          <button class="doc-cache-btn ${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? 'cached' : ''}" data-id="${doc.id}" title="${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? 'Disponible hors-ligne' : 'Télécharger pour consultation hors-ligne'}" aria-label="Cache hors-ligne">
+            ${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? `
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            ` : `
+              <svg class="cache-icon-cloud" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+            `}
+          </button>
+          <button class="doc-btn-action btn-delete-doc-cache" data-id="${doc.id}" style="${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? '' : 'display: none;'}" title="Supprimer ce document du cache local" aria-label="Supprimer du cache local">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
+              <line x1="2" y1="2" x2="22" y2="22"></line>
+            </svg>
+          </button>
           <button class="doc-menu-trigger-btn" data-id="${doc.id}" title="Options du document (Renommer, Déplacer, Réindexer, Supprimer)" aria-label="Options">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
               <circle cx="12" cy="5" r="2.2"></circle>
@@ -2039,6 +2530,7 @@ document.addEventListener("DOMContentLoaded", () => {
             </svg>
           </button>
         </div>
+
       </div>
       <div class="doc-card-body">
         <div class="doc-cover-wrapper" title="${isIndexing ? 'Document en cours d\'indexation...' : (isFailed ? 'Échec d\'indexation' : 'Ouvrir le document')}">
@@ -2066,15 +2558,66 @@ document.addEventListener("DOMContentLoaded", () => {
     // Clic case à cocher de sélection tactile
     const checkbox = card.querySelector(".doc-selection-checkbox");
     if (checkbox) {
-      checkbox.addEventListener("click", (e) => {
+      const toggleSelect = (e) => {
         e.stopPropagation();
-        if (selectedDocIds.has(doc.id)) {
-          selectedDocIds.delete(doc.id);
-        } else {
+        if (checkbox.checked) {
           selectedDocIds.add(doc.id);
+        } else {
+          selectedDocIds.delete(doc.id);
         }
         lastSelectedDocId = doc.id;
         updateSelectionUI();
+      };
+      checkbox.addEventListener("click", toggleSelect);
+      checkbox.addEventListener("change", toggleSelect);
+    }
+
+    // Gestion de la suppression du cache local
+    const handleDeleteDocCache = async (e) => {
+      e.stopPropagation();
+      if (!window.downloadQueueManager) return;
+      if (confirm(`Supprimer "${doc.title || doc.filename}" du cache local hors-ligne ?`)) {
+        await window.downloadQueueManager.removeDocumentFromCache(doc.id);
+        updateDocCardCacheUI(doc.id);
+        showToast(`Document "${doc.title || doc.filename}" supprimé du cache local`, "info");
+        if (filterOfflineOnly && filterOfflineOnly.checked) {
+          if (currentSearchQuery) performSearch(currentSearchQuery);
+          else loadFoldersAndDocuments();
+        }
+      }
+    };
+
+    // Bouton distinct supprimer du cache (nuage barré)
+    const deleteDocCacheBtn = card.querySelector(".btn-delete-doc-cache");
+    if (deleteDocCacheBtn) {
+      deleteDocCacheBtn.addEventListener("click", handleDeleteDocCache);
+    }
+
+    // Clic bouton cache hors-ligne
+    const cacheBtn = card.querySelector(".doc-cache-btn");
+    if (cacheBtn) {
+      if (window.pdfCacheManager) {
+        window.pdfCacheManager.isComplete(doc.id).then(complete => {
+          if (complete && window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id)) {
+            updateDocCardCacheUI(doc.id);
+          }
+        });
+      }
+
+      cacheBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!window.downloadQueueManager) return;
+        const isCurrentlyCached = window.downloadQueueManager.isDocumentCached(doc.id);
+        if (isCurrentlyCached) {
+          await handleDeleteDocCache(e);
+        } else {
+          cacheBtn.className = "doc-cache-btn downloading";
+          cacheBtn.title = "Téléchargement en cours...";
+          cacheBtn.innerHTML = `<span class="spin-indicator"></span>`;
+          await window.downloadQueueManager.enqueueDocument(doc.id);
+          updateDocCardCacheUI(doc.id);
+          showToast(`Document "${doc.title || doc.filename}" ajouté à la file de téléchargement`, "info");
+        }
       });
     }
 
@@ -2085,6 +2628,7 @@ document.addEventListener("DOMContentLoaded", () => {
         openDocContextMenu(e, doc.id, doc.title);
       });
     }
+
 
     // Support de l'appui long tactile pour sélectionner facilement sur tablette et smartphone
     let touchTimer = null;
@@ -2193,7 +2737,8 @@ document.addEventListener("DOMContentLoaded", () => {
               vEl.setAttribute("data-doc-id", doc.id);
               vEl.setAttribute("data-page", v.page_number);
               vEl.setAttribute("data-occ", v.occ_id);
-              vEl.setAttribute("data-rect", JSON.stringify((v.highlight_rects && v.highlight_rects.length > 0) ? v.highlight_rects[0] : (v.rect || [])));
+              vEl.setAttribute("data-rect", JSON.stringify(v.rect || []));
+              vEl.setAttribute("data-hl-rects", JSON.stringify(v.highlight_rects || (v.rect ? [v.rect] : [])));
               vEl.setAttribute("data-yratio", v.y_ratio || 0);
               vEl.setAttribute("data-snippet", encodeURIComponent(v.text_snippet || ''));
               vEl.title = `Page ${v.page_number} - Cliquer pour ouvrir`;
@@ -2255,15 +2800,42 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
-  // Recherche avec Filtres (Titres & Dossier)
+  // Recherche avec Filtres (Titres & Dossier) et Routage Hors-Ligne
   // =========================================================================
+  async function performSearchRequest(query, isTitlesOnly, isFolderOnly, folderId, limit = 15, offset = 0) {
+    const isOffline = !navigator.onLine || (filterOfflineOnly && filterOfflineOnly.checked);
+    if (isOffline) {
+      if (window.downloadQueueManager) {
+        return await window.downloadQueueManager.sendToWorker('SEARCH', {
+          query,
+          titlesOnly: isTitlesOnly,
+          folderId: isFolderOnly ? folderId : null,
+          limit,
+          offset,
+        });
+      }
+      throw new Error("Moteur de recherche hors-ligne indisponible");
+    }
+
+    let url = `/api/search?q=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}`;
+    if (isTitlesOnly) url += `&titles_only=true`;
+    if (isFolderOnly && folderId !== null) url += `&folder_id=${folderId}`;
+
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+    return await res.json();
+  }
+
   async function performSearch(query) {
+
     if (!query) {
       loadFoldersAndDocuments();
       return;
     }
 
     currentSearchQuery = query;
+    isSearchActive = true;
+    currentLoadedDocs = [];
     savedGeneralResultsScrollTop = 0;
     foldersSection.style.display = "none";
     showGeneralResultsView();
@@ -2290,12 +2862,7 @@ document.addEventListener("DOMContentLoaded", () => {
     resultsContainer.innerHTML = `<div style="padding: 16px; color: var(--text-muted);">Recherche en cours...</div>`;
 
     try {
-      let url = `/api/search?q=${encodeURIComponent(query)}&limit=15&offset=0`;
-      if (isTitlesOnly) url += `&titles_only=true`;
-      if (isFolderOnly) url += `&folder_id=${currentFolderId}`;
-
-      const res = await fetch(url);
-      const data = await res.json();
+      const data = await performSearchRequest(query, isTitlesOnly, isFolderOnly, currentFolderId, 15, 0);
       lastSearchResultsData = data;
 
       // Par défaut, mettre le tri sur "Pertinence" lors d'une nouvelle recherche
@@ -2309,7 +2876,7 @@ document.addEventListener("DOMContentLoaded", () => {
       renderSearchResults(data);
     } catch (err) {
       console.error("Erreur recherche:", err);
-      resultsContainer.innerHTML = `<div style="padding: 16px; color: var(--danger);">Erreur lors de la recherche.</div>`;
+      resultsContainer.innerHTML = `<div style="padding: 16px; color: var(--danger);">Erreur lors de la recherche (${escapeHtml(err.message)}).</div>`;
     }
   }
 
@@ -2326,12 +2893,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const offset = currentLoadedDocs.length;
 
     try {
-      let url = `/api/search?q=${encodeURIComponent(query)}&limit=15&offset=${offset}`;
-      if (isTitlesOnly) url += `&titles_only=true`;
-      if (isFolderOnly) url += `&folder_id=${currentFolderId}`;
-
-      const res = await fetch(url);
-      const data = await res.json();
+      const data = await performSearchRequest(query, isTitlesOnly, isFolderOnly, currentFolderId, 15, offset);
       if (data && data.results && data.results.length > 0) {
         lastSearchResultsData.has_more = data.has_more;
         lastSearchResultsData.results = (lastSearchResultsData.results || []).concat(data.results);
@@ -2464,17 +3026,26 @@ document.addEventListener("DOMContentLoaded", () => {
     syncDocsBtn.disabled = true;
     syncDocsBtn.querySelector("svg").style.animation = "spin 1s linear infinite";
 
+    // Réinitialiser immédiatement la recherche si active pour un retour visuel instantané
+    if (currentSearchQuery || isSearchActive) {
+      searchInput.value = "";
+      clearSearchBtn.style.display = "none";
+      currentSearchQuery = "";
+      isSearchActive = false;
+      lastSearchResultsData = null;
+      loadFoldersAndDocuments();
+    }
+
     try {
       const res = await fetch("/api/sync", { method: "POST" });
       const data = await res.json();
       
       if (data.added > 0) {
         showToast(`${data.added} nouveau(x) document(s) détecté(s) et indexé(s) !`, "success", 4500);
+        loadFoldersAndDocuments();
       } else {
         showToast("Tous les documents PDF sont déjà synchronisés.", "info");
       }
-
-      loadFoldersAndDocuments();
     } catch (err) {
       console.error(err);
       showToast("Erreur lors de la synchronisation des fichiers", "error");
@@ -2603,6 +3174,9 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!res.ok) throw new Error("Erreur de déplacement");
 
       const count = docIds.length;
+      if (window.downloadQueueManager) {
+        await window.downloadQueueManager.syncDocFolders(docIds.map(id => ({ id, folder_id: folderId })));
+      }
       showToast(`${count} document${count > 1 ? 's' : ''} déplacé${count > 1 ? 's' : ''} dans "${folderName}"`, "success");
       clearSelection();
 
@@ -2968,6 +3542,11 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
+    // Indexation locale immédiate dans SQLite-Wasm si connecté et non encore indexé
+    if (window.downloadQueueManager) {
+      window.downloadQueueManager.ensureDocumentIndexedLocally(numericDocId);
+    }
+
     // Support de l'historique de navigation pour le bouton retour mobile
     if (!workspace.classList.contains("split-active")) {
       window.history.pushState({ view: "split" }, "");
@@ -3031,11 +3610,24 @@ document.addEventListener("DOMContentLoaded", () => {
     // pour un parcours séquentiel complet (stepper et tiroir) sans bloquer l'affichage immédiat
     if (currentSearchQuery && (!occurrences || occurrences.length >= 25)) {
       const activeQuery = currentSearchQuery;
-      fetch(`/api/doc-search?doc_id=${numericDocId}&q=${encodeURIComponent(activeQuery)}`)
-        .then(res => {
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          return res.json();
-        })
+      const isDocCached = window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(numericDocId);
+      const isOfflineMode = !navigator.onLine || (filterOfflineOnly && filterOfflineOnly.checked);
+
+      const fetchFullDocOccs = async () => {
+        if (isDocCached || isOfflineMode) {
+          if (window.downloadQueueManager) {
+            return await window.downloadQueueManager.sendToWorker('DOC_SEARCH', {
+              docId: numericDocId,
+              query: activeQuery
+            });
+          }
+        }
+        const res = await fetch(`/api/doc-search?doc_id=${numericDocId}&q=${encodeURIComponent(activeQuery)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+      };
+
+      fetchFullDocOccs()
         .then(data => {
           if (currentActiveDocId !== numericDocId || currentSearchQuery !== activeQuery) return;
           const fullOccs = data.occurrences || [];
@@ -3369,8 +3961,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const card = document.createElement("div");
       const isActive = (index === activeTargetIndex);
       card.className = `vertical-occ-card ${isActive ? 'active' : ''}`;
+      card.setAttribute("data-doc-id", docId);
       card.setAttribute("data-page", occ.page_number);
-      card.setAttribute("data-occ-id", occ.occ_id);
+      card.setAttribute("data-occ-id", occ.occ_id || '');
+      card.setAttribute("data-rect", JSON.stringify(occ.rect || []));
+      card.setAttribute("data-hl-rects", JSON.stringify(occ.highlight_rects || (occ.rect ? [occ.rect] : [])));
 
       card.innerHTML = `
         <div class="vertical-occ-img-wrapper">
@@ -3789,7 +4384,268 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // =========================================================================
+  // Intégration PWA & Mode Hors-Ligne Résilient
+  // =========================================================================
+  const downloadDrawer = document.getElementById("downloadDrawer");
+  const downloadDrawerSummary = document.getElementById("downloadDrawerSummary");
+  const downloadDrawerBody = document.getElementById("downloadDrawerBody");
+  const downloadDrawerList = document.getElementById("downloadDrawerList");
+  const drawerPauseBtn = document.getElementById("drawerPauseBtn");
+  const drawerPauseIcon = document.getElementById("drawerPauseIcon");
+  const drawerToggleBtn = document.getElementById("drawerToggleBtn");
+  const drawerToggleIcon = document.getElementById("drawerToggleIcon");
+  const downloadDrawerHeader = document.getElementById("downloadDrawerHeader");
+
+  let isDrawerCollapsed = false;
+
+  if (drawerToggleBtn && downloadDrawerBody) {
+    drawerToggleBtn.addEventListener("click", () => {
+      isDrawerCollapsed = !isDrawerCollapsed;
+      downloadDrawerBody.style.display = isDrawerCollapsed ? "none" : "block";
+      if (drawerToggleIcon) {
+        drawerToggleIcon.style.transform = isDrawerCollapsed ? "rotate(180deg)" : "rotate(0deg)";
+      }
+    });
+  }
+
+  if (drawerPauseBtn) {
+    drawerPauseBtn.addEventListener("click", () => {
+      if (window.downloadQueueManager) {
+        if (window.downloadQueueManager.isPaused) {
+          window.downloadQueueManager.resume();
+        } else {
+          window.downloadQueueManager.pause();
+        }
+      }
+    });
+  }
+
+  if (window.downloadQueueManager) {
+    window.downloadQueueManager.onUpdate((state) => {
+      if (!downloadDrawer) return;
+
+      const totalActiveOrQueued = state.queueCount + state.activeCount;
+      if (totalActiveOrQueued === 0) {
+        downloadDrawer.style.display = "none";
+        return;
+      }
+
+      downloadDrawer.style.display = "block";
+      if (downloadDrawerSummary) {
+        downloadDrawerSummary.textContent = `${state.activeCount} actif(s), ${state.queueCount} en attente`;
+      }
+
+      if (drawerPauseIcon) {
+        drawerPauseIcon.innerHTML = state.isPaused
+          ? `<polygon points="5 3 19 12 5 21 5 3"></polygon>`
+          : `<rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect>`;
+      }
+
+      if (downloadDrawerList) {
+        downloadDrawerList.innerHTML = "";
+        for (const task of state.activeTasks) {
+          const item = document.createElement("div");
+          item.className = "download-drawer-item";
+          item.innerHTML = `
+            <div class="download-item-title">Doc #${task.docId}</div>
+            <div class="download-item-progress">
+              <div class="download-item-bar" style="width: ${task.progress || 0}%;"></div>
+            </div>
+            <div class="download-item-pct">${task.progress || 0}%</div>
+          `;
+          downloadDrawerList.appendChild(item);
+        }
+      }
+    });
+  }
+
+  function updateNetworkStatusUI() {
+    const isOnline = navigator.onLine;
+    if (offlineNoticeBanner) {
+      offlineNoticeBanner.style.display = isOnline ? "none" : "flex";
+    }
+    if (!isOnline && filterOfflineOnly) {
+      filterOfflineOnly.checked = true;
+      if (filterOfflineChip) filterOfflineChip.classList.add("active");
+    }
+  }
+
+  window.addEventListener("online", () => {
+    updateNetworkStatusUI();
+    showToast("Connexion rétablie — synchronisation avec le serveur", "success");
+    if (window.downloadQueueManager) {
+      window.downloadQueueManager.checkSync();
+    }
+  });
+
+  window.addEventListener("offline", () => {
+    updateNetworkStatusUI();
+    showToast("Connexion perdue — passage automatique en mode hors-ligne", "warning");
+  });
+
+  updateNetworkStatusUI();
+
+  // Enregistrement du Service Worker & Persistance du stockage
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js")
+      .then((reg) => console.log("[ServiceWorker] Enregistré avec succès:", reg.scope))
+      .catch((err) => console.warn("[ServiceWorker] Échec enregistrement:", err));
+  }
+
+  if (navigator.storage && navigator.storage.persist) {
+    navigator.storage.persist().then((persistent) => {
+      console.log("[Storage] Persistance du stockage accordée :", persistent);
+    });
+  }
+
+  window.performSearch = performSearch;
+
+  function updateDocCardCacheUI(docId) {
+    const id = Number(docId);
+    if (!id) return;
+    const cards = document.querySelectorAll(`.doc-card[data-doc-id="${id}"], .doc-card[data-id="${id}"]`);
+    cards.forEach(card => {
+      const btn = card.querySelector(".doc-cache-btn");
+      const deleteBtn = card.querySelector(".btn-delete-doc-cache");
+      if (!btn) return;
+      const isTaskActive = window.downloadQueueManager && window.downloadQueueManager.activeTasks.has(id);
+      const isTaskQueued = window.downloadQueueManager && window.downloadQueueManager.queue.includes(id);
+      const isCached = window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(id);
+
+      if (isTaskActive) {
+        const task = window.downloadQueueManager.activeTasks.get(id);
+        const progress = task ? (task.progress || 0) : 0;
+        btn.className = "doc-cache-btn downloading";
+        btn.title = `Téléchargement en cours (${progress}%)...`;
+        btn.innerHTML = `
+          <span class="spin-indicator"></span>
+          <span class="cache-btn-text">${progress > 0 ? progress + '%' : ''}</span>
+        `;
+        if (deleteBtn) deleteBtn.style.display = "none";
+      } else if (isTaskQueued) {
+        btn.className = "doc-cache-btn downloading";
+        btn.title = "En file d'attente de téléchargement...";
+        btn.innerHTML = `
+          <span class="spin-indicator"></span>
+          <span class="cache-btn-text">Attente</span>
+        `;
+        if (deleteBtn) deleteBtn.style.display = "none";
+      } else if (isCached) {
+        btn.className = "doc-cache-btn cached";
+        btn.title = "Disponible hors-ligne";
+        btn.innerHTML = `
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+        `;
+        if (deleteBtn) deleteBtn.style.display = "";
+      } else {
+        btn.className = "doc-cache-btn";
+        btn.title = "Télécharger pour consultation hors-ligne";
+        btn.innerHTML = `
+          <svg class="cache-icon-cloud" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+        `;
+        if (deleteBtn) deleteBtn.style.display = "none";
+      }
+    });
+  }
+
+  function updateFolderCardCacheUI(folderEl) {
+    if (!folderEl || !window.downloadQueueManager) return;
+    const folderId = Number(folderEl.getAttribute("data-folder-id"));
+    const totalDocs = Number(folderEl.getAttribute("data-doc-count") || 0);
+    if (!folderId) return;
+
+    const cachedCount = window.downloadQueueManager.getCachedDocsCountForFolder(folderId);
+    const isComplete = totalDocs > 0 && cachedCount >= totalDocs;
+    const isPartial = cachedCount > 0 && (!totalDocs || cachedCount < totalDocs);
+
+    let badge = folderEl.querySelector(".folder-cache-badge");
+    if (isComplete) {
+      if (!badge) {
+        badge = document.createElement("span");
+        const metaEl = folderEl.querySelector(".folder-meta");
+        if (metaEl) metaEl.appendChild(badge);
+      }
+      badge.className = "folder-cache-badge complete";
+      badge.style.display = "inline-flex";
+      badge.title = `Tous les documents (${totalDocs}) sont disponibles hors-ligne`;
+      badge.textContent = "✓";
+    } else if (isPartial) {
+      if (!badge) {
+        badge = document.createElement("span");
+        const metaEl = folderEl.querySelector(".folder-meta");
+        if (metaEl) metaEl.appendChild(badge);
+      }
+      badge.className = "folder-cache-badge partial";
+      badge.style.display = "inline-flex";
+      badge.title = `${cachedCount}${totalDocs ? '/' + totalDocs : ''} document(s) disponible(s) hors-ligne`;
+      badge.textContent = `✓ ${cachedCount}${totalDocs ? '/' + totalDocs : ''}`;
+    } else if (badge) {
+      badge.style.display = "none";
+    }
+
+    const actionBtn = folderEl.querySelector(".folder-btn-action.btn-download-folder, .folder-btn-action.btn-delete-folder-cache");
+    if (actionBtn) {
+      if (isComplete) {
+        actionBtn.className = "folder-btn-action btn-delete-folder-cache";
+        actionBtn.title = "Supprimer tous les documents de ce dossier du cache local";
+        actionBtn.innerHTML = `
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
+            <line x1="2" y1="2" x2="22" y2="22"></line>
+          </svg>
+        `;
+      } else {
+        actionBtn.className = "folder-btn-action btn-download-folder";
+        actionBtn.title = isPartial ? "Télécharger les documents manquants de ce dossier" : "Télécharger tous les documents de ce dossier pour consultation hors-ligne";
+        actionBtn.innerHTML = `
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+        `;
+      }
+    }
+  }
+
+  if (window.downloadQueueManager) {
+    window.downloadQueueManager.onUpdate((state) => {
+      document.querySelectorAll(".doc-card[data-doc-id], .doc-card[data-id]").forEach(card => {
+        const id = Number(card.getAttribute("data-doc-id") || card.getAttribute("data-id"));
+        if (id) updateDocCardCacheUI(id);
+      });
+      document.querySelectorAll(".folder-card[data-folder-id]").forEach(folderEl => {
+        updateFolderCardCacheUI(folderEl);
+      });
+      if (filterOfflineOnly && filterOfflineOnly.checked) {
+        document.querySelectorAll(".doc-card[data-doc-id], .doc-card[data-id]").forEach(card => {
+          const id = Number(card.getAttribute("data-doc-id") || card.getAttribute("data-id"));
+          if (id) {
+            card.style.display = window.downloadQueueManager.isDocumentCached(id) ? "" : "none";
+          }
+        });
+        document.querySelectorAll(".folder-card[data-folder-id]").forEach(folderEl => {
+          const folderId = Number(folderEl.getAttribute("data-folder-id"));
+          if (folderId) {
+            const count = window.downloadQueueManager.getCachedDocsCountForFolder(folderId);
+            folderEl.style.display = count > 0 ? "" : "none";
+          }
+        });
+        const visibleFolderCards = Array.from(document.querySelectorAll(".folder-card")).filter(el => el.style.display !== "none");
+        foldersSection.style.display = visibleFolderCards.length > 0 ? "block" : "none";
+      }
+    });
+  }
+
   // Initialisation au chargement de l'application
   loadAppVersion();
   startPipelinePolling();
 });
+

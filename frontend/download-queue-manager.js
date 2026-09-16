@@ -1,0 +1,589 @@
+/**
+ * DocSeeker - DownloadQueueManager
+ * 
+ * Gestionnaire unifié de la file d'attente de téléchargement et de synchronisation résiliente :
+ * - Télécharge le bundle d'index et l'insère dans SQLite-Wasm (via offlineSearchWorker).
+ * - Met en cache la couverture dans CacheStorage ('docseeker_covers').
+ * - Déclenche le téléchargement intégral des fragments PDF par chargement headless de pdf.mjs.
+ * - Limite la concurrence à 2 transferts simultanés avec pause, reprise et annulation.
+ */
+
+class DownloadQueueManager {
+  constructor() {
+    this.queue = []; // Array of docIds in queue
+    this.activeTasks = new Map(); // docId -> { docId, status, progress, controller, pdfTask }
+    this.cachedDocIds = new Set(); // Set of docIds indexed locally in SQLite-Wasm
+    this.maxConcurrent = 2;
+    this.isPaused = false;
+    this.listeners = new Set();
+    this.worker = null;
+    this._workerReqId = 0;
+    this._workerCallbacks = new Map();
+
+    this._initWorker();
+  }
+
+  _initWorker() {
+    if (typeof Worker !== 'undefined') {
+      this.worker = new Worker('/offline-search-worker.js?v=8.0', { type: 'module' });
+      this.worker.onmessage = (e) => {
+        const { id, success, data, error } = e.data;
+        if (this._workerCallbacks.has(id)) {
+          const { resolve, reject } = this._workerCallbacks.get(id);
+          this._workerCallbacks.delete(id);
+          if (success) resolve(data);
+          else reject(new Error(error));
+        }
+      };
+
+      // Initialiser immédiatement la liste des documents et dossiers indexés dans SQLite-Wasm
+      this._initPromise = Promise.all([
+        this.getAllCachedDocs().catch(() => []),
+        this.getAllCachedFolders().catch(() => [])
+      ]).then(() => {
+        this._notify();
+      }).catch(err => console.warn('[DownloadQueueManager] Initialisation cached docs/folders:', err));
+    }
+  }
+
+  async ensureInitialized() {
+    if (this._initPromise) {
+      await this._initPromise;
+    }
+  }
+
+  sendToWorker(type, payload) {
+    if (!this.worker) return Promise.reject(new Error("Worker non initialisé"));
+    const id = ++this._workerReqId;
+    return new Promise((resolve, reject) => {
+      this._workerCallbacks.set(id, { resolve, reject });
+      this.worker.postMessage({ id, type, payload });
+    });
+  }
+
+  isDocumentCached(docId) {
+    return this.cachedDocIds.has(Number(docId));
+  }
+
+  async syncFolders(folders) {
+    if (Array.isArray(folders)) {
+      this._allFolders = folders;
+      await this.sendToWorker('SYNC_FOLDERS', { folders }).catch(() => {});
+    }
+  }
+
+  async syncDocFolders(docs) {
+    if (!Array.isArray(docs) || docs.length === 0) return;
+    await this.sendToWorker('UPDATE_DOC_FOLDERS', {
+      docs: docs.map(d => ({
+        id: Number(d.id),
+        folder_id: d.folder_id !== null && d.folder_id !== undefined ? Number(d.folder_id) : null
+      }))
+    }).catch(() => {});
+    const allDocs = await this.getAllCachedDocs().catch(() => []);
+    if (Array.isArray(allDocs)) {
+      this._cachedDocsList = allDocs;
+    }
+    this._notify();
+  }
+
+  async getAllCachedFolders() {
+    const folders = await this.sendToWorker('GET_ALL_CACHED_FOLDERS', {}).catch(() => []);
+    if (Array.isArray(folders)) {
+      this._allFolders = folders;
+    }
+    return folders;
+  }
+
+  getCachedDocsCountForFolder(folderId) {
+    if (!Array.isArray(this._cachedDocsList)) return 0;
+    const fid = Number(folderId);
+    if (!fid) return 0;
+
+    // Construire récursivement la liste de ce dossier et de tous ses sous-dossiers
+    const targetFolderIds = new Set([fid]);
+    if (Array.isArray(this._allFolders)) {
+      const addDescendants = (parentId) => {
+        for (const f of this._allFolders) {
+          if (Number(f.parent_id) === Number(parentId) && !targetFolderIds.has(Number(f.id))) {
+            targetFolderIds.add(Number(f.id));
+            addDescendants(Number(f.id));
+          }
+        }
+      };
+      addDescendants(fid);
+    }
+
+    return this._cachedDocsList.filter(d => d.folder_id !== null && d.folder_id !== undefined && targetFolderIds.has(Number(d.folder_id))).length;
+  }
+
+  async isDocumentFullyCached(docId) {
+    const id = Number(docId);
+    if (!this.cachedDocIds.has(id)) return false;
+    if (window.pdfCacheManager) {
+      return await window.pdfCacheManager.isComplete(id);
+    }
+    return true;
+  }
+
+  async ensureDocumentIndexedLocally(docId) {
+    const id = Number(docId);
+    if (!id || this.cachedDocIds.has(id)) return;
+    try {
+      const bundleRes = await fetch(`/api/documents/${id}/offline-bundle`);
+      if (bundleRes.ok) {
+        const bundle = await bundleRes.json();
+        await this.sendToWorker('INSERT_BUNDLE', { bundle });
+        this.cachedDocIds.add(id);
+        const allDocs = await this.getAllCachedDocs().catch(() => []);
+        if (Array.isArray(allDocs)) {
+          this._cachedDocsList = allDocs;
+        }
+        this._notify();
+        console.log(`[DownloadQueueManager] Document ${id} indexé localement avec succès.`);
+      }
+    } catch (e) {
+      console.warn(`[DownloadQueueManager] Erreur ensureDocumentIndexedLocally(${id}):`, e);
+    }
+  }
+
+  async getAllCachedDocs() {
+    const docs = await this.sendToWorker('GET_ALL_CACHED_DOCS', {});
+    if (Array.isArray(docs)) {
+      this._cachedDocsList = docs;
+      this.cachedDocIds = new Set(docs.map(d => Number(d.id)));
+    }
+    return docs;
+  }
+
+  async removeDocumentFromCache(docId) {
+    const id = Number(docId);
+    if (!id) return;
+    await this.cancelDownload(id);
+    await this.sendToWorker('DELETE_DOCUMENT', { docId: id }).catch(() => {});
+    this.cachedDocIds.delete(id);
+    if (Array.isArray(this._cachedDocsList)) {
+      this._cachedDocsList = this._cachedDocsList.filter(d => Number(d.id) !== id);
+    }
+    if (window.pdfCacheManager) {
+      await window.pdfCacheManager.invalidate(id).catch(() => {});
+    }
+    if (typeof caches !== 'undefined') {
+      try {
+        const coverCache = await caches.open('docseeker_covers');
+        await coverCache.delete(`/api/cover/${id}`);
+        const cropCache = await caches.open('docseeker_offline_crops');
+        const keys = await cropCache.keys();
+        for (const req of keys) {
+          if (req.url.includes(`/api/crop/${id}/`)) {
+            await cropCache.delete(req);
+          }
+        }
+      } catch (e) {}
+    }
+    this._notify();
+    console.log(`[DownloadQueueManager] Document ${id} supprimé du cache local`);
+  }
+
+  async removeFolderFromCache(folderId) {
+    try {
+      const foldersRes = await fetch('/api/folders').catch(() => null);
+      let allFolders = [];
+      if (foldersRes && foldersRes.ok) {
+        const json = await foldersRes.json();
+        allFolders = json.folders || [];
+      }
+      const targetFolderIds = new Set();
+      const findChildren = (fid) => {
+        targetFolderIds.add(fid);
+        for (const f of allFolders) {
+          if (f.parent_id === fid) findChildren(f.id);
+        }
+      };
+      findChildren(Number(folderId));
+
+      const docsRes = await fetch('/api/documents').catch(() => null);
+      let docs = [];
+      if (docsRes && docsRes.ok) {
+        const json = await docsRes.json();
+        docs = json.documents || [];
+      } else {
+        docs = await this.getAllCachedDocs().catch(() => []);
+      }
+      const matchingDocs = docs.filter(d => targetFolderIds.has(d.folder_id));
+      for (const doc of matchingDocs) {
+        await this.removeDocumentFromCache(doc.id);
+      }
+    } catch (err) {
+      console.error(`[DownloadQueueManager] Erreur purge du dossier ${folderId}:`, err);
+    }
+  }
+
+  onUpdate(callback) {
+    this.listeners.add(callback);
+    this._notify();
+    return () => this.listeners.delete(callback);
+  }
+
+  addListener(callback) {
+    return this.onUpdate(callback);
+  }
+
+  _notify() {
+    const state = {
+      queueCount: this.queue.length,
+      activeCount: this.activeTasks.size,
+      activeTasks: Array.from(this.activeTasks.values()),
+      isPaused: this.isPaused,
+      cachedDocIds: Array.from(this.cachedDocIds),
+    };
+    for (const cb of this.listeners) {
+      try {
+        cb(state);
+      } catch (e) {
+        console.error('[DownloadQueueManager] Erreur listener:', e);
+      }
+    }
+  }
+
+  /**
+   * Enfile un document pour mise en cache complète
+   */
+  async enqueueDocument(docId) {
+    const id = Number(docId);
+    if (!id || this.queue.includes(id) || this.activeTasks.has(id)) {
+      return;
+    }
+
+    // Vérifier si le document est déjà 100% complet (PDF + SQLite-Wasm index)
+    const isBundleIndexed = this.cachedDocIds.has(id);
+    let isPdfComplete = false;
+    if (window.pdfCacheManager) {
+      isPdfComplete = await window.pdfCacheManager.isComplete(id);
+    }
+
+    if (isBundleIndexed && isPdfComplete) {
+      console.log(`[DownloadQueueManager] Document ${id} déjà présent à 100% dans le cache`);
+      this._notify();
+      return;
+    }
+
+    this.queue.push(id);
+    this._notify();
+    this._processNext();
+  }
+
+  /**
+   * Enfile récursivement tous les documents d'un dossier et de ses sous-dossiers
+   */
+  async enqueueFolder(folderId) {
+    try {
+      console.log(`[DownloadQueueManager] Résolution récursive du dossier ${folderId}...`);
+      
+      // 1. Récupérer l'arborescence des dossiers
+      const foldersRes = await fetch('/api/folders').catch(() => null);
+      let allFolders = [];
+      if (foldersRes && foldersRes.ok) {
+        const json = await foldersRes.json();
+        allFolders = json.folders || [];
+        // Mettre à jour la table des dossiers dans le worker
+        this.sendToWorker('SYNC_FOLDERS', { folders: allFolders }).catch(() => {});
+      }
+
+      // Construction des sous-dossiers récursifs
+      const targetFolderIds = new Set();
+      const findChildren = (fid) => {
+        targetFolderIds.add(fid);
+        for (const f of allFolders) {
+          if (f.parent_id === fid) {
+            findChildren(f.id);
+          }
+        }
+      };
+      findChildren(Number(folderId));
+
+      // 2. Récupérer tous les documents rattachés
+      const docsRes = await fetch('/api/documents').catch(() => null);
+      if (docsRes && docsRes.ok) {
+        const docsJson = await docsRes.json();
+        const docs = docsJson.documents || [];
+        await this.syncDocFolders(docs);
+        const matchingDocs = docs.filter(d => targetFolderIds.has(d.folder_id));
+
+        console.log(`[DownloadQueueManager] ${matchingDocs.length} documents trouvés dans l'arborescence du dossier ${folderId}`);
+        for (const doc of matchingDocs) {
+          await this.enqueueDocument(doc.id);
+        }
+      }
+    } catch (err) {
+      console.error(`[DownloadQueueManager] Erreur mise en cache du dossier ${folderId}:`, err);
+    }
+  }
+
+  /**
+   * Pause globale ou individuelle
+   */
+  pauseDownload(docId) {
+    if (docId) {
+      const task = this.activeTasks.get(Number(docId));
+      if (task) {
+        task.status = 'paused';
+        if (task.pdfTask) {
+          try { task.pdfTask.destroy(); } catch (e) {}
+        }
+        this.activeTasks.delete(Number(docId));
+        this.queue.unshift(Number(docId)); // Remettre en tête de file
+        this._notify();
+      }
+    } else {
+      this.isPaused = true;
+      this._notify();
+    }
+  }
+
+  /**
+   * Reprise du téléchargement
+   */
+  resumeDownload(docId) {
+    if (docId) {
+      this.enqueueDocument(Number(docId));
+    } else {
+      this.isPaused = false;
+      this._notify();
+      this._processNext();
+    }
+  }
+
+  /**
+   * Annulation et suppression d'un téléchargement en cours
+   */
+  async cancelDownload(docId) {
+    const id = Number(docId);
+    this.queue = this.queue.filter(qId => qId !== id);
+
+    const task = this.activeTasks.get(id);
+    if (task) {
+      if (task.pdfTask) {
+        try { task.pdfTask.destroy(); } catch (e) {}
+      }
+      this.activeTasks.delete(id);
+    }
+
+    if (window.pdfCacheManager) {
+      await window.pdfCacheManager.invalidate(id);
+    }
+
+    this._notify();
+    this._processNext();
+  }
+
+  /**
+   * Dépilement et exécution séquentielle concurrente
+   */
+  async _processNext() {
+    if (this.isPaused || this.activeTasks.size >= this.maxConcurrent || this.queue.length === 0) {
+      return;
+    }
+
+    const docId = this.queue.shift();
+    if (!docId) return;
+
+    const task = {
+      docId,
+      status: 'downloading',
+      progress: 0,
+      downloadedBytes: 0,
+      totalBytes: 0,
+      pdfTask: null,
+    };
+    this.activeTasks.set(docId, task);
+    this._notify();
+
+    // Écoute de progression depuis pdfCacheManager
+    const unbindProgress = window.pdfCacheManager ? window.pdfCacheManager.onProgress(docId, (info) => {
+      task.progress = info.progress || 0;
+      task.downloadedBytes = info.downloadedBytes || 0;
+      task.totalBytes = info.totalBytes || 0;
+      if (info.status === 'complete') {
+        task.status = 'complete';
+      }
+      this._notify();
+    }) : null;
+
+    try {
+      // S'assurer que les dossiers sont synchronisés dans le worker
+      if (Array.isArray(this._allFolders) && this._allFolders.length > 0) {
+        await this.sendToWorker('SYNC_FOLDERS', { folders: this._allFolders }).catch(() => {});
+      } else {
+        const foldersRes = await fetch('/api/folders').catch(() => null);
+        if (foldersRes && foldersRes.ok) {
+          const fJson = await foldersRes.json();
+          if (Array.isArray(fJson.folders)) {
+            this._allFolders = fJson.folders;
+            await this.sendToWorker('SYNC_FOLDERS', { folders: this._allFolders }).catch(() => {});
+          }
+        }
+      }
+
+      // 1. Télécharger le offline-bundle (Index textuel et spatial) et l'injecter dans SQLite-Wasm
+      const bundleRes = await fetch(`/api/documents/${docId}/offline-bundle`);
+      if (bundleRes.ok) {
+        const bundle = await bundleRes.json();
+        await this.sendToWorker('INSERT_BUNDLE', { bundle });
+        this.cachedDocIds.add(docId);
+        // Rafraîchir la liste complète des documents locaux en cache
+        const allDocs = await this.getAllCachedDocs().catch(() => []);
+        if (Array.isArray(allDocs)) {
+          this._cachedDocsList = allDocs;
+        }
+        this._notify();
+      }
+
+      // 2. Mettre en cache l'image de couverture dans CacheStorage
+      if (typeof caches !== 'undefined') {
+        const coverRes = await fetch(`/api/cover/${docId}`).catch(() => null);
+        if (coverRes && coverRes.ok) {
+          const cache = await caches.open('docseeker_covers');
+          await cache.put(`/api/cover/${docId}`, coverRes);
+        }
+      }
+
+      // 3. Déclencher le téléchargement binaire complet et stockage dans IndexedDB
+      const pdfRes = await fetch(`/api/pdf/${docId}`);
+      if (pdfRes.ok) {
+        const contentLength = Number(pdfRes.headers.get('content-length')) || 0;
+        let arrayBuffer;
+        
+        if (pdfRes.body && contentLength > 0) {
+          const reader = pdfRes.body.getReader();
+          const chunks = [];
+          let receivedBytes = 0;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            receivedBytes += value.length;
+            task.downloadedBytes = receivedBytes;
+            task.totalBytes = contentLength;
+            task.progress = Math.min(95, Math.round((receivedBytes / contentLength) * 90));
+            this._notify();
+          }
+          const allChunks = new Uint8Array(receivedBytes);
+          let position = 0;
+          for (const chunk of chunks) {
+            allChunks.set(chunk, position);
+            position += chunk.length;
+          }
+          arrayBuffer = allChunks.buffer;
+        } else {
+          arrayBuffer = await pdfRes.arrayBuffer();
+        }
+
+        const actualTotal = arrayBuffer.byteLength;
+        const CHUNK_SIZE = 256 * 1024;
+        const normUrl = `/api/pdf/${docId}`;
+        
+        if (window.pdfCacheManager) {
+          const db = await window.pdfCacheManager.init();
+          if (db) {
+            const tx = db.transaction(['chunks', 'meta'], 'readwrite');
+            const chunkStore = tx.objectStore('chunks');
+            const metaStore = tx.objectStore('meta');
+
+            for (let begin = 0; begin < actualTotal; begin += CHUNK_SIZE) {
+              const end = Math.min(begin + CHUNK_SIZE, actualTotal);
+              const chunkData = arrayBuffer.slice(begin, end);
+              chunkStore.put(chunkData, `${normUrl}#${begin}_${end}`);
+            }
+
+            metaStore.put({
+              url: normUrl,
+              totalBytes: actualTotal,
+              downloadedBytes: actualTotal,
+              completed: true,
+              updatedAt: Date.now()
+            }, normUrl);
+
+            await new Promise(resolve => {
+              tx.oncomplete = resolve;
+              tx.onerror = resolve;
+            });
+
+            await window.pdfCacheManager.markComplete(docId, actualTotal);
+          }
+        }
+      }
+
+      task.status = 'complete';
+      task.progress = 100;
+    } catch (err) {
+      console.warn(`[DownloadQueueManager] Erreur ou interruption pour le doc ${docId}:`, err);
+      task.status = 'error';
+    } finally {
+      this.activeTasks.delete(docId);
+      this._notify();
+      // Enchaîner sur les documents suivants
+      setTimeout(() => this._processNext(), 100);
+    }
+  }
+
+  /**
+   * Vérification de synchronisation (Last-Write-Wins)
+   */
+  async checkSync() {
+    if (!navigator.onLine) return;
+
+    try {
+      console.log('[DownloadQueueManager] Vérification de synchronisation avec le serveur...');
+      
+      // 1. Récupérer la liste des documents locaux depuis SQLite-Wasm
+      const cachedDocs = await this.sendToWorker('GET_CACHED_DOCS', {});
+      if (!cachedDocs || cachedDocs.length === 0) return;
+
+      // 2. Interroger POST /api/sync/check
+      const res = await fetch('/api/sync/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cached_documents: cachedDocs })
+      });
+
+      if (!res.ok) return;
+      const data = await res.json();
+      const { outdated_ids, deleted_ids } = data;
+
+      // 3. Traiter les suppressions distantes
+      if (Array.isArray(deleted_ids)) {
+        for (const id of deleted_ids) {
+          console.log(`[DownloadQueueManager] Document ${id} supprimé sur le serveur, purge locale.`);
+          await this.sendToWorker('DELETE_DOCUMENT', { docId: id });
+          if (window.pdfCacheManager) {
+            await window.pdfCacheManager.invalidate(id);
+          }
+        }
+      }
+
+      // 4. Traiter les documents obsolètes (invalidation + réenfilement)
+      if (Array.isArray(outdated_ids)) {
+        for (const id of outdated_ids) {
+          console.log(`[DownloadQueueManager] Document ${id} modifié sur le serveur, re-téléchargement propre.`);
+          if (window.pdfCacheManager) {
+            await window.pdfCacheManager.invalidate(id);
+          }
+          await this.enqueueDocument(id);
+        }
+      }
+    } catch (err) {
+      console.warn('[DownloadQueueManager] Erreur synchronisation sync/check:', err);
+    }
+  }
+}
+
+// Instance globale unique
+if (typeof window !== 'undefined') {
+  window.downloadQueueManager = new DownloadQueueManager();
+
+  // Déclencher une vérification de synchronisation dès reconnexion
+  window.addEventListener('online', () => {
+    window.downloadQueueManager.checkSync();
+  });
+}

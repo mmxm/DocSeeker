@@ -34,6 +34,7 @@ pub fn create_api_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         // Documents
         .route("/documents", get(documents::list_documents))
         .route("/documents/:id/status", get(documents::get_document_status))
+        .route("/documents/:id/offline-bundle", get(documents::get_offline_bundle))
         .route("/documents/:id", patch(documents::update_document).delete(documents::delete_document_handler))
         .route("/documents/:id/move", patch(documents::move_document))
         .route("/documents/batch-move", post(documents::batch_move_documents))
@@ -41,6 +42,7 @@ pub fn create_api_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/check-hash/:file_hash", get(documents::check_hash))
         .route("/upload", post(documents::upload_document))
         .route("/sync", post(documents::sync_documents_handler))
+        .route("/sync/check", post(documents::sync_check_handler))
         // Pipeline
         .route("/pipeline/status", get(documents::get_pipeline_status))
         .route("/pipeline/retry-failed", post(documents::retry_failed_pipeline))

@@ -21,8 +21,9 @@ L'objectif de cette extension est d'offrir une **disponibilité hors-ligne inté
 - **Mise en cache par dossier :**
   - L'action sur un dossier est **récursive** : elle met en cache tous les documents contenus dans le dossier ainsi que ses sous-dossiers.
   - Tout document ajouté ultérieurement dans ce dossier sur le serveur sera automatiquement récupéré lors de la reconnexion.
-- **Cache automatique à la lecture :**
-  - L'ouverture et la consultation d'un PDF en ligne continue d'alimenter automatiquement le cache local au fil de l'eau (déjà opéré par fragments de 256 Ko).
+- **Cache unifié & délégation stricte à `pdf.mjs` :**
+  - L'ouverture et la consultation d'un PDF en ligne continue d'alimenter automatiquement le cache local au fil de l'eau.
+  - La mise en cache explicite en tâche de fond (sans ouvrir le visualiseur) délègue également son flux réseau au moteur natif `pdf.mjs` via chargement headless, garantissant zéro duplication de code de transfert de fragments et une cohérence absolue d'IndexedDB (`docseeker_pdf_chunks_v2`).
 
 ### 2.2. Tiroir de Téléchargement & Résilience (Download Drawer)
 - Un volet rétractable discret en bas d'écran affiche la file d'attente active des téléchargements.
@@ -41,13 +42,15 @@ L'objectif de cette extension est d'offrir une **disponibilité hors-ligne inté
   - Dès rétablissement de la connexion, le badge s'estompe et la case redevient librement décochable.
 
 ### 2.4. Authentification & Sécurité Hors-Ligne
-- **Zéro friction hors-ligne :** Aucune invite de connexion ou de mot de passe n'est exigée en mode hors-ligne pour accéder aux documents déjà stockés localement sur l'appareil.
+- **Session locale persistante :** L'état d'authentification est conservé localement via un token sécurisé doté d'un horodatage d'expiration.
+- **Zéro friction hors-ligne :** Tant que le token local est valide, aucune invite de connexion ou de mot de passe n'est exigée en mode hors-ligne pour consulter les documents et exécuter des recherches sur les données en cache.
 
-### 2.5. Politique de Synchronisation (Last-Write-Wins)
+### 2.5. Politique de Synchronisation (Last-Write-Wins & Intégrité PDF)
 - **Synchronisation automatique ciblée :**
-  - Dès qu'une connexion réseau est active, l'application vérifie en tâche de fond l'horodatage `updated_at` et le hash `file_hash` des documents enregistrés localement.
-  - Si une version plus récente existe sur le serveur, les fragments modifiés et l'index local sont mis à jour silencieusement.
-  - Si un document a été supprimé sur le serveur, il est retiré du cache local.
+  - Dès qu'une connexion réseau est active, l'application vérifie en tâche de fond l'horodatage `updated_at` et le hash `file_hash` des documents enregistrés localement via `POST /api/sync/check`.
+  - **Remplacement de binaire :** Un document PDF ne pouvant pas être patché par fragments (en raison des décalages d'adresses internes xref), toute modification du `file_hash` sur le serveur invalide intégralement les fragments locaux du document et relance son téléchargement propre.
+  - **Renommages & Métadonnées :** Les changements de titre, de nom de fichier ou de dossier parent sont mis à jour directement dans la base locale SQLite.
+  - **Suppressions distantes :** Tout document supprimé sur le serveur distant est retiré de la base SQLite locale et ses fragments sont purgés d'IndexedDB.
   - Aucun téléchargement massif imprévu de documents tiers n'est déclenché sans accord utilisateur.
 
 ---
@@ -57,19 +60,24 @@ L'objectif de cette extension est d'offrir une **disponibilité hors-ligne inté
 ### 3.1. Volumétrie & Quotas de Stockage
 - **Base de référence :** ~70 à 100 documents, ~18 000 pages, poids moyen de 125 Mo par fichier (avec des fichiers individuels atteignant jusqu'à **500 Mo**).
 - **Garantie de non-éviction :** L'application doit solliciter l'autorisation de persistance via `navigator.storage.persist()`.
-- **Efficacité I/O :** Utilisation conjointe d'IndexedDB pour les blocs binaires (256 Ko) et de l'**Origin Private File System (OPFS)** pour la base de données locale, assurant des débits optimaux sur mobiles et tablettes sans saturer la mémoire vive (RAM).
+- **Efficacité I/O :** Utilisation conjointe d'IndexedDB pour les blocs binaires (256 Ko) et de SQLite-Wasm (OPFS / IndexedDB VFS) pour la base de données locale, assurant des débits optimaux sur mobiles et tablettes sans saturer la mémoire vive (RAM).
 
 ### 3.2. Parité Rigoureuse de l'Index de Recherche
 - Le paquet d'index de recherche exploité hors-ligne doit être **strictement identique** à celui du serveur Rust :
   - Même tokenizer et normalisation (suppression des diacritiques/accents Unicode, insensibilité casse).
   - Mêmes scores de pertinence BM25 multi-termes.
   - Mêmes coordonnées spatiales de bounding boxes (`words_json` avec `x0, y0, x1, y1`, `block_no`, `line_no`).
+  - Même algorithme spatial de regroupement d'occurrences via le module Rust partagé en Wasm (`find_occurrences_on_page`).
 
 ### 3.3. Détection Réseau Sans Ping Périodique
 - Interdiction stricte des boucles de ping régulier (`setInterval(fetch(...), 3000)` proscrit pour préserver batterie et données mobiles).
 - Détection basée exclusivement sur :
   1. Les événements système `window.addEventListener('online')` et `window.addEventListener('offline')`.
   2. L'interception passive des erreurs de fetch (TypeError `Failed to fetch`, timeout réseau à 3 secondes).
+
+### 3.4. Installation PWA & Protection Safari iOS
+- Manifeste PWA complet (`manifest.json`) avec icônes haute résolution et configuration `display: standalone`.
+- Bannière d'incitation discrète sur mobile (Safari iOS / Android) guidant l'utilisateur pour l'ajout à l'écran d'accueil afin d'empêcher la purge automatique du stockage par WebKit au-delà de 7 jours d'inactivité.
 
 ---
 

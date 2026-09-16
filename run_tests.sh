@@ -21,10 +21,23 @@ echo "[2/2] Vérification du formatage et des avertissements de compilation..."
 cargo check --manifest-path backend-rust/Cargo.toml
 
 echo ""
-echo "[3/3] Exécution des tests automatiques sur corpus réel (tous les documents)..."
+echo "[3/5] Exécution des tests automatiques du moteur Hors-Ligne Wasm & Scoring..."
+node tests/test_offline_wasm_and_scoring.mjs
+
+echo ""
+echo "[4/5] Exécution des tests automatiques du pipeline de vignettes hors-ligne (Crops)..."
+node tests/test_offline_vignettes.mjs
+
+echo ""
+echo ""
+echo "[5/6] Exécution des tests automatiques sur corpus réel (tous les documents)..."
 python3 scripts/automated_real_corpus_search_test.py
 
 echo ""
+echo "[6/6] Exécution des tests UI automatisés Playwright (En ligne & Hors-ligne)..."
+npx playwright test
+
+echo ""
 echo "========================================================================="
-echo "   TOUS LES TESTS RUST & CORPUS ONT RÉUSSI AVEC SUCCÈS (0 erreur)        "
+echo " TOUS LES TESTS RUST, WASM, VIGNETTES, CORPUS & UI ONT RÉUSSI (0 erreur) "
 echo "========================================================================="

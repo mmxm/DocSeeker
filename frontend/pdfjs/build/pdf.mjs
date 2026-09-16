@@ -6019,10 +6019,16 @@ class DOMCanvasFactory extends BaseCanvasFactory {
     this._document = ownerDocument;
   }
   _createCanvas(width, height) {
-    const canvas = this._document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    return canvas;
+    if (this._document && typeof this._document.createElement === "function") {
+      const canvas = this._document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      return canvas;
+    }
+    if (typeof OffscreenCanvas !== "undefined") {
+      return new OffscreenCanvas(width, height);
+    }
+    throw new Error("No canvas implementation available.");
   }
 }
 
@@ -10273,9 +10279,10 @@ class PDFFetchStreamRangeReader {
 
     let normUrl = url;
     try {
-      normUrl = typeof window !== "undefined" && window.location 
-        ? new URL(url, window.location.origin).pathname 
-        : url;
+      const locOrigin = (typeof window !== "undefined" && window.location) 
+        ? window.location.origin 
+        : (typeof self !== "undefined" && self.location ? self.location.origin : undefined);
+      normUrl = locOrigin ? new URL(url, locOrigin).pathname : url;
     } catch (e) {}
 
     const cacheKey = `${normUrl}#${begin}_${end}`;
@@ -11664,7 +11671,10 @@ function getUrlProp(val) {
     return val.href;
   }
   try {
-    return new URL(val, window.location).href;
+    const loc = (typeof window !== "undefined" && window.location) 
+      ? window.location 
+      : (typeof self !== "undefined" && self.location ? self.location : undefined);
+    return new URL(val, loc).href;
   } catch {
     if (isNodeJS && typeof val === "string") {
       return val;
@@ -12461,8 +12471,11 @@ class PDFWorker {
       workerSrc
     } = PDFWorker;
     try {
-      if (!PDFWorker._isSameOrigin(window.location.href, workerSrc)) {
-        workerSrc = PDFWorker._createCDNWrapper(new URL(workerSrc, window.location).href);
+      const loc = (typeof window !== "undefined" && window.location) 
+        ? window.location 
+        : (typeof self !== "undefined" && self.location ? self.location : undefined);
+      if (loc && !PDFWorker._isSameOrigin(loc.href, workerSrc)) {
+        workerSrc = PDFWorker._createCDNWrapper(new URL(workerSrc, loc).href);
       }
       const worker = new Worker(workerSrc, {
         type: "module"

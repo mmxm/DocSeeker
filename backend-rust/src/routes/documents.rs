@@ -436,3 +436,185 @@ pub async fn retry_failed_pipeline(
     let retried = state.pipeline.retry_failed();
     Json(serde_json::json!({"retried_count": retried}))
 }
+
+// -----------------------------------------------------------------------------
+// DTOs & Endpoints pour le Mode Hors-Ligne & Synchronisation Résiliente
+// -----------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub struct OfflineBundleDocument {
+    pub id: i64,
+    pub filename: String,
+    pub title: String,
+    pub file_hash: Option<String>,
+    pub folder_id: Option<i64>,
+    pub total_pages: i64,
+    pub file_size: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Serialize)]
+pub struct OfflineBundlePage {
+    pub page_number: i64,
+    pub text_content: String,
+    pub words: Vec<crate::search::types::WordEntry>,
+}
+
+#[derive(Serialize)]
+pub struct OfflineBundleResponse {
+    pub document: OfflineBundleDocument,
+    pub pages: Vec<OfflineBundlePage>,
+}
+
+#[derive(Deserialize)]
+pub struct CachedDocumentItem {
+    pub id: i64,
+    pub file_hash: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct SyncCheckPayload {
+    pub cached_documents: Vec<CachedDocumentItem>,
+}
+
+#[derive(Serialize)]
+pub struct SyncCheckResponse {
+    pub outdated_ids: Vec<i64>,
+    pub deleted_ids: Vec<i64>,
+    pub server_time: String,
+}
+
+/// GET /api/documents/{id}/offline-bundle
+/// Exporte tout le matériel textuel et spatial d'un document pour alimentation du cache local
+pub async fn get_offline_bundle(
+    State(state): State<Arc<AppState>>,
+    Path(doc_id): Path<i64>,
+) -> Result<Json<OfflineBundleResponse>, Response> {
+    let conn = state.db.lock().map_err(|_| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
+    })?;
+
+    // 1. Récupération des métadonnées du document
+    let mut stmt_doc = conn.prepare(
+        "SELECT id, filename, title, file_hash, folder_id, total_pages, file_size, created_at, COALESCE(updated_at, created_at) \
+         FROM documents WHERE id = ?1 AND COALESCE(status, 'ready') = 'ready'"
+    ).map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response()
+    })?;
+
+    let document = stmt_doc.query_row(params![doc_id], |row| {
+        Ok(OfflineBundleDocument {
+            id: row.get(0)?,
+            filename: row.get(1)?,
+            title: row.get(2)?,
+            file_hash: row.get(3)?,
+            folder_id: row.get(4)?,
+            total_pages: row.get(5)?,
+            file_size: row.get(6)?,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
+        })
+    }).map_err(|_| {
+        (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Document introuvable ou non prêt"}))).into_response()
+    })?;
+
+    // 2. Récupération des pages et désérialisation propre du tableau spatial words
+    let mut stmt_pages = conn.prepare(
+        "SELECT page_number, text_content, words_json FROM pages WHERE doc_id = ?1 ORDER BY page_number ASC"
+    ).map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response()
+    })?;
+
+    let pages_iter = stmt_pages.query_map(params![doc_id], |row| {
+        let page_number: i64 = row.get(0)?;
+        let text_content: String = row.get::<_, Option<String>>(1)?.unwrap_or_default();
+        let words_raw: Option<String> = row.get(2)?;
+        let words: Vec<crate::search::types::WordEntry> = words_raw
+            .and_then(|json_str| serde_json::from_str(&json_str).ok())
+            .unwrap_or_default();
+
+        Ok(OfflineBundlePage {
+            page_number,
+            text_content,
+            words,
+        })
+    }).map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response()
+    })?;
+
+    let pages: Vec<OfflineBundlePage> = pages_iter.flatten().collect();
+
+    Ok(Json(OfflineBundleResponse {
+        document,
+        pages,
+    }))
+}
+
+/// POST /api/sync/check
+/// Vérifie la fraîcheur des documents en cache selon la stratégie Last-Write-Wins
+pub async fn sync_check_handler(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<SyncCheckPayload>,
+) -> Result<Json<SyncCheckResponse>, Response> {
+    let conn = state.db.lock().map_err(|_| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
+    })?;
+
+    let mut outdated_ids = Vec::new();
+    let mut deleted_ids = Vec::new();
+
+    let mut stmt = conn.prepare(
+        "SELECT file_hash, COALESCE(updated_at, created_at), COALESCE(status, 'ready') FROM documents WHERE id = ?1"
+    ).map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response()
+    })?;
+
+    for cached_doc in payload.cached_documents {
+        let row_res = stmt.query_row(params![cached_doc.id], |row| {
+            let hash: Option<String> = row.get(0)?;
+            let updated_at: String = row.get(1)?;
+            let status: String = row.get(2)?;
+            Ok((hash, updated_at, status))
+        });
+
+        match row_res {
+            Ok((server_hash, server_updated_at, status)) => {
+                if status != "ready" {
+                    deleted_ids.push(cached_doc.id);
+                } else {
+                    let hash_changed = match (&server_hash, &cached_doc.file_hash) {
+                        (Some(s), Some(c)) => s != c,
+                        (Some(_), None) => true,
+                        (None, Some(_)) => true,
+                        (None, None) => false,
+                    };
+                    let time_changed = match &cached_doc.updated_at {
+                        Some(c_time) => &server_updated_at > c_time,
+                        None => true,
+                    };
+
+                    if hash_changed || time_changed {
+                        outdated_ids.push(cached_doc.id);
+                    }
+                }
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                deleted_ids.push(cached_doc.id);
+            }
+            Err(e) => {
+                tracing::warn!("[Sync Check] Erreur lecture document {}: {}", cached_doc.id, e);
+            }
+        }
+    }
+
+    let server_time = chrono::Utc::now().to_rfc3339();
+
+    Ok(Json(SyncCheckResponse {
+        outdated_ids,
+        deleted_ids,
+        server_time,
+    }))
+}
+

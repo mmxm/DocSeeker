@@ -254,27 +254,15 @@ impl PdfEngine {
             }
         };
 
-        let [x0, y0, x1, y1] = rect;
-        let occ_center_x = (x0 + x1) / 2.0;
-        let occ_center_y = (y0 + y1) / 2.0;
-
-        const CROP_WIDTH: f64 = 300.0;
-        const CROP_HEIGHT: f64 = 120.0;
-
-        let mut crop_x0 = (occ_center_x - CROP_WIDTH / 2.0).max(0.0);
-        let crop_x1 = (crop_x0 + CROP_WIDTH).min(page_width);
-        if crop_x1 == page_width {
-            crop_x0 = (crop_x1 - CROP_WIDTH).max(0.0);
-        }
-
-        let mut crop_y0 = (occ_center_y - CROP_HEIGHT / 2.0).max(0.0);
-        let crop_y1 = (crop_y0 + CROP_HEIGHT).min(page_height);
-        if crop_y1 == page_height {
-            crop_y0 = (crop_y1 - CROP_HEIGHT).max(0.0);
-        }
+        let bounds = search_core::crop::calculate_crop_bounds(rect, page_width, page_height, None, None);
+        let crop_x0 = bounds.x0;
+        let crop_y0 = bounds.y0;
+        let crop_x1 = bounds.x1;
+        let crop_y1 = bounds.y1;
 
         // Incrustation du surlignage jaune semi-transparent sur les rectangles
-        let yellow_color = Rgba([255, 224, 51, 128]); // Jaune Goodnotes translucide
+        let yellow_color = Rgba(search_core::crop::GOODNOTES_YELLOW_RGBA); // Jaune Goodnotes translucide mutualisé
+
 
         let all_hl = if highlight_rects.is_empty() {
             vec![rect]

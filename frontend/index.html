@@ -9,8 +9,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css?v=5.0">
+  <link rel="stylesheet" href="/style.css?v=8.0">
   <link rel="icon" href="/favicon.ico">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#ffffff">
 </head>
 <body class="light-theme">
   <div id="app" class="app-layout">
@@ -70,6 +72,15 @@
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
               </svg>
               <span id="filterFolderLabel">Dans ce dossier uniquement</span>
+            </label>
+
+            <label class="filter-chip" id="filterOfflineChip" title="Restreindre la recherche aux documents disponibles hors-ligne">
+              <input type="checkbox" id="filterOfflineOnly" />
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
+                <line x1="2" y1="2" x2="22" y2="22"></line>
+              </svg>
+              <span id="filterOfflineLabel">Hors-ligne uniquement</span>
             </label>
           </div>
 
@@ -165,6 +176,21 @@
             <line x1="8.12" y1="8.12" x2="12" y2="12"></line>
           </svg>
           <span>Couper</span>
+        </button>
+        <button id="batchCacheBtn" class="btn btn-sm btn-secondary" title="Mettre en cache la sélection pour consultation hors-ligne">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+          <span>Mettre en cache</span>
+        </button>
+        <button id="batchUncacheBtn" class="btn btn-sm btn-secondary" title="Retirer la sélection du cache local">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
+            <line x1="2" y1="2" x2="22" y2="22"></line>
+          </svg>
+          <span>Retirer du cache</span>
         </button>
         <button id="batchDeleteBtn" class="btn btn-sm btn-danger" title="Supprimer la sélection">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
@@ -573,6 +599,14 @@
         <span>Réindexer</span>
       </button>
       <div class="context-menu-separator"></div>
+      <button class="context-menu-item" id="ctxMenuToggleCache">
+        <svg class="cache-ctx-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+        <span id="ctxMenuToggleCacheText">Mettre en cache local</span>
+      </button>
       <button class="context-menu-item danger" id="ctxMenuDelete">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
           <polyline points="3 6 5 6 21 6"></polyline>
@@ -618,12 +652,58 @@
       </div>
     </div>
 
+    <!-- Bannière Mode Hors-Ligne Déconnecté -->
+    <div id="offlineNoticeBanner" class="offline-notice-banner" style="display: none;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="12"></line>
+        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+      </svg>
+      <span>Mode hors-ligne actif — recherche et consultation limitées à vos documents en cache local</span>
+    </div>
+
+    <!-- Tiroir de Téléchargement Résilient (Download Drawer) -->
+    <div id="downloadDrawer" class="download-drawer" style="display: none;">
+      <div class="download-drawer-header" id="downloadDrawerHeader">
+        <div class="download-drawer-title">
+          <svg class="drawer-icon-spinning" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <line x1="12" y1="2" x2="12" y2="6"></line>
+            <line x1="12" y1="18" x2="12" y2="22"></line>
+            <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line>
+            <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line>
+            <line x1="2" y1="12" x2="6" y2="12"></line>
+            <line x1="18" y1="12" x2="22" y2="12"></line>
+            <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line>
+            <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line>
+          </svg>
+          <span id="downloadDrawerSummary">Téléchargements actifs (0 en attente)</span>
+        </div>
+        <div class="download-drawer-controls">
+          <button id="drawerPauseBtn" class="btn-drawer-ctrl" title="Mettre en pause / Reprendre">
+            <svg id="drawerPauseIcon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="6" y="4" width="4" height="16"></rect>
+              <rect x="14" y="4" width="4" height="16"></rect>
+            </svg>
+          </button>
+          <button id="drawerToggleBtn" class="btn-drawer-ctrl" title="Réduire / Agrandir">
+            <svg id="drawerToggleIcon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div id="downloadDrawerBody" class="download-drawer-body">
+        <div id="downloadDrawerList" class="download-drawer-list"></div>
+      </div>
+    </div>
+
     <!-- Conteneur de Notifications Toast -->
     <div id="toastContainer" class="toast-container"></div>
 
   </div>
 
-  <script src="/pdf-cache.js?v=5.9"></script>
-  <script src="/app.js?v=5.9"></script>
+  <script src="/pdf-cache.js?v=8.0"></script>
+  <script src="/download-queue-manager.js?v=8.0"></script>
+  <script src="/app.js?v=8.0"></script>
 </body>
 </html>

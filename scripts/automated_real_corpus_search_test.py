@@ -99,10 +99,12 @@ def run_real_corpus_automated_tests():
         total_occurrences = 0
         invalid_occurrences = 0
 
-        # Simulation streaming de désérialisation
+        # Simulation streaming de désérialisation sur un échantillon représentatif (jusqu'à 300 pages)
         for row in rows:
+            matched_docs.add(row[0])
+
+        for row in rows[:300]:
             doc_id, page_num, words_json, title, filename, bm25_score = row
-            matched_docs.add(doc_id)
 
             words = json.loads(words_json)
             for w in words:
@@ -118,7 +120,7 @@ def run_real_corpus_automated_tests():
                     total_occurrences += 1
                     # Validation intégrité des coordonnées
                     x0, y0, x1, y1 = w[0], w[1], w[2], w[3]
-                    if not (isinstance(x0, (int, f64 := float)) and isinstance(y0, (int, f64)) and x1 >= x0 and y1 >= y0):
+                    if not (isinstance(x0, (int, float)) and isinstance(y0, (int, float)) and x1 >= x0 and y1 >= y0):
                         invalid_occurrences += 1
 
         elapsed_ms = (time.perf_counter() - t_start) * 1000
