@@ -1950,13 +1950,11 @@ document.addEventListener("DOMContentLoaded", () => {
     searchStats.textContent = "";
 
     try {
-      // S'assurer que le gestionnaire hors-ligne est initialisé
-      if (window.downloadQueueManager) {
-        await window.downloadQueueManager.ensureInitialized();
-      }
-
-      // Si complètement hors-ligne réseau : charger directement depuis SQLite-Wasm local
+      // Si complètement hors-ligne réseau : initialiser et charger directement depuis SQLite-Wasm local
       if (!navigator.onLine) {
+        if (window.downloadQueueManager) {
+          await window.downloadQueueManager.ensureInitialized(1500).catch(() => {});
+        }
         let cachedDocs = [];
         let cachedFolders = [];
         if (window.downloadQueueManager) {
@@ -1989,7 +1987,12 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-      // 1. Récupérer les dossiers
+      // En mode en ligne : démarrer l'initialisation du gestionnaire de cache en tâche de fond non bloquante
+      if (window.downloadQueueManager) {
+        window.downloadQueueManager.ensureInitialized(2000).catch(() => {});
+      }
+
+      // 1. Récupérer les dossiers immédiatement depuis le serveur
       const parentParam = currentFolderId ? currentFolderId : "root";
       const foldersRes = await fetch(`/api/folders?parent_id=${parentParam}`);
       const foldersData = await foldersRes.json();

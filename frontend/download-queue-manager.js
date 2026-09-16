@@ -19,45 +19,95 @@ class DownloadQueueManager {
     this.worker = null;
     this._workerReqId = 0;
     this._workerCallbacks = new Map();
+    this._workerFailed = false;
 
     this._initWorker();
   }
 
   _initWorker() {
     if (typeof Worker !== 'undefined') {
-      this.worker = new Worker('/offline-search-worker.js?v=8.0', { type: 'module' });
-      this.worker.onmessage = (e) => {
-        const { id, success, data, error } = e.data;
-        if (this._workerCallbacks.has(id)) {
-          const { resolve, reject } = this._workerCallbacks.get(id);
-          this._workerCallbacks.delete(id);
-          if (success) resolve(data);
-          else reject(new Error(error));
-        }
-      };
+      try {
+        this.worker = new Worker('/offline-search-worker.js?v=8.1', { type: 'module' });
+        this.worker.onerror = (err) => {
+          console.warn('[DownloadQueueManager] Erreur ou échec du Web Worker offline:', err);
+          this._workerFailed = true;
+          for (const [id, { reject }] of this._workerCallbacks) {
+            reject(new Error("Web Worker offline indisponible"));
+          }
+          this._workerCallbacks.clear();
+        };
 
-      // Initialiser immédiatement la liste des documents et dossiers indexés dans SQLite-Wasm
-      this._initPromise = Promise.all([
-        this.getAllCachedDocs().catch(() => []),
-        this.getAllCachedFolders().catch(() => [])
-      ]).then(() => {
-        this._notify();
-      }).catch(err => console.warn('[DownloadQueueManager] Initialisation cached docs/folders:', err));
+        this.worker.onmessage = (e) => {
+          const { id, success, data, error } = e.data;
+          if (this._workerCallbacks.has(id)) {
+            const { resolve, reject } = this._workerCallbacks.get(id);
+            this._workerCallbacks.delete(id);
+            if (success) resolve(data);
+            else reject(new Error(error));
+          }
+        };
+
+        // Initialiser avec une borne temporelle stricte pour ne jamais bloquer l'application
+        this._initPromise = Promise.race([
+          Promise.all([
+            this.getAllCachedDocs().catch(() => []),
+            this.getAllCachedFolders().catch(() => [])
+          ]).then(() => {
+            this._notify();
+          }),
+          new Promise(resolve => setTimeout(resolve, 2000))
+        ]).catch(err => console.warn('[DownloadQueueManager] Initialisation cached docs/folders:', err));
+      } catch (e) {
+        console.warn('[DownloadQueueManager] Impossible d\'instancier le Web Worker offline:', e);
+        this._workerFailed = true;
+        this._initPromise = Promise.resolve();
+      }
+    } else {
+      this._initPromise = Promise.resolve();
     }
   }
 
-  async ensureInitialized() {
+  async ensureInitialized(timeoutMs = 1500) {
+    if (this._workerFailed) return;
     if (this._initPromise) {
-      await this._initPromise;
+      await Promise.race([
+        this._initPromise,
+        new Promise(resolve => setTimeout(resolve, timeoutMs))
+      ]).catch(() => {});
     }
   }
 
-  sendToWorker(type, payload) {
-    if (!this.worker) return Promise.reject(new Error("Worker non initialisé"));
+  sendToWorker(type, payload, timeoutMs = 3000) {
+    if (!this.worker || this._workerFailed) {
+      return Promise.reject(new Error("Worker offline non disponible"));
+    }
     const id = ++this._workerReqId;
     return new Promise((resolve, reject) => {
-      this._workerCallbacks.set(id, { resolve, reject });
-      this.worker.postMessage({ id, type, payload });
+      const timer = setTimeout(() => {
+        if (this._workerCallbacks.has(id)) {
+          this._workerCallbacks.delete(id);
+          reject(new Error(`Timeout (${timeoutMs}ms) en attente du worker pour ${type}`));
+        }
+      }, timeoutMs);
+
+      this._workerCallbacks.set(id, {
+        resolve: (data) => {
+          clearTimeout(timer);
+          resolve(data);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        }
+      });
+
+      try {
+        this.worker.postMessage({ id, type, payload });
+      } catch (err) {
+        clearTimeout(timer);
+        this._workerCallbacks.delete(id);
+        reject(err);
+      }
     });
   }
 
