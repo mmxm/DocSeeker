@@ -1421,7 +1421,10 @@ document.addEventListener("DOMContentLoaded", () => {
     setDocumentZoomLock(false);
     if (viewerDocSearchWrapper) viewerDocSearchWrapper.style.display = "none";
     syncDocSearchInputs("");
+    // Libérer les tableaux d'occurrences et le snapshot de résultats (P4/P5)
     currentActiveOccurrences = [];
+    currentDocOriginalOccurrences = null;
+    lastSearchResultsData = null;
     currentActiveOccurrenceIndex = -1;
     updateOccurrenceStepperUI();
     try {
