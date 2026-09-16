@@ -27,7 +27,7 @@ class DownloadQueueManager {
   _initWorker() {
     if (typeof Worker !== 'undefined') {
       try {
-        this.worker = new Worker('/offline-search-worker.js?v=8.2', { type: 'module' });
+        this.worker = new Worker('/offline-search-worker.js?v=8.3', { type: 'module' });
         this.worker.onerror = (err) => {
           console.warn('[DownloadQueueManager] Erreur ou échec du Web Worker offline:', err);
           this._workerFailed = true;

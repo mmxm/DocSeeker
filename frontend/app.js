@@ -65,6 +65,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentSortMode = "name_asc";
   let userManuallyChangedSort = false;
   let isSearchActive = false;
+  let loadFoldersSeq = 0;
 
   class OfflineCropRenderer {
     constructor() {
@@ -72,7 +73,7 @@ document.addEventListener("DOMContentLoaded", () => {
       this.reqId = 0;
       this.callbacks = new Map();
       if (typeof Worker !== 'undefined') {
-        this.worker = new Worker('/crop-worker.js?v=8.0', { type: 'module' });
+        this.worker = new Worker('/crop-worker.js?v=8.3', { type: 'module' });
         this.worker.onmessage = (e) => {
           const { id, success, blob, error } = e.data;
           if (this.callbacks.has(id)) {
@@ -876,15 +877,20 @@ document.addEventListener("DOMContentLoaded", () => {
           loadFoldersAndDocuments();
           return;
         }
+      } else if (res.status === 503 && isLocallyValid) {
+        console.log('[Auth] Réseau indisponible (503 Service Worker) : session locale valide acceptée');
+        hideLoginModal();
+        loadFoldersAndDocuments();
+        return;
       }
-      if (!navigator.onLine && isLocallyValid) {
+      if ((!navigator.onLine || res.status === 503) && isLocallyValid) {
         hideLoginModal();
         loadFoldersAndDocuments();
         return;
       }
       showLoginModal();
     } catch (_) {
-      if (!navigator.onLine && isLocallyValid) {
+      if (isLocallyValid) {
         hideLoginModal();
         loadFoldersAndDocuments();
         return;
@@ -1932,8 +1938,6 @@ document.addEventListener("DOMContentLoaded", () => {
     loadFoldersAndDocuments();
   }
 
-  let loadFoldersSeq = 0;
-
   async function loadFoldersAndDocuments() {
     const currentSeq = ++loadFoldersSeq;
     isSearchActive = false;
@@ -1995,22 +1999,36 @@ document.addEventListener("DOMContentLoaded", () => {
       // 1. Récupérer les dossiers immédiatement depuis le serveur
       const parentParam = currentFolderId ? currentFolderId : "root";
       const foldersRes = await fetch(`/api/folders?parent_id=${parentParam}`);
+      if (!foldersRes.ok) {
+        throw new Error(`Réseau indisponible (HTTP ${foldersRes.status})`);
+      }
       const foldersData = await foldersRes.json();
-      const currentFolders = foldersData.folders || [];
+      if (!foldersData || !Array.isArray(foldersData.folders)) {
+        throw new Error("Réponse dossiers invalide");
+      }
+      const currentFolders = foldersData.folders;
 
       // Charger également tous les dossiers en mémoire pour le déplacement et le cache
       const allFoldersRes = await fetch("/api/folders");
-      const allFoldersData = await allFoldersRes.json();
-      allFolders = allFoldersData.folders || [];
-      if (window.downloadQueueManager) {
-        await window.downloadQueueManager.syncFolders(allFolders);
+      if (allFoldersRes.ok) {
+        const allFoldersData = await allFoldersRes.json();
+        allFolders = allFoldersData.folders || [];
+        if (window.downloadQueueManager) {
+          await window.downloadQueueManager.syncFolders(allFolders);
+        }
       }
 
       // 2. Récupérer les documents du dossier courant
       const docFolderParam = currentFolderId ? currentFolderId : "root";
       const docsRes = await fetch(`/api/documents?folder_id=${docFolderParam}`);
+      if (!docsRes.ok) {
+        throw new Error(`Réseau indisponible (HTTP ${docsRes.status})`);
+      }
       const docsData = await docsRes.json();
-      const fetchedDocs = docsData.documents || [];
+      if (!docsData || !Array.isArray(docsData.documents)) {
+        throw new Error("Réponse documents invalide");
+      }
+      const fetchedDocs = docsData.documents;
       if (window.downloadQueueManager && fetchedDocs.length > 0) {
         await window.downloadQueueManager.syncDocFolders(fetchedDocs);
       }
@@ -2057,6 +2075,14 @@ document.addEventListener("DOMContentLoaded", () => {
           currentLoadedDocs = (cachedDocs || []).filter(d => Number(d.folder_id) === Number(currentFolderId));
         } else {
           currentLoadedDocs = (cachedDocs || []).filter(d => d.folder_id === null || d.folder_id === undefined);
+        }
+
+        if (filterOfflineOnly && !filterOfflineOnly.checked) {
+          filterOfflineOnly.checked = true;
+          if (filterOfflineChip) filterOfflineChip.classList.add("active");
+        }
+        if (offlineNoticeBanner) {
+          offlineNoticeBanner.style.display = "flex";
         }
 
         renderDocumentLibrary(currentLoadedDocs);
@@ -2824,9 +2850,27 @@ document.addEventListener("DOMContentLoaded", () => {
     if (isTitlesOnly) url += `&titles_only=true`;
     if (isFolderOnly && folderId !== null) url += `&folder_id=${folderId}`;
 
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-    return await res.json();
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return await res.json();
+    } catch (netErr) {
+      console.warn("[Search] Échec requête en ligne, bascule automatique sur le moteur local hors-ligne :", netErr);
+      if (filterOfflineOnly && !filterOfflineOnly.checked) {
+        filterOfflineOnly.checked = true;
+        if (filterOfflineChip) filterOfflineChip.classList.add("active");
+      }
+      if (window.downloadQueueManager) {
+        return await window.downloadQueueManager.sendToWorker('SEARCH', {
+          query,
+          titlesOnly: isTitlesOnly,
+          folderId: isFolderOnly ? folderId : null,
+          limit,
+          offset,
+        });
+      }
+      throw netErr;
+    }
   }
 
   async function performSearch(query) {

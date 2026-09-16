@@ -1,7 +1,14 @@
 import './worker-setup.js';
 import * as pdfjsLib from './pdfjs/build/pdf.mjs';
+import * as pdfjsWorker from './pdfjs/build/pdf.worker.mjs';
 import initSearchWasm, { calculate_crop_bounds_wasm, get_shared_constants_wasm } from './wasm/search_wasm/search_wasm.js';
 import { CLIENT_CONCURRENT_CROP_TASKS } from './environment-limits.js';
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.pdfjsWorker = pdfjsWorker;
+}
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs/build/pdf.worker.mjs';
 
 let wasmInitPromise = null;
 let sharedConstants = null;
@@ -15,9 +22,6 @@ async function ensureWasm() {
   }
   return wasmInitPromise;
 }
-
-// Configuration du worker PDF.js
-pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs/build/pdf.worker.mjs';
 
 // Sémaphore / File d'attente (limite définie dans environment-limits.js)
 const MAX_CONCURRENT_RENDERS = CLIENT_CONCURRENT_CROP_TASKS;
@@ -247,7 +251,12 @@ async function executeCropRender(task) {
       ctx.fillRect(rx0, ry0, rw, rh);
     }
 
-    const blob = await canvas.convertToBlob({ type: 'image/webp', quality: 0.85 });
+    let blob;
+    try {
+      blob = await canvas.convertToBlob({ type: 'image/webp', quality: 0.85 });
+    } catch (e) {
+      blob = await canvas.convertToBlob({ type: 'image/png' });
+    }
     return blob;
   } finally {
     page.cleanup();

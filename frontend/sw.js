@@ -7,20 +7,20 @@
  * 3. Routage résilient avec fallback automatique sur incident réseau.
  */
 
-const CACHE_NAME = 'docseeker-app-shell-v11';
+const CACHE_NAME = 'docseeker-app-shell-v12';
 const CROP_CACHE_NAME = 'docseeker_offline_crops';
 const COVER_CACHE_NAME = 'docseeker_covers';
 
 const APP_SHELL_ASSETS = [
   '/',
   '/index.html',
-  '/style.css?v=8.2',
-  '/app.js?v=8.2',
-  '/pdf-cache.js?v=8.2',
-  '/download-queue-manager.js?v=8.2',
-  '/offline-search-worker.js?v=8.2',
-  '/worker-setup.js?v=8.2',
-  '/crop-worker.js?v=8.2',
+  '/style.css?v=8.3',
+  '/app.js?v=8.3',
+  '/pdf-cache.js?v=8.3',
+  '/download-queue-manager.js?v=8.3',
+  '/offline-search-worker.js?v=8.3',
+  '/worker-setup.js?v=8.3',
+  '/crop-worker.js?v=8.3',
   '/favicon.ico',
   '/placeholder-cover.png',
   '/wasm/search_wasm/search_wasm.js',
@@ -120,10 +120,22 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 4. App Shell (HTML, CSS, JS, Wasm) : Cache First avec mise à jour en arrière-plan
+  // 4. Navigation principale (F5 / chargement de page sans wifi) : Servir index.html depuis le cache
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request).catch(async () => {
+        const cached = await caches.match('/index.html') || await caches.match('/');
+        if (cached) return cached;
+        return new Response('Mode hors-ligne DocSeeker', { headers: { 'Content-Type': 'text/html' } });
+      })
+    );
+    return;
+  }
+
+  // 5. App Shell (HTML, CSS, JS, Wasm) : Cache First avec tolérance query string et mise à jour en arrière-plan
   if (!url.pathname.startsWith('/api/')) {
     event.respondWith(
-      caches.match(event.request).then((cachedResponse) => {
+      caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {
         if (cachedResponse) {
           // Revalidation discrète en tâche de fond si connecté
           fetch(event.request).then((netRes) => {
@@ -133,7 +145,10 @@ self.addEventListener('fetch', (event) => {
           }).catch(() => {});
           return cachedResponse;
         }
-        return fetch(event.request);
+        return fetch(event.request).catch(async () => {
+          // Fallback ultime : chercher sans paramètre de requête
+          return caches.match(url.pathname, { ignoreSearch: true });
+        });
       })
     );
     return;
