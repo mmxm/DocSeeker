@@ -73,7 +73,7 @@ document.addEventListener("DOMContentLoaded", () => {
       this.reqId = 0;
       this.callbacks = new Map();
       if (typeof Worker !== 'undefined') {
-        this.worker = new Worker('/crop-worker.js?v=8.4', { type: 'module' });
+        this.worker = new Worker('/crop-worker.js?v=8.5', { type: 'module' });
         this.worker.onmessage = (e) => {
           const { id, success, blob, error, code } = e.data;
           if (this.callbacks.has(id)) {

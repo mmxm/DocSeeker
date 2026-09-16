@@ -7,20 +7,20 @@
  * 3. Routage résilient avec fallback automatique sur incident réseau.
  */
 
-const CACHE_NAME = 'docseeker-app-shell-v16';
+const CACHE_NAME = 'docseeker-app-shell-v17';
 const CROP_CACHE_NAME = 'docseeker_offline_crops';
 const COVER_CACHE_NAME = 'docseeker_covers';
 
 const APP_SHELL_ASSETS = [
   '/',
   '/index.html',
-  '/style.css?v=8.4',
-  '/app.js?v=8.4',
-  '/pdf-cache.js?v=8.4',
-  '/download-queue-manager.js?v=8.4',
-  '/offline-search-worker.js?v=8.4',
-  '/worker-setup.js?v=8.4',
-  '/crop-worker.js?v=8.4',
+  '/style.css?v=8.5',
+  '/app.js?v=8.5',
+  '/pdf-cache.js?v=8.5',
+  '/download-queue-manager.js?v=8.5',
+  '/offline-search-worker.js?v=8.5',
+  '/worker-setup.js?v=8.5',
+  '/crop-worker.js?v=8.5',
   '/favicon.ico',
   '/placeholder-cover.png',
   '/wasm/search_wasm/search_wasm.js',
@@ -34,6 +34,20 @@ const APP_SHELL_ASSETS = [
   '/pdfjs/web/viewer.html',
   '/pdfjs/web/viewer.mjs',
   '/pdfjs/web/viewer.css',
+  '/pdfjs/web/standard_fonts/FoxitDingbats.pfb',
+  '/pdfjs/web/standard_fonts/FoxitFixed.pfb',
+  '/pdfjs/web/standard_fonts/FoxitFixedBold.pfb',
+  '/pdfjs/web/standard_fonts/FoxitFixedBoldItalic.pfb',
+  '/pdfjs/web/standard_fonts/FoxitFixedItalic.pfb',
+  '/pdfjs/web/standard_fonts/FoxitSerif.pfb',
+  '/pdfjs/web/standard_fonts/FoxitSerifBold.pfb',
+  '/pdfjs/web/standard_fonts/FoxitSerifBoldItalic.pfb',
+  '/pdfjs/web/standard_fonts/FoxitSerifItalic.pfb',
+  '/pdfjs/web/standard_fonts/FoxitSymbol.pfb',
+  '/pdfjs/web/standard_fonts/LiberationSans-Bold.ttf',
+  '/pdfjs/web/standard_fonts/LiberationSans-BoldItalic.ttf',
+  '/pdfjs/web/standard_fonts/LiberationSans-Italic.ttf',
+  '/pdfjs/web/standard_fonts/LiberationSans-Regular.ttf',
   '/pdfjs/web/images/toolbarButton-sidebarToggle.svg',
   '/pdfjs/web/images/toolbarButton-viewThumbnail.svg',
   '/pdfjs/web/images/toolbarButton-viewOutline.svg',

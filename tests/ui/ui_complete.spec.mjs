@@ -784,5 +784,56 @@ test.describe('DocSeeker - Suite Complète de Tests UI Automatisés (En ligne & 
     await context.setOffline(false);
   });
 
+  test('14. Filtre Hors-Ligne Actif en Présence Réseau (navigator.onLine) & Non-téléchargés (Zéro Console Error & Fallback Snippet)', async ({ page }) => {
+    await page.goto('/');
+
+    // 1. S'assurer que le document 3 est indexé localement mais SANS son binaire PDF dans IndexedDB
+    await page.evaluate(async () => {
+      await window.downloadQueueManager.ensureInitialized();
+      await window.downloadQueueManager.ensureDocumentIndexedLocally(3);
+      if (window.pdfCacheManager) {
+        await window.pdfCacheManager.invalidate(3);
+      }
+    });
+
+    // 2. Écouter la console pour détecter strictement toute erreur de crop ou NetworkError
+    const capturedErrors = [];
+    page.on('console', (msg) => {
+      const text = msg.text();
+      if (text.includes('[CropWorker] Error rendering crop') || 
+          text.includes('NetworkError when attempting to fetch') ||
+          (msg.type() === 'error' && text.includes('crop-worker'))) {
+        capturedErrors.push(text);
+      }
+    });
+
+    // 3. Le navigateur est connecté (navigator.onLine == true), mais le mode hors-ligne est activé via l'UI
+    const filterOffline = page.locator('#filterOfflineOnly');
+    await filterOffline.check();
+
+    // 4. Lancer une recherche qui matche le document 3
+    const searchInput = page.locator('#searchInput');
+    await searchInput.fill('de');
+    await page.evaluate(() => window.performSearch && window.performSearch('de'));
+
+    // 5. Attendre la carte du document 3
+    const doc3Card = page.locator('.doc-card[data-doc-id="3"]');
+    await expect(doc3Card).toBeVisible({ timeout: 10000 });
+
+    // 6. Vérifier que la vignette s'affiche avec le snippet fallback sans planter le worker
+    const vignettes = doc3Card.locator('.vignette-item');
+    await expect(vignettes.first()).toBeVisible({ timeout: 10000 });
+
+    const snippetFallback = vignettes.first().locator('.vignette-snippet-fallback');
+    await expect(snippetFallback).toBeVisible({ timeout: 10000 });
+
+    // Attendre un court délai pour s'assurer qu'aucun message différé d'erreur n'arrive
+    await page.waitForTimeout(600);
+
+    // 7. Vérifier l'absence totale d'erreur dans la console
+    expect(capturedErrors).toHaveLength(0);
+    console.log('✅ [Test 14] Mode filtre hors-ligne avec réseau actif : 0 erreur de worker et fallback visuel confirmé.');
+  });
+
 });
 

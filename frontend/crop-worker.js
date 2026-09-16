@@ -161,15 +161,22 @@ async function loadPdfDoc(docId, isOffline = false) {
       const localBytes = await getCachedPdfBytesFromIndexedDB(docId);
       let loadingTask = null;
 
+      const pdfParams = {
+        disableAutoFetch: false,
+        disableStream: false,
+        ownerDocument: null,
+        useSystemFonts: true,
+        verbosity: 0,
+        isEvalSupported: false,
+        standardFontDataUrl: new URL('/pdfjs/web/standard_fonts/', self.location.origin).href,
+        cMapUrl: new URL('/pdfjs/web/cmaps/', self.location.origin).href,
+        cMapPacked: true,
+      };
+
       if (localBytes) {
         loadingTask = pdfjsLib.getDocument({
           data: localBytes,
-          disableAutoFetch: false,
-          disableStream: false,
-          ownerDocument: null,
-          useSystemFonts: true,
-          verbosity: 0,
-          isEvalSupported: false,
+          ...pdfParams,
         });
       } else {
         // Détecter si l'application ou le navigateur est en mode hors-ligne
@@ -185,12 +192,7 @@ async function loadPdfDoc(docId, isOffline = false) {
         loadingTask = pdfjsLib.getDocument({
           url: pdfUrl,
           withCredentials: true,
-          disableAutoFetch: false,
-          disableStream: false,
-          ownerDocument: null,
-          useSystemFonts: true,
-          verbosity: 0,
-          isEvalSupported: false,
+          ...pdfParams,
         });
       }
 
@@ -319,11 +321,14 @@ self.onmessage = async (e) => {
       self.postMessage({ id, success: true, blob });
     } catch (err) {
       const isNetworkOffline = (typeof self !== 'undefined' && self.navigator && self.navigator.onLine === false);
+      const isOfflineMode = Boolean(payload?.isOffline || isNetworkOffline);
       const isExpectedOfflineError = err && (
         err.code === 'PDF_OFFLINE_UNAVAILABLE' ||
-        (err.message && err.message.includes('PDF_OFFLINE_UNAVAILABLE')) ||
-        (err.message && err.message.includes('NetworkError')) ||
-        (isNetworkOffline && err.name === 'UnknownErrorException')
+        String(err.message || '').includes('PDF_OFFLINE_UNAVAILABLE') ||
+        String(err.message || '').includes('NetworkError') ||
+        String(err.details || '').includes('NetworkError') ||
+        String(err).includes('NetworkError') ||
+        (isOfflineMode && err.name === 'UnknownErrorException')
       );
 
       if (!isExpectedOfflineError) {
