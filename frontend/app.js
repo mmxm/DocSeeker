@@ -1427,6 +1427,7 @@ document.addEventListener("DOMContentLoaded", () => {
     currentActiveOccurrences = [];
     currentDocOriginalOccurrences = null;
     lastSearchResultsData = null;
+    _lastVerticalRenderHash = '';  // Forcer un rebuild complet au prochain document (C2)
     currentActiveOccurrenceIndex = -1;
     updateOccurrenceStepperUI();
     try {
@@ -4004,7 +4005,30 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // Empreinte du dernier rendu pour éviter un rebuild DOM complet inutile (C2)
+  let _lastVerticalRenderHash = '';
+
   function renderVerticalOccurrences(docId, docTitle, occurrences, activePage, activeOccId = null) {
+    // Calculer une empreinte légère de la liste pour détecter un render identique
+    const renderHash = `${docId}|${occurrences ? occurrences.length : 0}|${occurrences && occurrences[0] ? occurrences[0].occ_id : ''}`;
+    const isSameRender = (renderHash === _lastVerticalRenderHash) && docOccurrencesList.children.length > 0;
+
+    if (isSameRender) {
+      // La liste est identique : mettre à jour seulement la carte active sans rebuild DOM
+      const cards = docOccurrencesList.querySelectorAll('.vertical-occ-card');
+      let activeIdx = -1;
+      if (activeOccId) activeIdx = (occurrences || []).findIndex(o => String(o.occ_id) === String(activeOccId));
+      if (activeIdx === -1 && activePage) activeIdx = (occurrences || []).findIndex(o => o.page_number === activePage);
+      if (activeIdx === -1) activeIdx = 0;
+      cards.forEach((card, idx) => {
+        const isActive = idx === activeIdx;
+        card.classList.toggle('active', isActive);
+        if (isActive) scrollActiveCardIntoView(card);
+      });
+      return;
+    }
+
+    _lastVerticalRenderHash = renderHash;
     verticalCropManager.clear();
     docOccurrencesList.innerHTML = "";
 
