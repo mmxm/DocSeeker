@@ -75,12 +75,17 @@ document.addEventListener("DOMContentLoaded", () => {
       if (typeof Worker !== 'undefined') {
         this.worker = new Worker('/crop-worker.js?v=8.4', { type: 'module' });
         this.worker.onmessage = (e) => {
-          const { id, success, blob, error } = e.data;
+          const { id, success, blob, error, code } = e.data;
           if (this.callbacks.has(id)) {
             const { resolve, reject } = this.callbacks.get(id);
             this.callbacks.delete(id);
-            if (success) resolve(blob);
-            else reject(new Error(error));
+            if (success) {
+              resolve(blob);
+            } else {
+              const err = new Error(error);
+              err.code = code;
+              reject(err);
+            }
           }
         };
         this.worker.onerror = (err) => {
@@ -103,7 +108,7 @@ document.addEventListener("DOMContentLoaded", () => {
       this.callbacks.clear();
     }
 
-    async renderAndCache(docId, pageNumber, highlightRects, rect, cropUrl) {
+    async renderAndCache(docId, pageNumber, highlightRects, rect, cropUrl, isOffline = false) {
       // 1. Vérification immédiate dans CacheStorage (0ms, évite tout calcul PDF redondant)
       if (cropUrl && typeof caches !== 'undefined') {
         try {
@@ -123,7 +128,7 @@ document.addEventListener("DOMContentLoaded", () => {
         this.worker.postMessage({
           id,
           type: 'RENDER_CROP',
-          payload: { docId, pageNumber, highlightRects, rect }
+          payload: { docId, pageNumber, highlightRects, rect, isOffline }
         });
       });
 
@@ -351,6 +356,39 @@ document.addEventListener("DOMContentLoaded", () => {
       this.pendingDebounce.set(img, timer);
     }
 
+    applySnippetFallback(img, vEl) {
+      if (!vEl) {
+        img.dataset.loaded = "false";
+        return;
+      }
+      if (vEl.querySelector('.vignette-snippet-fallback')) {
+        img.style.display = 'none';
+        img.dataset.loaded = "true";
+        return;
+      }
+      const snippetRaw = vEl.getAttribute('data-snippet');
+      let snippet = '';
+      try { snippet = snippetRaw ? decodeURIComponent(snippetRaw) : ''; } catch (_) {}
+      if (snippet) {
+        const fallbackDiv = document.createElement('div');
+        fallbackDiv.className = 'vignette-snippet-fallback';
+        const highlightedText = (typeof currentSearchQuery !== 'undefined' && currentSearchQuery) 
+          ? highlightTitle(snippet, currentSearchQuery) 
+          : escapeHtml(snippet);
+        fallbackDiv.innerHTML = `<div class="vignette-snippet-text">${highlightedText}</div>`;
+        const badge = vEl.querySelector('.vignette-page-badge');
+        if (badge) {
+          vEl.insertBefore(fallbackDiv, badge);
+        } else {
+          vEl.appendChild(fallbackDiv);
+        }
+        img.style.display = 'none';
+        img.dataset.loaded = "true";
+      } else {
+        img.dataset.loaded = "false";
+      }
+    }
+
     loadImg(img) {
       const srcUrl = img.getAttribute("data-src");
       if (!srcUrl || img.dataset.loaded === "true") return;
@@ -377,7 +415,7 @@ document.addEventListener("DOMContentLoaded", () => {
               if (rect && rect.length === 4) hlRects = [rect];
             }
             if (rect && rect.length === 4) {
-              window.offlineCropRenderer.renderAndCache(docId, pageNum, hlRects, rect, srcUrl).then(blob => {
+              window.offlineCropRenderer.renderAndCache(docId, pageNum, hlRects, rect, srcUrl, isOfflineMode).then(blob => {
                 if (blob) {
                   // Révoquer l'ancienne blob URL de cet élément si elle existait
                   if (img._blobUrl) {
@@ -389,13 +427,17 @@ document.addEventListener("DOMContentLoaded", () => {
                   this._blobUrls.add(blobUrl);
                   img.src = blobUrl;
                   img.dataset.loaded = "true";
+                  img.style.display = "block";
                   img.style.opacity = "1";
                 } else {
-                  img.dataset.loaded = "false";
+                  this.applySnippetFallback(img, vEl);
                 }
               }).catch(err => {
-                console.warn('[DynamicCropManager] offlineCropRenderer error:', err);
-                img.dataset.loaded = "false";
+                const isExpectedOffline = (err?.code === 'PDF_OFFLINE_UNAVAILABLE' || isOfflineMode || !navigator.onLine);
+                if (!isExpectedOffline) {
+                  console.warn('[DynamicCropManager] offlineCropRenderer error:', err);
+                }
+                this.applySnippetFallback(img, vEl);
               });
               return true;
             }
@@ -416,12 +458,20 @@ document.addEventListener("DOMContentLoaded", () => {
       img.onerror = () => {
         if (renderOfflineCrop()) return;
 
+        const vEl = img.closest('.vignette-item') || img.closest('.vertical-occ-card');
+        if (isOfflineMode && vEl) {
+          this.applySnippetFallback(img, vEl);
+          return;
+        }
+
         // En cas d'erreur standard, réessayer une fois après 500ms
         if (!img.dataset.retried) {
           img.dataset.retried = "true";
           setTimeout(() => {
             img.src = srcUrl;
           }, 500);
+        } else if (vEl) {
+          this.applySnippetFallback(img, vEl);
         }
       };
 

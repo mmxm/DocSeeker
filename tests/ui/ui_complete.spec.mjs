@@ -730,5 +730,59 @@ test.describe('DocSeeker - Suite Complète de Tests UI Automatisés (En ligne & 
     console.log('✅ [Test 12] Maintien des résultats de recherche et tri après Split View validé.');
   });
 
+  test('13. Recherche Hors-Ligne & Robustesse aux Documents sans Binaire PDF (Zéro NetworkError & Fallback Vignette)', async ({ page, context }) => {
+    await page.goto('/');
+
+    // 1. Indexer localement le Document #2 via bundle (texte FTS dans SQLite, sans binaire PDF dans IndexedDB)
+    await page.evaluate(async () => {
+      await window.downloadQueueManager.ensureInitialized();
+      await window.downloadQueueManager.ensureDocumentIndexedLocally(2);
+      if (window.pdfCacheManager) {
+        await window.pdfCacheManager.invalidate(2);
+      }
+    });
+
+    // 2. Écouter la console pour détecter toute erreur réseau inopinée
+    const networkErrors = [];
+    page.on('console', (msg) => {
+      const text = msg.text();
+      if (text.includes('NetworkError') || text.includes('[CropWorker] Error rendering crop')) {
+        networkErrors.push(text);
+      }
+    });
+
+    // 3. Couper complètement le réseau
+    await context.setOffline(true);
+
+    // 4. Activer le filtre hors-ligne et rechercher un mot présent dans le document 2
+    const filterOffline = page.locator('#filterOfflineOnly');
+    await filterOffline.check();
+
+    const searchInput = page.locator('#searchInput');
+    await searchInput.fill('le');
+    await page.evaluate(() => window.performSearch && window.performSearch('le'));
+
+    // 5. Attendre l'affichage de la carte du document 2
+    const doc2Card = page.locator('.doc-card[data-doc-id="2"]');
+    await expect(doc2Card).toBeVisible({ timeout: 10000 });
+
+    // 6. Vérifier la présence des vignettes
+    const vignettes = doc2Card.locator('.vignette-item');
+    await expect(vignettes.first()).toBeVisible({ timeout: 10000 });
+
+    // 7. Vérifier que le fallback textuel est activé avec le snippet textuel
+    const snippetFallback = vignettes.first().locator('.vignette-snippet-fallback');
+    await expect(snippetFallback).toBeVisible({ timeout: 10000 });
+    const snippetText = await snippetFallback.textContent();
+    expect(snippetText && snippetText.length).toBeGreaterThan(0);
+
+    // 8. Vérifier qu'aucune erreur réseau n'a été émise dans la console
+    expect(networkErrors).toHaveLength(0);
+    console.log('✅ [Test 13] Zéro NetworkError et fallback visuel textuel validés en mode déconnecté.');
+
+    // Rétablir la connexion
+    await context.setOffline(false);
+  });
+
 });
 

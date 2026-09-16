@@ -69,7 +69,8 @@ function getCachedPdfDoc(docId) {
  * Fonctionne 100% hors-ligne, sans requête HTTP ni cookie de session.
  */
 async function getCachedPdfBytesFromIndexedDB(docId) {
-  const normUrl = `/api/pdf/${docId}`;
+  const id = Number(docId);
+  const normUrl = `/api/pdf/${id || docId}`;
   return new Promise((resolve) => {
     try {
       if (typeof indexedDB === 'undefined') return resolve(null);
@@ -78,57 +79,67 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
       req.onsuccess = (e) => {
         const db = e.target.result;
         if (!db.objectStoreNames.contains('meta') || !db.objectStoreNames.contains('chunks')) {
-          db.close();
+          try { db.close(); } catch (_) {}
           return resolve(null);
         }
 
-        const metaTx = db.transaction('meta', 'readonly');
-        const metaStore = metaTx.objectStore('meta');
-        const metaReq = metaStore.get(normUrl);
+        try {
+          const metaTx = db.transaction('meta', 'readonly');
+          const metaStore = metaTx.objectStore('meta');
+          const metaReq = metaStore.get(normUrl);
 
-        metaReq.onerror = () => { db.close(); resolve(null); };
-        metaReq.onsuccess = () => {
-          const meta = metaReq.result;
-          if (!meta || !meta.totalBytes || meta.totalBytes <= 0) {
-            db.close();
-            return resolve(null);
-          }
+          metaReq.onerror = () => { try { db.close(); } catch (_) {} resolve(null); };
+          metaReq.onsuccess = () => {
+            const meta = metaReq.result;
+            if (!meta || !meta.totalBytes || meta.totalBytes <= 0) {
+              try { db.close(); } catch (_) {}
+              return resolve(null);
+            }
 
-          const totalBytes = meta.totalBytes;
-          const chunkTx = db.transaction('chunks', 'readonly');
-          const store = chunkTx.objectStore('chunks');
-          const prefix = `${normUrl}#`;
-          const range = IDBKeyRange.bound(prefix, prefix + '\uffff');
-          const cursorReq = store.openCursor(range);
-          const fullArray = new Uint8Array(totalBytes);
-          let readBytes = 0;
+            const totalBytes = meta.totalBytes;
+            const chunkTx = db.transaction('chunks', 'readonly');
+            const store = chunkTx.objectStore('chunks');
+            const prefix = `${normUrl}#`;
+            const range = IDBKeyRange.bound(prefix, prefix + '\uffff');
+            const cursorReq = store.openCursor(range);
+            let fullArray;
+            try {
+              fullArray = new Uint8Array(totalBytes);
+            } catch (_) {
+              try { db.close(); } catch (_) {}
+              return resolve(null);
+            }
+            let readBytes = 0;
 
-          cursorReq.onsuccess = (ev) => {
-            const cursor = ev.target.result;
-            if (cursor) {
-              const key = String(cursor.key);
-              const parts = key.slice(prefix.length).split('_');
-              if (parts.length === 2) {
-                const b = parseInt(parts[0], 10);
-                const e = parseInt(parts[1], 10);
-                const chunkBuf = cursor.value;
-                if (chunkBuf && chunkBuf.byteLength) {
-                  fullArray.set(new Uint8Array(chunkBuf), b);
-                  readBytes += chunkBuf.byteLength;
+            cursorReq.onerror = () => { try { db.close(); } catch (_) {} resolve(null); };
+            cursorReq.onsuccess = (ev) => {
+              const cursor = ev.target.result;
+              if (cursor) {
+                const key = String(cursor.key);
+                const parts = key.slice(prefix.length).split('_');
+                if (parts.length === 2) {
+                  const b = parseInt(parts[0], 10);
+                  const chunkBuf = cursor.value;
+                  if (chunkBuf && chunkBuf.byteLength) {
+                    fullArray.set(new Uint8Array(chunkBuf), b);
+                    readBytes += chunkBuf.byteLength;
+                  }
+                }
+                cursor.continue();
+              } else {
+                try { db.close(); } catch (_) {}
+                if (readBytes >= totalBytes || (meta.completed && readBytes > 0)) {
+                  resolve(fullArray.buffer);
+                } else {
+                  resolve(null);
                 }
               }
-              cursor.continue();
-            } else {
-              db.close();
-              if (readBytes >= totalBytes || (meta.completed && readBytes > 0)) {
-                resolve(fullArray.buffer);
-              } else {
-                resolve(null);
-              }
-            }
+            };
           };
-          cursorReq.onerror = () => { db.close(); resolve(null); };
-        };
+        } catch (_) {
+          try { db.close(); } catch (_) {}
+          resolve(null);
+        }
       };
     } catch (err) {
       resolve(null);
@@ -136,7 +147,7 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
   });
 }
 
-async function loadPdfDoc(docId) {
+async function loadPdfDoc(docId, isOffline = false) {
   const cached = getCachedPdfDoc(docId);
   if (cached) return cached;
 
@@ -161,7 +172,15 @@ async function loadPdfDoc(docId) {
           isEvalSupported: false,
         });
       } else {
-        // 2. Fallback réseau si en ligne (avec credentials obligatoires pour l'authentification)
+        // Détecter si l'application ou le navigateur est en mode hors-ligne
+        const isNetworkOffline = (typeof self !== 'undefined' && self.navigator && self.navigator.onLine === false);
+        if (isOffline || isNetworkOffline) {
+          const offlineErr = new Error(`PDF_OFFLINE_UNAVAILABLE: Document ${docId} non mis en cache locale`);
+          offlineErr.code = 'PDF_OFFLINE_UNAVAILABLE';
+          throw offlineErr;
+        }
+
+        // 2. Fallback réseau UNIQUEMENT si en ligne (avec credentials obligatoires pour l'authentification)
         const pdfUrl = new URL(`/api/pdf/${docId}`, self.location.origin).href;
         loadingTask = pdfjsLib.getDocument({
           url: pdfUrl,
@@ -229,10 +248,10 @@ function enqueueCrop(task) {
 }
 
 async function executeCropRender(task) {
-  const { docId, pageNumber, highlightRects, rect } = task;
+  const { docId, pageNumber, highlightRects, rect, isOffline } = task;
 
   // Wasm supprimé — calcul effectué en JS pur (traduction fidèle de crop.rs)
-  const doc = await loadPdfDoc(docId);
+  const doc = await loadPdfDoc(docId, isOffline);
   const page = await doc.getPage(pageNumber);
 
   try {
@@ -299,8 +318,23 @@ self.onmessage = async (e) => {
       const blob = await enqueueCrop(payload);
       self.postMessage({ id, success: true, blob });
     } catch (err) {
-      console.error('[CropWorker] Error rendering crop:', err);
-      self.postMessage({ id, success: false, error: (err.message || String(err)) + '\nSTACK:\n' + (err.stack || '') });
+      const isNetworkOffline = (typeof self !== 'undefined' && self.navigator && self.navigator.onLine === false);
+      const isExpectedOfflineError = err && (
+        err.code === 'PDF_OFFLINE_UNAVAILABLE' ||
+        (err.message && err.message.includes('PDF_OFFLINE_UNAVAILABLE')) ||
+        (err.message && err.message.includes('NetworkError')) ||
+        (isNetworkOffline && err.name === 'UnknownErrorException')
+      );
+
+      if (!isExpectedOfflineError) {
+        console.error('[CropWorker] Error rendering crop:', err);
+      }
+      self.postMessage({
+        id,
+        success: false,
+        code: isExpectedOfflineError ? 'PDF_OFFLINE_UNAVAILABLE' : 'RENDER_ERROR',
+        error: (err.message || String(err)) + (!isExpectedOfflineError && err.stack ? '\nSTACK:\n' + err.stack : '')
+      });
     }
   }
 };
