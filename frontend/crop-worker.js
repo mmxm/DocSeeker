@@ -48,7 +48,10 @@ const MAX_CONCURRENT_RENDERS = 1;
 let activeRenders = 0;
 const renderQueue = [];
 
-// Cache de documents PDF.js ouverts récemment (évite de réanalyser le PDF pour chaque occurrence d'un même doc)
+// Cache LRU de documents PDF.js : la taille est adaptée à la RAM disponible.
+// Un PDF chargé en mémoire dans ce Worker peut peser 2× sa taille sur disque
+// (Uint8Array IndexedDB + copie interne PDF.js). 2 = équilibre performance/mémoire.
+const PDF_LRU_MAX = (typeof navigator !== 'undefined' && navigator.deviceMemory && navigator.deviceMemory <= 4) ? 1 : 2;
 const pdfDocCache = new Map(); // docId -> { doc, lastUsed }
 const loadingPromises = new Map(); // docId -> Promise<doc>
 
@@ -170,8 +173,8 @@ async function loadPdfDoc(docId) {
 
       const doc = await loadingTask.promise;
 
-      // Nettoyage LRU si plus de 4 documents ouverts en mémoire
-      if (pdfDocCache.size >= 4) {
+      // Nettoyage LRU si le cache dépasse la limite adaptative
+      while (pdfDocCache.size >= PDF_LRU_MAX) {
         let oldestId = null;
         let oldestTime = Infinity;
         for (const [id, item] of pdfDocCache.entries()) {
@@ -181,11 +184,9 @@ async function loadPdfDoc(docId) {
           }
         }
         if (oldestId) {
-          try {
-            pdfDocCache.get(oldestId).doc.destroy();
-          } catch (e) {}
+          try { pdfDocCache.get(oldestId).doc.destroy(); } catch (e) {}
           pdfDocCache.delete(oldestId);
-        }
+        } else break;
       }
 
       pdfDocCache.set(docId, { doc, lastUsed: Date.now() });
