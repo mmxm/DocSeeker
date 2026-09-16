@@ -210,7 +210,7 @@ test.describe('DocSeeker - Suite Complète de Tests UI Automatisés (En ligne & 
     await filterOffline.uncheck();
   });
 
-  test('6. Recherche Globale & Consultation Split View en Full Hors-Ligne (Coupure Réseau)', async ({ page, context }) => {
+  test('6. Recherche Globale & Consultation Split View en Full Hors-Ligne (Coupure Réseau & F5)', async ({ page, context }) => {
     await page.goto('/');
 
     // 1. S'assurer que le document 1 est en cache
@@ -223,22 +223,36 @@ test.describe('DocSeeker - Suite Complète de Tests UI Automatisés (En ligne & 
           await new Promise(r => setTimeout(r, 200));
         }
       }
+      if ('serviceWorker' in navigator) {
+        await navigator.serviceWorker.ready;
+      }
     });
 
     // 2. Couper complètement la connexion réseau
     console.log('[Test 6] Coupure intégrale du réseau (Simulation Full Hors-Ligne)...');
     await context.setOffline(true);
 
-    // 3. Effectuer une recherche en mode déconnecté
+    // 3. Recharger la page (F5) en mode déconnecté pour valider l'étanchéité complète de l'App Shell
+    console.log('[Test 6] Rechargement de la page (F5) sans réseau...');
+    await page.reload();
+
+    await page.evaluate(async () => {
+      if (window.downloadQueueManager) {
+        await window.downloadQueueManager.ensureInitialized();
+        await window.downloadQueueManager.getAllCachedDocs();
+      }
+    });
+
+    // 4. Effectuer une recherche en mode déconnecté
     const searchInput = page.locator('#searchInput');
     await searchInput.fill('grossess');
     await page.evaluate(() => window.performSearch && window.performSearch('grossess'));
 
-    // 4. Vérifier que le résultat est affiché instantanément via SQLite-Wasm local
+    // 5. Vérifier que le résultat est affiché instantanément via SQLite-Wasm local
     const doc1Card = page.locator('.doc-card[data-doc-id="1"]');
     await expect(doc1Card).toBeVisible({ timeout: 15000 });
 
-    // 5. Vérifier que les vignettes sont générées localement par crop-worker.js
+    // 6. Vérifier que les vignettes sont générées localement par crop-worker.js
     const vignettes = doc1Card.locator('.vignette-item');
     await expect(vignettes.first()).toBeVisible({ timeout: 10000 });
     const firstImg = vignettes.first().locator('.vignette-crop-img');
@@ -249,23 +263,31 @@ test.describe('DocSeeker - Suite Complète de Tests UI Automatisés (En ligne & 
       return await firstImg.evaluate((img) => img.src);
     }, { timeout: 10000 }).toMatch(/^blob:/);
 
-    // 6. Ouvrir la consultation dans le visualiseur Split View
-    const titleLink = doc1Card.locator('.doc-title-main');
-    await titleLink.click();
+    // 7. Ouvrir la consultation dans le visualiseur Split View par clic sur la vignette
+    await vignettes.first().click();
 
-    // 7. Vérifier que le visualiseur s'ouvre
+    // 8. Vérifier que le visualiseur s'ouvre
     const viewerPane = page.locator('#viewerPane');
     await expect(viewerPane).toBeVisible({ timeout: 12000 });
 
-    // 8. Vérifier le titre du document dans le viewer
+    // 9. Vérifier le titre du document dans le viewer
     const viewerDocTitle = page.locator('#viewerDocTitle');
     await expect(viewerDocTitle).toContainText('Grossesse');
 
-    // 9. Vérifier que les occurrences internes au document sont générées hors-ligne
+    // 10. Vérifier que les occurrences internes au document sont générées hors-ligne
     const docOccList = page.locator('#docOccurrencesList');
     await expect(docOccList).toBeVisible({ timeout: 10000 });
 
-    console.log('[Test 6] Recherche et consultation Split View 100% hors-ligne validées.');
+    // 11. Vérifier que le panneau latéral a synchronisé l'occurrence active
+    const activeOccCard = docOccList.locator('.vertical-occ-card.active');
+    await expect(activeOccCard).toBeVisible({ timeout: 10000 });
+
+    // 12. Vérifier que l'iframe du viewer PDF.js est bien configuré avec viewer.html
+    const pdfFrame = page.locator('#pdfFrame');
+    await expect(pdfFrame).toBeVisible({ timeout: 10000 });
+    await expect(pdfFrame).toHaveAttribute('src', /\/pdfjs\/web\/viewer\.html/, { timeout: 10000 });
+
+    console.log('[Test 6] Recherche et consultation Split View 100% hors-ligne après F5 validées.');
 
     // Rétablir la connexion
     await context.setOffline(false);
@@ -512,6 +534,22 @@ test.describe('DocSeeker - Suite Complète de Tests UI Automatisés (En ligne & 
     expect(titleAttr).toContain('(Titre)');
 
     console.log('✅ [Test 10] Parité absolue hors-ligne validée : Titre p. 267 en 1ère vignette et 25 vignettes affichées.');
+
+    // 8. Cliquer sur la vignette p. 267 et vérifier l'ouverture et la synchronisation exacte
+    await firstVignette.click();
+    const viewerPane = page.locator('#viewerPane');
+    await expect(viewerPane).toBeVisible({ timeout: 10000 });
+    const viewerPageBadge = page.locator('#viewerPageBadge');
+    await expect(viewerPageBadge).toHaveText('Page 267');
+
+    const activeOcc = page.locator('#docOccurrencesList .vertical-occ-card.active');
+    await expect(activeOcc).toBeVisible({ timeout: 10000 });
+    await expect(activeOcc.locator('.vertical-occ-page')).toHaveText('Page 267');
+
+    // Fermer le viewer
+    const closeBtn = page.locator('#closeViewerBtn');
+    await closeBtn.click();
+    await expect(viewerPane).not.toBeVisible();
   });
 
   test('11. Consistance du Bouton Supprimer du Cache (Nuage Barré), Robustesse aux Bascules Rapides et Réinitialisation Complète', async ({ page }) => {

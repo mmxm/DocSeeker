@@ -27,7 +27,7 @@ class DownloadQueueManager {
   _initWorker() {
     if (typeof Worker !== 'undefined') {
       try {
-        this.worker = new Worker('/offline-search-worker.js?v=8.3', { type: 'module' });
+        this.worker = new Worker('/offline-search-worker.js?v=8.4', { type: 'module' });
         this.worker.onerror = (err) => {
           console.warn('[DownloadQueueManager] Erreur ou échec du Web Worker offline:', err);
           this._workerFailed = true;
@@ -67,7 +67,7 @@ class DownloadQueueManager {
     }
   }
 
-  async ensureInitialized(timeoutMs = 1500) {
+  async ensureInitialized(timeoutMs = 5000) {
     if (this._workerFailed) return;
     if (this._initPromise) {
       await Promise.race([
@@ -77,7 +77,7 @@ class DownloadQueueManager {
     }
   }
 
-  sendToWorker(type, payload, timeoutMs = 3000) {
+  sendToWorker(type, payload, timeoutMs = 10000) {
     if (!this.worker || this._workerFailed) {
       return Promise.reject(new Error("Worker offline non disponible"));
     }
@@ -623,7 +623,9 @@ class DownloadQueueManager {
         }
       }
     } catch (err) {
-      console.warn('[DownloadQueueManager] Erreur synchronisation sync/check:', err);
+      if (navigator.onLine) {
+        console.warn('[DownloadQueueManager] Erreur synchronisation sync/check:', err);
+      }
     }
   }
 }

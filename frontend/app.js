@@ -73,7 +73,7 @@ document.addEventListener("DOMContentLoaded", () => {
       this.reqId = 0;
       this.callbacks = new Map();
       if (typeof Worker !== 'undefined') {
-        this.worker = new Worker('/crop-worker.js?v=8.3', { type: 'module' });
+        this.worker = new Worker('/crop-worker.js?v=8.4', { type: 'module' });
         this.worker.onmessage = (e) => {
           const { id, success, blob, error } = e.data;
           if (this.callbacks.has(id)) {
@@ -3624,6 +3624,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
   function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0, targetOccId = null) {
     const numericDocId = Number(docId);
+    targetPage = parseInt(targetPage, 10) || 1;
     const isSameDoc = (Number(currentActiveDocId) === numericDocId);
     if (!isSameDoc && currentActiveDocId && window.pdfCacheManager) {
       window.pdfCacheManager.pauseDownload(currentActiveDocId);
@@ -3676,11 +3677,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
     currentActiveOccurrences = occurrences || [];
     let initialIdx = 0;
-    if (targetOccId && occurrences && occurrences.length > 0) {
-      const foundIdx = occurrences.findIndex(o => String(o.occ_id) === String(targetOccId));
+    if (targetOccId && targetPage && occurrences && occurrences.length > 0) {
+      const foundIdx = occurrences.findIndex(o => String(o.occ_id) === String(targetOccId) && Number(o.page_number) === Number(targetPage));
       if (foundIdx !== -1) initialIdx = foundIdx;
-    } else if (targetPage && occurrences && occurrences.length > 0) {
-      const foundIdx = occurrences.findIndex(o => o.page_number === targetPage);
+    }
+    if (initialIdx === 0 && targetPage && occurrences && occurrences.length > 0) {
+      const foundIdx = occurrences.findIndex(o => Number(o.page_number) === Number(targetPage));
+      if (foundIdx !== -1) initialIdx = foundIdx;
+    }
+    if (initialIdx === 0 && targetOccId && occurrences && occurrences.length > 0) {
+      const foundIdx = occurrences.findIndex(o => String(o.occ_id) === String(targetOccId));
       if (foundIdx !== -1) initialIdx = foundIdx;
     }
     currentActiveOccurrenceIndex = currentActiveOccurrences.length > 0 ? initialIdx : -1;
@@ -3740,13 +3746,16 @@ document.addEventListener("DOMContentLoaded", () => {
           if (fullOccs.length > 0 && (!occurrences || fullOccs.length !== occurrences.length)) {
             currentDocOriginalOccurrences = fullOccs;
             currentActiveOccurrences = fullOccs;
-            // Priorité absolue à l'extrait sélectionné ou à la page cible tant que le visualiseur n'a pas été manipulé
+            // Priorité absolue à l'extrait sélectionné sur la page cible
             let activeIdx = -1;
-            if (targetOccId) {
-              activeIdx = fullOccs.findIndex(o => String(o.occ_id) === String(targetOccId));
+            if (targetOccId && targetPage) {
+              activeIdx = fullOccs.findIndex(o => String(o.occ_id) === String(targetOccId) && Number(o.page_number) === Number(targetPage));
             }
             if (activeIdx === -1 && targetPage) {
-              activeIdx = fullOccs.findIndex(o => o.page_number === targetPage);
+              activeIdx = fullOccs.findIndex(o => Number(o.page_number) === Number(targetPage));
+            }
+            if (activeIdx === -1 && targetOccId) {
+              activeIdx = fullOccs.findIndex(o => String(o.occ_id) === String(targetOccId));
             }
             if (activeIdx === -1) {
               // Priorité à targetPage (source de vérité du clic) : le viewer iframe n'a
@@ -4073,8 +4082,9 @@ document.addEventListener("DOMContentLoaded", () => {
       // La liste est identique : mettre à jour seulement la carte active sans rebuild DOM
       const cards = docOccurrencesList.querySelectorAll('.vertical-occ-card');
       let activeIdx = -1;
-      if (activeOccId) activeIdx = (occurrences || []).findIndex(o => String(o.occ_id) === String(activeOccId));
-      if (activeIdx === -1 && activePage) activeIdx = (occurrences || []).findIndex(o => o.page_number === activePage);
+      if (activeOccId && activePage) activeIdx = (occurrences || []).findIndex(o => String(o.occ_id) === String(activeOccId) && Number(o.page_number) === Number(activePage));
+      if (activeIdx === -1 && activePage) activeIdx = (occurrences || []).findIndex(o => Number(o.page_number) === Number(activePage));
+      if (activeIdx === -1 && activeOccId) activeIdx = (occurrences || []).findIndex(o => String(o.occ_id) === String(activeOccId));
       if (activeIdx === -1) activeIdx = 0;
       cards.forEach((card, idx) => {
         const isActive = idx === activeIdx;
@@ -4096,11 +4106,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const placeholderSvg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='120'%3E%3Crect width='100%25' height='100%25' fill='%23f1f5f9'/%3E%3C/svg%3E";
 
     let activeTargetIndex = -1;
-    if (activeOccId && occurrences) {
-      activeTargetIndex = occurrences.findIndex(o => String(o.occ_id) === String(activeOccId));
+    if (activeOccId && activePage && occurrences) {
+      activeTargetIndex = occurrences.findIndex(o => String(o.occ_id) === String(activeOccId) && Number(o.page_number) === Number(activePage));
     }
     if (activeTargetIndex === -1 && activePage && occurrences) {
-      activeTargetIndex = occurrences.findIndex(o => o.page_number === activePage);
+      activeTargetIndex = occurrences.findIndex(o => Number(o.page_number) === Number(activePage));
+    }
+    if (activeTargetIndex === -1 && activeOccId && occurrences) {
+      activeTargetIndex = occurrences.findIndex(o => String(o.occ_id) === String(activeOccId));
     }
     if (activeTargetIndex === -1 && occurrences && occurrences.length > 0) {
       activeTargetIndex = 0;
@@ -4149,6 +4162,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function goToPageAndScrollToOccurrence(pageNumber, rect = null, yRatio = 0.0) {
     try {
+      const pNum = parseInt(pageNumber, 10) || 1;
+      pageNumber = pNum;
       const win = pdfFrame.contentWindow;
       if (!win) return;
 
@@ -4157,8 +4172,17 @@ document.addEventListener("DOMContentLoaded", () => {
         const docViewer = win.document;
         const container = docViewer.getElementById("viewerContainer");
 
+        const maxPages = app.pagesCount || (app.pdfDocument ? app.pdfDocument.numPages : 0);
+        if (maxPages > 0 && pageNumber > maxPages) {
+          pageNumber = maxPages;
+        }
+
         if (app.page !== pageNumber) {
-          app.page = pageNumber;
+          try {
+            app.page = pageNumber;
+          } catch (pageErr) {
+            console.warn('[DocSeeker] Impossible d\'assigner app.page immédiatement:', pageErr);
+          }
         }
 
         const alignOccurrence = () => {
@@ -4512,6 +4536,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Chargement et affichage discret uniquement du numéro de commit
   async function loadAppVersion() {
+    if (!navigator.onLine) return;
     try {
       const res = await apiFetch("/api/version");
       if (res.ok) {

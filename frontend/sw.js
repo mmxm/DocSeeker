@@ -7,20 +7,20 @@
  * 3. Routage résilient avec fallback automatique sur incident réseau.
  */
 
-const CACHE_NAME = 'docseeker-app-shell-v13';
+const CACHE_NAME = 'docseeker-app-shell-v14';
 const CROP_CACHE_NAME = 'docseeker_offline_crops';
 const COVER_CACHE_NAME = 'docseeker_covers';
 
 const APP_SHELL_ASSETS = [
   '/',
   '/index.html',
-  '/style.css?v=8.3',
-  '/app.js?v=8.3',
-  '/pdf-cache.js?v=8.3',
-  '/download-queue-manager.js?v=8.3',
-  '/offline-search-worker.js?v=8.3',
-  '/worker-setup.js?v=8.3',
-  '/crop-worker.js?v=8.3',
+  '/style.css?v=8.4',
+  '/app.js?v=8.4',
+  '/pdf-cache.js?v=8.4',
+  '/download-queue-manager.js?v=8.4',
+  '/offline-search-worker.js?v=8.4',
+  '/worker-setup.js?v=8.4',
+  '/crop-worker.js?v=8.4',
   '/favicon.ico',
   '/placeholder-cover.png',
   '/wasm/search_wasm/search_wasm.js',
@@ -32,6 +32,35 @@ const APP_SHELL_ASSETS = [
   '/pdfjs/web/viewer.html',
   '/pdfjs/web/viewer.mjs',
   '/pdfjs/web/viewer.css',
+  '/pdfjs/web/images/toolbarButton-sidebarToggle.svg',
+  '/pdfjs/web/images/toolbarButton-viewThumbnail.svg',
+  '/pdfjs/web/images/toolbarButton-viewOutline.svg',
+  '/pdfjs/web/images/toolbarButton-viewAttachments.svg',
+  '/pdfjs/web/images/toolbarButton-viewLayers.svg',
+  '/pdfjs/web/images/toolbarButton-search.svg',
+  '/pdfjs/web/images/toolbarButton-zoomOut.svg',
+  '/pdfjs/web/images/toolbarButton-zoomIn.svg',
+  '/pdfjs/web/images/toolbarButton-secondaryToolbarToggle.svg',
+  '/pdfjs/web/images/toolbarButton-pageUp.svg',
+  '/pdfjs/web/images/toolbarButton-pageDown.svg',
+  '/pdfjs/web/images/toolbarButton-presentationMode.svg',
+  '/pdfjs/web/images/toolbarButton-print.svg',
+  '/pdfjs/web/images/toolbarButton-download.svg',
+  '/pdfjs/web/images/toolbarButton-bookmark.svg',
+  '/pdfjs/web/images/toolbarButton-openFile.svg',
+  '/pdfjs/web/images/findbarButton-previous.svg',
+  '/pdfjs/web/images/findbarButton-next.svg',
+  '/pdfjs/web/images/secondaryToolbarButton-firstPage.svg',
+  '/pdfjs/web/images/secondaryToolbarButton-lastPage.svg',
+  '/pdfjs/web/images/secondaryToolbarButton-rotateCw.svg',
+  '/pdfjs/web/images/secondaryToolbarButton-rotateCcw.svg',
+  '/pdfjs/web/images/secondaryToolbarButton-handTool.svg',
+  '/pdfjs/web/images/secondaryToolbarButton-selectTool.svg',
+  '/pdfjs/web/images/secondaryToolbarButton-documentProperties.svg',
+  '/pdfjs/web/images/treeitem-collapsed.svg',
+  '/pdfjs/web/images/treeitem-expanded.svg',
+  '/pdfjs/web/images/loading.svg',
+  '/pdfjs/web/images/loading-icon.gif',
 ];
 
 // Installation du Service Worker et pré-chargement de l'App Shell
@@ -98,7 +127,6 @@ self.addEventListener('fetch', (event) => {
       caches.open(CROP_CACHE_NAME).then(async (cache) => {
         const cached = await cache.match(event.request);
         if (cached) return cached;
-        // Si en ligne, tenter le réseau serveur
         return fetch(event.request).then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
             cache.put(event.request, networkResponse.clone());
@@ -106,7 +134,6 @@ self.addEventListener('fetch', (event) => {
           }
           return new Response('Offline crop not available', { status: 503, statusText: 'Offline Crop Missing' });
         }).catch(async () => {
-          // En mode hors-ligne ou si inaccessible : renvoyer 503 pour déclencher img.onerror et le rendu local
           return new Response('Offline crop not available', { status: 503, statusText: 'Offline Crop Missing' });
         });
       })
@@ -117,64 +144,166 @@ self.addEventListener('fetch', (event) => {
   // 3. Streaming PDF (/api/pdf/{id}) : Network First avec fallback IndexedDB local.
   if (url.pathname.startsWith('/api/pdf/')) {
     event.respondWith(
-      fetch(event.request).catch(async () => {
+      (async () => {
         const id = url.pathname.replace('/api/pdf/', '').split('/')[0];
-        const pdfBytes = await getCachedPdfBytesFromIndexedDB(id);
-        if (pdfBytes) {
-          return new Response(pdfBytes, {
-            status: 200,
-            headers: {
-              'Content-Type': 'application/pdf',
-              'Content-Length': String(pdfBytes.byteLength),
-              'Accept-Ranges': 'bytes',
-            },
+        
+        // En mode déconnecté : servir immédiatement depuis IndexedDB
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+          try {
+            const pdfBytes = await getCachedPdfBytesFromIndexedDB(id);
+            if (pdfBytes) {
+              return new Response(pdfBytes, {
+                status: 200,
+                headers: {
+                  'Content-Type': 'application/pdf',
+                  'Content-Length': String(pdfBytes.byteLength),
+                  'Accept-Ranges': 'bytes',
+                },
+              });
+            }
+          } catch (e) {}
+          return new Response('PDF non disponible hors-ligne', {
+            status: 503,
+            statusText: 'PDF Offline Unavailable',
+            headers: { 'Content-Type': 'text/plain' },
           });
         }
-        return new Response('PDF non disponible hors-ligne', {
-          status: 503,
-          statusText: 'PDF Offline Unavailable',
-          headers: { 'Content-Type': 'text/plain' },
-        });
-      })
+
+        // En ligne : Network direct avec protection d'annulation
+        try {
+          return await fetch(event.request);
+        } catch (netErr) {
+          // Si le client a annulé (AbortError) ou si le réseau est tombé :
+          try {
+            const pdfBytes = await getCachedPdfBytesFromIndexedDB(id);
+            if (pdfBytes) {
+              return new Response(pdfBytes, {
+                status: 200,
+                headers: {
+                  'Content-Type': 'application/pdf',
+                  'Content-Length': String(pdfBytes.byteLength),
+                  'Accept-Ranges': 'bytes',
+                },
+              });
+            }
+          } catch (fallbackErr) {}
+          return new Response('Ressource non disponible', {
+            status: 503,
+            headers: { 'Content-Type': 'text/plain' }
+          });
+        }
+      })()
     );
     return;
   }
 
-  // 4. Navigation principale (F5 / chargement de page sans wifi) : Servir index.html depuis le cache
+  // 4. Navigation (F5 / chargement de page principale OU iframe viewer.html)
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request).catch(async () => {
-        const cached = await caches.match('/index.html') || await caches.match('/');
-        if (cached) return cached;
-        return new Response('Mode hors-ligne DocSeeker', { headers: { 'Content-Type': 'text/html' } });
-      })
+      (async () => {
+        // Cas A : Chargement de l'iframe du viewer PDF.js (/pdfjs/web/viewer.html)
+        if (url.pathname.includes('/pdfjs/web/viewer.html')) {
+          const cachedViewer = await caches.match('/pdfjs/web/viewer.html', { ignoreSearch: true });
+          if (cachedViewer) {
+            return cachedViewer;
+          }
+          try {
+            const netRes = await fetch(event.request);
+            if (netRes && netRes.status === 200) {
+              const copy = netRes.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put('/pdfjs/web/viewer.html', copy));
+            }
+            return netRes;
+          } catch (e) {
+            const retry = await caches.match('/pdfjs/web/viewer.html', { ignoreSearch: true });
+            if (retry) return retry;
+            return new Response('Lecteur PDF non disponible', {
+              status: 503,
+              headers: { 'Content-Type': 'text/plain' }
+            });
+          }
+        }
+
+        // Cas B : Navigation vers l'application principale (F5 / /index.html)
+        const cachedApp = await caches.match('/index.html', { ignoreSearch: true }) || await caches.match('/', { ignoreSearch: true });
+        if (cachedApp && typeof navigator !== 'undefined' && navigator.onLine === false) {
+          return cachedApp;
+        }
+
+        try {
+          const netRes = await fetch(event.request);
+          if (netRes && netRes.status === 200) {
+            const copy = netRes.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', copy));
+          }
+          return netRes;
+        } catch (e) {
+          if (cachedApp) return cachedApp;
+          return new Response('Mode hors-ligne DocSeeker', {
+            status: 200,
+            headers: { 'Content-Type': 'text/html; charset=utf-8' }
+          });
+        }
+      })()
     );
     return;
   }
 
-  // 5. App Shell (HTML, CSS, JS, Wasm) : Cache First avec tolérance query string et mise à jour en arrière-plan
+  // 5. App Shell & Assets statiques (HTML, CSS, JS, Wasm, SVG, Images) : Cache First
   if (!url.pathname.startsWith('/api/')) {
     event.respondWith(
-      caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {
-        if (cachedResponse) {
-          // Revalidation discrète en tâche de fond si connecté
-          fetch(event.request).then((netRes) => {
-            if (netRes && netRes.status === 200) {
-              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, netRes));
-            }
-          }).catch(() => {});
-          return cachedResponse;
+      (async () => {
+        const cached = await caches.match(event.request, { ignoreSearch: true }) || await caches.match(url.pathname, { ignoreSearch: true });
+        if (cached) {
+          if (typeof navigator !== 'undefined' && navigator.onLine) {
+            fetch(event.request).then((netRes) => {
+              if (netRes && netRes.status === 200) {
+                caches.open(CACHE_NAME).then((cache) => cache.put(event.request, netRes));
+              }
+            }).catch(() => {});
+          }
+          return cached;
         }
-        return fetch(event.request).catch(async () => {
-          // Fallback ultime : chercher sans paramètre de requête
-          return caches.match(url.pathname, { ignoreSearch: true });
-        });
-      })
+
+        try {
+          const netRes = await fetch(event.request);
+          if (netRes && netRes.status === 200) {
+            const copy = netRes.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          }
+          return netRes;
+        } catch (fetchErr) {
+          // GARANTIE ABSOLUE : Ne JAMAIS résoudre avec undefined !
+          if (url.pathname.endsWith('.svg')) {
+            return new Response('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"/>', {
+              status: 200,
+              headers: { 'Content-Type': 'image/svg+xml' }
+            });
+          }
+          if (url.pathname.endsWith('.png') || url.pathname.endsWith('.ico')) {
+            return new Response(new Uint8Array(0), {
+              status: 200,
+              headers: { 'Content-Type': 'image/png' }
+            });
+          }
+          if (url.pathname.endsWith('.css')) {
+            return new Response('', {
+              status: 200,
+              headers: { 'Content-Type': 'text/css' }
+            });
+          }
+          return new Response('Asset indisponible hors-ligne', {
+            status: 404,
+            statusText: 'Not Found Offline',
+            headers: { 'Content-Type': 'text/plain' }
+          });
+        }
+      })()
     );
     return;
   }
 
-  // 5. Requêtes API standard : Network First avec fallback
+  // 6. Requêtes API standard : Network First avec fallback
   event.respondWith(
     fetch(event.request).catch(() => {
       return new Response(JSON.stringify({ error: 'Réseau indisponible' }), {
@@ -202,7 +331,7 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
       openReq.onsuccess = (evt) => {
         const db = evt.target.result;
         if (!db.objectStoreNames.contains('meta') || !db.objectStoreNames.contains('chunks')) {
-          db.close();
+          try { db.close(); } catch (e) {}
           return resolve(null);
         }
 
@@ -211,24 +340,36 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
           const metaStore = metaTx.objectStore('meta');
           const metaReq = metaStore.get(normUrl);
 
-          metaReq.onerror = () => { db.close(); resolve(null); };
+          metaReq.onerror = () => { try { db.close(); } catch (e) {} resolve(null); };
           metaReq.onsuccess = () => {
             const meta = metaReq.result;
             if (!meta || !meta.totalBytes || meta.totalBytes <= 0) {
-              db.close();
+              try { db.close(); } catch (e) {}
               return resolve(null);
             }
 
             const totalBytes = meta.totalBytes;
+            // Limite de sécurité : éviter d'allouer plus de 500 Mo d'un coup dans le Service Worker
+            if (totalBytes > 500 * 1024 * 1024) {
+              try { db.close(); } catch (e) {}
+              return resolve(null);
+            }
+
             const chunkTx = db.transaction('chunks', 'readonly');
             const chunkStore = chunkTx.objectStore('chunks');
             const prefix = `${normUrl}#`;
             const range = IDBKeyRange.bound(prefix, prefix + '\uffff');
             const cursorReq = chunkStore.openCursor(range);
-            const fullArray = new Uint8Array(totalBytes);
+            let fullArray;
+            try {
+              fullArray = new Uint8Array(totalBytes);
+            } catch (allocErr) {
+              try { db.close(); } catch (e) {}
+              return resolve(null);
+            }
             let readBytes = 0;
 
-            cursorReq.onerror = () => { db.close(); resolve(null); };
+            cursorReq.onerror = () => { try { db.close(); } catch (e) {} resolve(null); };
             cursorReq.onsuccess = (e) => {
               const cursor = e.target.result;
               if (cursor) {
@@ -244,7 +385,7 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
                 }
                 cursor.continue();
               } else {
-                db.close();
+                try { db.close(); } catch (e) {}
                 if (readBytes >= totalBytes || (meta.completed && readBytes > 0)) {
                   resolve(fullArray.buffer);
                 } else {
@@ -254,7 +395,7 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
             };
           };
         } catch (txErr) {
-          db.close();
+          try { db.close(); } catch (e) {}
           resolve(null);
         }
       };
@@ -263,4 +404,3 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
     }
   });
 }
-
