@@ -30,8 +30,9 @@ ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
     CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc \
     CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc
 
-# 1. Copie des fichiers de dépendances
+# 1. Copie des fichiers de dépendances et crates locaux
 COPY backend-rust/Cargo.toml backend-rust/Cargo.lock* ./backend-rust/
+COPY backend-rust/crates/ ./backend-rust/crates/
 WORKDIR /build/backend-rust
 
 # 2. Téléchargement automatique de la bibliothèque libpdfium selon la TARGETARCH
@@ -55,9 +56,10 @@ RUN mkdir -p src && echo "fn main() {}" > src/main.rs && \
     cargo build --release --target "$RUST_TARGET" && \
     rm -rf src target/"$RUST_TARGET"/release/deps/docseeker_backend* target/"$RUST_TARGET"/release/docseeker-backend*
 
-# 4. Copie du code source applicatif réel et du frontend
+# 4. Copie du code source applicatif réel, des crates internes et du frontend
 COPY backend-rust/src/ ./src/
 COPY backend-rust/tests/ ./tests/
+COPY backend-rust/crates/ ./crates/
 COPY frontend/ /build/frontend/
 
 # 5. Compilation applicative ultra-rapide et copie vers un chemin fixe

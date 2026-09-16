@@ -27,6 +27,13 @@ jobs:
         with:
           workspaces: backend-rust
 
+      - name: Download libpdfium for tests
+        run: |
+          mkdir -p backend-rust/lib
+          curl -sL https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz | tar -xz -C backend-rust/lib
+          if [ -f backend-rust/lib/lib/libpdfium.so ]; then cp backend-rust/lib/lib/libpdfium.so backend-rust/lib/libpdfium.so; fi
+          sudo cp backend-rust/lib/libpdfium.so /usr/lib/
+
       - name: Run Test Suite (Cargo Test)
         run: cargo test --manifest-path backend-rust/Cargo.toml
 
