@@ -307,6 +307,7 @@ document.addEventListener("DOMContentLoaded", () => {
       this.rootMargin = rootMargin;
       this.debounceMs = debounceMs;
       this.pendingDebounce = new Map(); // img element -> timerId
+      this._blobUrls = new Set();       // blob: URLs créées (pour révocation à clear())
       this.observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
           const img = entry.target;
@@ -378,7 +379,15 @@ document.addEventListener("DOMContentLoaded", () => {
             if (rect && rect.length === 4) {
               window.offlineCropRenderer.renderAndCache(docId, pageNum, hlRects, rect, srcUrl).then(blob => {
                 if (blob) {
-                  img.src = URL.createObjectURL(blob);
+                  // Révoquer l'ancienne blob URL de cet élément si elle existait
+                  if (img._blobUrl) {
+                    URL.revokeObjectURL(img._blobUrl);
+                    this._blobUrls.delete(img._blobUrl);
+                  }
+                  const blobUrl = URL.createObjectURL(blob);
+                  img._blobUrl = blobUrl;
+                  this._blobUrls.add(blobUrl);
+                  img.src = blobUrl;
                   img.dataset.loaded = "true";
                   img.style.opacity = "1";
                 } else {
@@ -424,6 +433,11 @@ document.addEventListener("DOMContentLoaded", () => {
         clearTimeout(timer);
       }
       this.pendingDebounce.clear();
+      // Révoquer toutes les blob: URLs de la session précédente pour libérer la mémoire
+      for (const url of this._blobUrls) {
+        try { URL.revokeObjectURL(url); } catch (e) {}
+      }
+      this._blobUrls.clear();
       if (window.offlineCropRenderer) {
         window.offlineCropRenderer.clearQueue();
       }
