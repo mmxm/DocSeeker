@@ -3690,8 +3690,11 @@ document.addEventListener("DOMContentLoaded", () => {
               activeIdx = fullOccs.findIndex(o => o.page_number === targetPage);
             }
             if (activeIdx === -1) {
-              const curPage = getCurrentViewerPage() || targetPage;
-              activeIdx = findClosestOccurrenceIndex(fullOccs, curPage);
+              // Priorité à targetPage (source de vérité du clic) : le viewer iframe n'a
+              // pas encore navigué vers la page cible quand cette callback async s'exécute,
+              // donc getCurrentViewerPage() renverrait 1 (page par défaut) et ferait scroller
+              // le panneau vers la 1ère occurrence au lieu de celle cliquée.
+              activeIdx = findClosestOccurrenceIndex(fullOccs, targetPage);
             }
             currentActiveOccurrenceIndex = activeIdx >= 0 ? activeIdx : 0;
             updateOccurrenceStepperUI();
