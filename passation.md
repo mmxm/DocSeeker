@@ -2,10 +2,10 @@
 
 > **Document destiné au successeur technique**  
 > **Branches Git de référence :** `main` et `feat/offline-shared-search-engine`  
-> **Dernier commit validé :** `9cf191e`  
-> **Date de passation :** 16 Septembre 2026  
+> **Dernier commit validé :** voir `git log --oneline -5`  
+> **Date de passation :** 16 Septembre 2026 (mise à jour en cours)  
 > **Auteur sortant :** Agent IA Antigravity (Google DeepMind)  
-> **Statut global :** ✅ Moteur en ligne & hors-ligne 100% opérationnels, suite de 11 tests UI Playwright validée à 100% (0 régression, 0 erreur console).
+> **Statut global :** ✅ Moteur en ligne & hors-ligne 100% opérationnels. Chantier d'optimisation RAM/CPU validé par code review et tests automatiques (12/12 Playwright passés, 0 erreur).
 
 ---
 
@@ -254,3 +254,44 @@ Si tu souhaites poursuivre l'amélioration de DocSeeker, voici les chantiers nat
 ---
 
 Bonne continuation ! Le projet repose sur des fondations solides, modulaires et intégralement validées par les tests automatisés. En cas de doute, consulte les spécifications de référence ou relance la suite Playwright avec `npx playwright test`.
+
+---
+
+## 10. Audit RAM/CPU et Optimisations Appliquées (16 Sept. 2026)
+
+Un audit complet de la RAM et du CPU a été conduit sur tous les fichiers JS frontend. 11 problèmes ont été identifiés et **tous corrigés** via 12 commits individuels.
+
+### Fichiers modifiés
+- `frontend/crop-worker.js` — 3 commits (C7, P1, P2)
+- `frontend/app.js` — 8 commits (P3, P4/P5, C1, C2, C3, C5, C6, C4)
+- `frontend/pdf-cache.js` — 1 commit (P6)
+
+### Tableau des corrections
+
+| ID | Gravité | Problème | Correction | Commit |
+|---|---|---|---|---|
+| **P1** | 🔴 | Double instance Wasm (search_wasm dans crop-worker) | Suppression du Wasm : `calculateCropBounds()` réimplémenté en JS pur (traduction fidèle de `crop.rs`) | `d086fb1` |
+| **P2** | 🔴 | LRU PDF cache à 4 entrées = jusqu'à 1,6 Go Worker | Réduit à 2 (1 si `navigator.deviceMemory ≤ 4 Go`) avec `while` d'éviction correcte | `4ed2b5a` |
+| **P3** | 🟠 | `blob:` URLs hors-ligne jamais révoquées | `_blobUrls` Set dans `DynamicCropManager`, révocation dans `clear()` | `45c4d51` |
+| **P4/P5** | 🟠 | Occurrences maintenues en RAM | Nullification des occurrences du document à la fermeture du viewer dans `closeSplitViewer()` (cache recherche globale préservé pour le tri/pagination) | `0499068` |
+| **P6** | 🟡 | `progressListeners` zombie dans `PdfCacheManager` | Ajout de `cleanup(docId)` + appel dans `closeSplitViewer()` | `f8fcebd` |
+| **C1** | 🔴 | Polling pipeline à 2 s pendant indexation | Changé à 5 s (–60% de wakeups CPU) | `9c97b20` |
+| **C2** | 🟠 | Double rebuild DOM du panneau d'occurrences | Guard `_lastVerticalRenderHash` : skip si liste identique | `ab84e54` |
+| **C3** | 🟠 | RegExp `highlightTitle` recompilée à chaque call | Cache LRU `_highlightRegexpCache` (Map 5 entrées, `lastIndex=0`) | `073745c` |
+| **C4** | 🟡 | `querySelectorAll('.doc-card')` à chaque sélection | `_docCardMap` peuplée à la création, lookup O(1) | `f3b305d` |
+| **C5** | 🟡 | 4× assignations `scrollTop` (3 RAF + setTimeout 50ms) | Réduit à 2 : immédiat + 1 RAF | `6e38d57` |
+| **C6** | 🟡 | Double `querySelectorAll` dans `jumpToOccurrenceByIndex` | Accès direct par `children[prevIndex]` / `children[index]` | `2684f60` |
+| **C7** | ⚪ | `ensureWasm()` awaite inutilement une Promise résolue | Flag `wasmReady` booléen (supprimé ensuite par P1) | `974f61f` |
+
+### ⚠️ Point de maintenance critique (P1)
+
+`crop-worker.js` implémente maintenant `calculateCropBounds()` en JS pur.  
+**Si les constantes dans `search-core/src/constants.rs` changent**, il faut mettre à jour les constantes en tête de `crop-worker.js` :
+```js
+const CROP_RENDER_SCALE   = 1.5;   // CROP_RENDER_SCALE dans constants.rs
+const DEFAULT_CROP_WIDTH  = 300.0;  // DEFAULT_CROP_WIDTH
+const DEFAULT_CROP_HEIGHT = 120.0;  // DEFAULT_CROP_HEIGHT
+const GOODNOTES_YELLOW_CSS = 'rgba(255, 226, 0, 0.45)'; // GOODNOTES_YELLOW_CSS
+```
+
+

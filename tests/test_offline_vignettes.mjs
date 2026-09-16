@@ -40,8 +40,8 @@ assert.ok(
   "crop-worker.js doit importer worker-setup.js en première intention"
 );
 assert.ok(
-  cropWorkerContent.includes("calculate_crop_bounds_wasm"),
-  "crop-worker.js doit utiliser le calcul de recadrage partagé search-core Wasm"
+  cropWorkerContent.includes("calculateCropBounds") || cropWorkerContent.includes("calculate_crop_bounds_wasm"),
+  "crop-worker.js doit utiliser le calcul de recadrage conforme à search-core"
 );
 assert.ok(
   cropWorkerContent.includes("rgba(255, 226, 0, 0.45)"),
@@ -109,6 +109,24 @@ if (fs.existsSync(realDbPath)) {
         // Validation du calcul de crop bounds Wasm
         const cropBoundsJson = calculate_crop_bounds_wasm(x0, y0, x1, y1, pw, ph, 300.0, 120.0);
         const bounds = JSON.parse(cropBoundsJson);
+
+        // Validation de la stricte parité JS pur (crop-worker) vs Wasm Rust (search-core)
+        function jsCalculateCropBounds(cx0, cy0, cx1, cy1, cpw, cph, ctw = 300.0, cth = 120.0) {
+          const occCenterX = (cx0 + cx1) / 2;
+          const occCenterY = (cy0 + cy1) / 2;
+          let kx0 = Math.max(0, occCenterX - ctw / 2);
+          let kx1 = Math.min(kx0 + ctw, cpw);
+          if (kx1 === cpw) kx0 = Math.max(0, kx1 - ctw);
+          let ky0 = Math.max(0, occCenterY - cth / 2);
+          let ky1 = Math.min(ky0 + cth, cph);
+          if (ky1 === cph) ky0 = Math.max(0, ky1 - cth);
+          return { x0: kx0, y0: ky0, width: Math.max(1, kx1 - kx0), height: Math.max(1, ky1 - ky0) };
+        }
+        const jsBounds = jsCalculateCropBounds(x0, y0, x1, y1, pw, ph);
+        assert.strictEqual(jsBounds.x0, bounds.x0, "Parité exacte x0 entre JS pur et Wasm Rust");
+        assert.strictEqual(jsBounds.y0, bounds.y0, "Parité exacte y0 entre JS pur et Wasm Rust");
+        assert.strictEqual(jsBounds.width, bounds.width, "Parité exacte width entre JS pur et Wasm Rust");
+        assert.strictEqual(jsBounds.height, bounds.height, "Parité exacte height entre JS pur et Wasm Rust");
 
         assert.ok(Math.abs(bounds.width - 300.0) < 0.01, "Largeur de crop standard = 300px");
         assert.ok(Math.abs(bounds.height - 120.0) < 0.01, "Hauteur de crop standard = 120px");

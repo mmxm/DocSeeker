@@ -1432,10 +1432,9 @@ document.addEventListener("DOMContentLoaded", () => {
     setDocumentZoomLock(false);
     if (viewerDocSearchWrapper) viewerDocSearchWrapper.style.display = "none";
     syncDocSearchInputs("");
-    // Libérer les tableaux d'occurrences et le snapshot de résultats (P4/P5)
+    // Libérer les tableaux d'occurrences du document actif (P4/P5)
     currentActiveOccurrences = [];
     currentDocOriginalOccurrences = null;
-    lastSearchResultsData = null;
     _lastVerticalRenderHash = '';  // Forcer un rebuild complet au prochain document (C2)
     currentActiveOccurrenceIndex = -1;
     updateOccurrenceStepperUI();
@@ -2953,6 +2952,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     sectionTitle.textContent = `Résultats pour "${query}"${searchScopeLabel}`;
     mainGridCropManager.clear();
+    _docCardMap.clear();
     resultsContainer.innerHTML = `<div style="padding: 16px; color: var(--text-muted);">Recherche en cours...</div>`;
 
     try {
@@ -2970,6 +2970,7 @@ document.addEventListener("DOMContentLoaded", () => {
       renderSearchResults(data);
     } catch (err) {
       console.error("Erreur recherche:", err);
+      _docCardMap.clear();
       resultsContainer.innerHTML = `<div style="padding: 16px; color: var(--danger);">Erreur lors de la recherche (${escapeHtml(err.message)}).</div>`;
     }
   }
@@ -2981,13 +2982,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (isFetchingNextSearchPage || !lastSearchResultsData || !lastSearchResultsData.has_more) return;
     isFetchingNextSearchPage = true;
 
-    const query = currentSearchQuery;
-    const isTitlesOnly = filterTitlesOnly.checked;
-    const isFolderOnly = filterCurrentFolderOnly.checked && currentFolderId !== null;
-    const offset = currentLoadedDocs.length;
-
     try {
-      const data = await performSearchRequest(query, isTitlesOnly, isFolderOnly, currentFolderId, 15, offset);
+      const query = currentSearchQuery;
+      const isTitlesOnly = filterTitlesOnly ? filterTitlesOnly.checked : false;
+      const isFolderOnly = filterCurrentFolderOnly ? filterCurrentFolderOnly.checked : false;
+      const currentOffset = lastSearchResultsData.results ? lastSearchResultsData.results.length : 0;
+
+      const data = await performSearchRequest(query, isTitlesOnly, isFolderOnly, currentFolderId, 15, currentOffset);
       if (data && data.results && data.results.length > 0) {
         lastSearchResultsData.has_more = data.has_more;
         lastSearchResultsData.results = (lastSearchResultsData.results || []).concat(data.results);
@@ -2997,8 +2998,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const sentinel = document.getElementById("search-scroll-sentinel");
         if (sentinel) sentinel.remove();
       }
-    } catch (err) {
-      console.error("Erreur chargement page suivante recherche:", err);
+    } catch (e) {
+      console.error("Erreur pagination recherche:", e);
     } finally {
       isFetchingNextSearchPage = false;
     }
@@ -3012,6 +3013,7 @@ document.addEventListener("DOMContentLoaded", () => {
     rawResults.forEach(doc => {
       try {
         const card = createDocCardElement(doc, true);
+        _docCardMap.set(doc.id, card);
         if (sentinel && sentinel.parentNode === resultsContainer) {
           resultsContainer.insertBefore(card, sentinel);
         } else {
@@ -3031,6 +3033,8 @@ document.addEventListener("DOMContentLoaded", () => {
   function renderSearchResults(data) {
     mainGridCropManager.clear();
     lastSearchResultsData = data;
+    _docCardMap.clear();
+    if (foldersSection) foldersSection.style.display = "none";
     resultsContainer.innerHTML = "";
     const rawResults = data.results || [];
 
@@ -3057,6 +3061,7 @@ document.addEventListener("DOMContentLoaded", () => {
     sortedResults.forEach(doc => {
       try {
         const card = createDocCardElement(doc, true);
+        _docCardMap.set(doc.id, card);
         resultsContainer.appendChild(card);
       } catch (cardErr) {
         console.error("Erreur rendu carte document:", doc.id, cardErr);

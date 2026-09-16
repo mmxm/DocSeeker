@@ -642,4 +642,55 @@ test.describe('DocSeeker - Suite Complète de Tests UI Automatisés (En ligne & 
     console.log('✅ [Test 11] Réinitialisation via bouton Scanner validée.');
   });
 
+  test('12. Recherche, Sélection Multiple O(1), Split View et Maintien des Résultats', async ({ page }) => {
+    await page.goto('/');
+    const searchInput = page.locator('#searchInput');
+    await expect(searchInput).toBeVisible();
+
+    // 1. Recherche "grossesse"
+    await searchInput.fill('grossesse');
+    await page.evaluate(() => window.performSearch && window.performSearch('grossesse'));
+    const cards = page.locator('.doc-card');
+    await expect(cards.first()).toBeVisible({ timeout: 10000 });
+    const initialCount = await cards.count();
+    expect(initialCount).toBeGreaterThan(0);
+
+    // 2. Vérification de la sélection multiple O(1) en mode recherche
+    await page.locator('#toggleSelectionModeBtn').click();
+    const firstCheckbox = cards.first().locator('.doc-selection-checkbox');
+    await firstCheckbox.click();
+    await expect(cards.first()).toHaveClass(/selected/);
+    const selectionBar = page.locator('#selectionActionBar');
+    await expect(selectionBar).toBeVisible();
+    await expect(page.locator('#selectionCountText')).toContainText('1 document');
+
+    await firstCheckbox.click();
+    await expect(cards.first()).not.toHaveClass(/selected/);
+    await expect(selectionBar).toBeHidden();
+    await page.locator('#toggleSelectionModeBtn').click(); // Désactiver le mode sélection
+    console.log('✅ [Test 12] Sélection O(1) dans les résultats de recherche validée.');
+
+    // 3. Ouvrir un document en Split View depuis une vignette
+    const firstVignette = page.locator('.vignette-item').first();
+    await firstVignette.click();
+    await expect(page.locator('#workspace')).toHaveClass(/split-active/, { timeout: 10000 });
+
+    // 4. Fermer la Split View et revenir aux résultats
+    const closeBtn = page.locator('#closeViewerBtn');
+    await closeBtn.click();
+    await expect(page.locator('#workspace')).not.toHaveClass(/split-active/);
+    await expect(page.locator('#generalView')).toBeVisible();
+
+    // 5. Vérifier que les résultats de recherche sont toujours affichés et que le tri fonctionne
+    const sortSelect = page.locator('#sortSelect');
+    await sortSelect.selectOption('name_asc');
+    await page.waitForTimeout(300);
+
+    // Les cartes doivent toujours être les résultats de recherche (avec vignettes), pas la bibliothèque
+    await expect(page.locator('.vignette-item').first()).toBeVisible({ timeout: 5000 });
+    expect(await page.locator('#foldersSection').isVisible()).toBe(false);
+    console.log('✅ [Test 12] Maintien des résultats de recherche et tri après Split View validé.');
+  });
+
 });
+
