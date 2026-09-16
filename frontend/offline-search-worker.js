@@ -44,14 +44,44 @@ async function init() {
     try {
       console.log('[OfflineSearchWorker] Initialisation du runtime SQLite-Wasm et Rust-Wasm...');
       
-      // 1. Initialiser le module Rust-Wasm
-      await initSearchWasm();
+      // 1. Initialiser le module Rust-Wasm (chargement direct depuis CacheStorage si disponible pour résilience offline Firefox)
+      let wasmBuffer = undefined;
+      if (typeof caches !== 'undefined') {
+        try {
+          const wasmRes = await caches.match('/wasm/search_wasm/search_wasm_bg.wasm', { ignoreSearch: true }) ||
+                          await caches.match('./wasm/search_wasm/search_wasm_bg.wasm', { ignoreSearch: true });
+          if (wasmRes) {
+            wasmBuffer = await wasmRes.arrayBuffer();
+          }
+        } catch (e) {
+          console.warn('[OfflineSearchWorker] Impossible de lire search_wasm depuis CacheStorage:', e);
+        }
+      }
+      await initSearchWasm(wasmBuffer);
 
-      // 2. Initialiser SQLite-Wasm officiel
-      const sqlite3 = await sqlite3InitModule({
+      // 2. Initialiser SQLite-Wasm officiel (binaire depuis CacheStorage pour éviter l'échec XHR synchrone offline)
+      let sqliteWasmBinary = undefined;
+      if (typeof caches !== 'undefined') {
+        try {
+          const sqliteRes = await caches.match('/wasm/sqlite/sqlite3.wasm', { ignoreSearch: true }) ||
+                            await caches.match('./wasm/sqlite/sqlite3.wasm', { ignoreSearch: true });
+          if (sqliteRes) {
+            sqliteWasmBinary = await sqliteRes.arrayBuffer();
+          }
+        } catch (e) {
+          console.warn('[OfflineSearchWorker] Impossible de lire sqlite3.wasm depuis CacheStorage:', e);
+        }
+      }
+
+      const sqliteConfig = {
         print: console.log,
         printErr: console.error,
-      });
+      };
+      if (sqliteWasmBinary) {
+        sqliteConfig.wasmBinary = sqliteWasmBinary;
+      }
+
+      const sqlite3 = await sqlite3InitModule(sqliteConfig);
 
       // Tentative d'utilisation de l'OPFS haute performance, sinon fallback
       if (sqlite3.oo1 && sqlite3.oo1.OpfsDb) {

@@ -367,8 +367,60 @@ class PdfCacheManager {
   }
 
   async getBlobUrl(docId) {
-    // PDF.js lit directement les fragments depuis IndexedDB
-    return null;
+    const id = Number(docId);
+    const normUrl = this.normalizeUrl(id);
+    try {
+      const db = await this.init();
+      if (!db) return null;
+      return new Promise((resolve) => {
+        const metaTx = db.transaction(DOCSEEKER_META_STORE, 'readonly');
+        const metaReq = metaTx.objectStore(DOCSEEKER_META_STORE).get(normUrl);
+        metaReq.onerror = () => resolve(null);
+        metaReq.onsuccess = () => {
+          const meta = metaReq.result;
+          if (!meta || !meta.totalBytes || meta.totalBytes <= 0) {
+            return resolve(null);
+          }
+          const totalBytes = meta.totalBytes;
+          const chunkTx = db.transaction(DOCSEEKER_CHUNK_STORE, 'readonly');
+          const store = chunkTx.objectStore(DOCSEEKER_CHUNK_STORE);
+          const prefix = `${normUrl}#`;
+          const range = IDBKeyRange.bound(prefix, prefix + '\uffff');
+          const cursorReq = store.openCursor(range);
+          const fullArray = new Uint8Array(totalBytes);
+          let readBytes = 0;
+
+          cursorReq.onerror = () => resolve(null);
+          cursorReq.onsuccess = (ev) => {
+            const cursor = ev.target.result;
+            if (cursor) {
+              const key = String(cursor.key);
+              const parts = key.slice(prefix.length).split('_');
+              if (parts.length === 2) {
+                const b = parseInt(parts[0], 10);
+                const chunkBuf = cursor.value;
+                if (chunkBuf && chunkBuf.byteLength) {
+                  fullArray.set(new Uint8Array(chunkBuf), b);
+                  readBytes += chunkBuf.byteLength;
+                }
+              }
+              cursor.continue();
+            } else {
+              if (readBytes >= totalBytes || (meta.completed && readBytes > 0)) {
+                const blob = new Blob([fullArray], { type: 'application/pdf' });
+                const blobUrl = URL.createObjectURL(blob);
+                resolve(blobUrl);
+              } else {
+                resolve(null);
+              }
+            }
+          };
+        };
+      });
+    } catch (e) {
+      console.warn('[PdfCacheManager] getBlobUrl error:', e);
+      return null;
+    }
   }
 
   /**

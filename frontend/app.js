@@ -462,6 +462,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentPollingDelay = 10000; // 10 secondes par défaut au repos
 
   async function checkPipelineStatus() {
+    if (navigator.onLine === false) return;
     try {
       const res = await fetch("/api/pipeline/status");
       if (!res.ok) return;
@@ -517,7 +518,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       }
     } catch (err) {
-      console.warn("Erreur vérification statut pipeline:", err);
+      if (navigator.onLine !== false) {
+        console.warn("Erreur vérification statut pipeline:", err);
+      }
     }
   }
 
@@ -1443,6 +1446,10 @@ document.addEventListener("DOMContentLoaded", () => {
         pdfFrame.contentWindow.PDFViewerApplication.close();
       }
     } catch (e) {}
+    if (window._currentPdfBlobUrl) {
+      try { URL.revokeObjectURL(window._currentPdfBlobUrl); } catch (e) {}
+      window._currentPdfBlobUrl = null;
+    }
     currentActiveDocId = null;
     showGeneralResultsView();
   }
@@ -3911,9 +3918,26 @@ document.addEventListener("DOMContentLoaded", () => {
               }
             }).catch(() => {});
           }
+
+          // Si déconnecté (mode hors-ligne) OU si le document est disponible en cache binaire local :
+          const isDocCached = (window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(numericDocId));
+          if (navigator.onLine === false || isDocCached || complete) {
+            try {
+              const localBlobUrl = await window.pdfCacheManager.getBlobUrl(numericDocId);
+              if (localBlobUrl) {
+                if (window._currentPdfBlobUrl) {
+                  try { URL.revokeObjectURL(window._currentPdfBlobUrl); } catch (e) {}
+                }
+                window._currentPdfBlobUrl = localBlobUrl;
+                pdfTargetUrl = localBlobUrl;
+              }
+            } catch (blobErr) {
+              console.warn('[DocSeeker] Erreur chargement blob PDF local:', blobErr);
+            }
+          }
         }
 
-        let viewerUrl = `/pdfjs/web/viewer.html?v=5.9&file=${encodeURI(pdfTargetUrl)}#page=${targetPage}`;
+        let viewerUrl = `/pdfjs/web/viewer.html?v=5.9&file=${encodeURIComponent(pdfTargetUrl)}#page=${targetPage}`;
         if (currentSearchQuery) {
           viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
         }

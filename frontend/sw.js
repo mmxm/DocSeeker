@@ -7,7 +7,7 @@
  * 3. Routage résilient avec fallback automatique sur incident réseau.
  */
 
-const CACHE_NAME = 'docseeker-app-shell-v12';
+const CACHE_NAME = 'docseeker-app-shell-v13';
 const CROP_CACHE_NAME = 'docseeker_offline_crops';
 const COVER_CACHE_NAME = 'docseeker_covers';
 
@@ -77,7 +77,7 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/api/cover/')) {
     event.respondWith(
       caches.open(COVER_CACHE_NAME).then(async (cache) => {
-        const cached = await cache.match(event.request);
+        const cached = await cache.match(event.request, { ignoreSearch: true }) || await cache.match(url.pathname);
         if (cached) return cached;
         return fetch(event.request).then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
@@ -114,20 +114,28 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3. Streaming PDF (/api/pdf/{id}) : Network First avec fallback 503 propre.
-  //    Le SW ne sert pas le binaire PDF depuis IndexedDB (c'est app.js qui pilote
-  //    crop-worker.js via les chunks IndexedDB en mode hors-ligne). On se contente
-  //    ici de laisser passer la requête réseau avec un .catch() pour éviter que
-  //    le SW crashe avec "unexpected error" lorsque le réseau est absent.
+  // 3. Streaming PDF (/api/pdf/{id}) : Network First avec fallback IndexedDB local.
   if (url.pathname.startsWith('/api/pdf/')) {
     event.respondWith(
-      fetch(event.request).catch(() =>
-        new Response('PDF non disponible hors-ligne', {
+      fetch(event.request).catch(async () => {
+        const id = url.pathname.replace('/api/pdf/', '').split('/')[0];
+        const pdfBytes = await getCachedPdfBytesFromIndexedDB(id);
+        if (pdfBytes) {
+          return new Response(pdfBytes, {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/pdf',
+              'Content-Length': String(pdfBytes.byteLength),
+              'Accept-Ranges': 'bytes',
+            },
+          });
+        }
+        return new Response('PDF non disponible hors-ligne', {
           status: 503,
           statusText: 'PDF Offline Unavailable',
           headers: { 'Content-Type': 'text/plain' },
-        })
-      )
+        });
+      })
     );
     return;
   }
@@ -176,3 +184,83 @@ self.addEventListener('fetch', (event) => {
     })
   );
 });
+
+/**
+ * Reconstitue les octets d'un PDF depuis les fragments persistés dans IndexedDB (docseeker_pdf_chunks_v2)
+ * Permet au Service Worker de répondre aux requêtes /api/pdf/{id} même en mode 100% hors-ligne.
+ */
+async function getCachedPdfBytesFromIndexedDB(docId) {
+  if (typeof indexedDB === 'undefined') return null;
+  const id = Number(docId);
+  if (!id) return null;
+  const normUrl = `/api/pdf/${id}`;
+
+  return new Promise((resolve) => {
+    try {
+      const openReq = indexedDB.open('docseeker_pdf_chunks_v2', 2);
+      openReq.onerror = () => resolve(null);
+      openReq.onsuccess = (evt) => {
+        const db = evt.target.result;
+        if (!db.objectStoreNames.contains('meta') || !db.objectStoreNames.contains('chunks')) {
+          db.close();
+          return resolve(null);
+        }
+
+        try {
+          const metaTx = db.transaction('meta', 'readonly');
+          const metaStore = metaTx.objectStore('meta');
+          const metaReq = metaStore.get(normUrl);
+
+          metaReq.onerror = () => { db.close(); resolve(null); };
+          metaReq.onsuccess = () => {
+            const meta = metaReq.result;
+            if (!meta || !meta.totalBytes || meta.totalBytes <= 0) {
+              db.close();
+              return resolve(null);
+            }
+
+            const totalBytes = meta.totalBytes;
+            const chunkTx = db.transaction('chunks', 'readonly');
+            const chunkStore = chunkTx.objectStore('chunks');
+            const prefix = `${normUrl}#`;
+            const range = IDBKeyRange.bound(prefix, prefix + '\uffff');
+            const cursorReq = chunkStore.openCursor(range);
+            const fullArray = new Uint8Array(totalBytes);
+            let readBytes = 0;
+
+            cursorReq.onerror = () => { db.close(); resolve(null); };
+            cursorReq.onsuccess = (e) => {
+              const cursor = e.target.result;
+              if (cursor) {
+                const key = String(cursor.key);
+                const parts = key.slice(prefix.length).split('_');
+                if (parts.length === 2) {
+                  const b = parseInt(parts[0], 10);
+                  const chunkBuf = cursor.value;
+                  if (chunkBuf && chunkBuf.byteLength) {
+                    fullArray.set(new Uint8Array(chunkBuf), b);
+                    readBytes += chunkBuf.byteLength;
+                  }
+                }
+                cursor.continue();
+              } else {
+                db.close();
+                if (readBytes >= totalBytes || (meta.completed && readBytes > 0)) {
+                  resolve(fullArray.buffer);
+                } else {
+                  resolve(null);
+                }
+              }
+            };
+          };
+        } catch (txErr) {
+          db.close();
+          resolve(null);
+        }
+      };
+    } catch (err) {
+      resolve(null);
+    }
+  });
+}
+
