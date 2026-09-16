@@ -1444,24 +1444,15 @@ document.addEventListener("DOMContentLoaded", () => {
     generalView.style.display = "block";
     document.querySelectorAll(".vignette-item.active").forEach(el => el.classList.remove("active"));
 
-    // Restauration robuste et protégée du niveau de défilement vertical initial
+    // Restauration du scroll : assignation immédiate + confirmation en RAF (C5)
+    // L'assignation immédiate fonctionne maintenant que generalView est visible.
+    // Le RAF garantit l'application après le prochain cycle de layout.
     isRestoringScroll = true;
     const targetScroll = savedGeneralResultsScrollTop;
-    const restore = () => {
-      if (resultsPane) {
-        resultsPane.scrollTop = targetScroll;
-      }
-    };
-    restore();
+    if (resultsPane) resultsPane.scrollTop = targetScroll;
     requestAnimationFrame(() => {
-      restore();
-      requestAnimationFrame(() => {
-        restore();
-        setTimeout(() => {
-          restore();
-          isRestoringScroll = false;
-        }, 50);
-      });
+      if (resultsPane) resultsPane.scrollTop = targetScroll;
+      isRestoringScroll = false;
     });
   }
 
