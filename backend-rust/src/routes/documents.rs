@@ -428,12 +428,13 @@ pub async fn reindex_document(
 pub async fn sync_documents_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, Response> {
+    let retried = state.pipeline.retry_failed();
     let (added_count, added_files) = {
         let conn = state.db.lock().map_err(|_| {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
         })?;
         let (added_count, added_files) = scan_and_sync_documents(&conn, &state.pdf_engine, &state.config);
-        if added_count > 0 {
+        if added_count > 0 || retried > 0 {
             if let Ok(mut cache) = state.search_cache.lock() {
                 cache.clear();
             }
@@ -443,6 +444,7 @@ pub async fn sync_documents_handler(
 
     Ok(Json(serde_json::json!({
         "added": added_count,
+        "retried": retried,
         "indexed_files": added_files
     })))
 }

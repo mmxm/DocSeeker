@@ -38,11 +38,12 @@ pub fn index_pdf_file(
         return Err(format!("Fichier PDF vide ou invalide ({} octet(s))", file_size));
     }
 
-    let mut header = [0u8; 5];
+    let mut header = [0u8; 1024];
     if let Ok(mut f) = std::fs::File::open(file_path) {
         if let Ok(n) = f.read(&mut header) {
-            if n < 5 || !header.starts_with(b"%PDF-") {
-                return Err("Fichier corrompu : signature %PDF- absente".to_string());
+            let has_pdf_magic = header[..n].windows(5).any(|w| w == b"%PDF-");
+            if !has_pdf_magic {
+                return Err("Fichier corrompu : signature %PDF- absente dans les 1024 premiers octets".to_string());
             }
         }
     }
@@ -169,7 +170,7 @@ pub fn scan_and_sync_documents(
         return (0, Vec::new());
     }
 
-    let mut stmt = match conn.prepare("SELECT filename, file_hash FROM documents") {
+    let mut stmt = match conn.prepare("SELECT filename, file_hash FROM documents WHERE status != 'failed'") {
         Ok(s) => s,
         Err(_) => return (0, Vec::new()),
     };

@@ -3018,7 +3018,8 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
       if (doc.status === "failed") {
-        showToast(`Impossible d'ouvrir ce document : ${doc.error_message || 'Échec lors de l\'indexation'}`, "danger");
+        showToast(`Document en échec : ${doc.error_message || 'Erreur d\'indexation'}. Relance de l'indexation...`, "warning");
+        handleReindexDocument(doc.id, doc.title, null);
         return;
       }
       const firstOcc = (doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0] : null;
@@ -3267,13 +3268,15 @@ document.addEventListener("DOMContentLoaded", () => {
   // Réindexation d'un Document
   // =========================================================================
   async function handleReindexDocument(docId, docTitle, btnElement) {
-    btnElement.classList.add("spinning");
-    btnElement.disabled = true;
+    if (btnElement) {
+      btnElement.classList.add("spinning");
+      btnElement.disabled = true;
+    }
 
     try {
       const res = await fetch(`/api/documents/${docId}/reindex`, { method: "POST" });
       if (!res.ok) throw new Error("Échec de la réindexation");
-      showToast(`"${docTitle}" réindexé avec succès !`, "success");
+      showToast(`"${docTitle}" relancé avec succès ! Indexation en cours...`, "success");
       
       if (currentSearchQuery) {
         performSearch(currentSearchQuery);
@@ -3284,8 +3287,10 @@ document.addEventListener("DOMContentLoaded", () => {
       console.error(err);
       showToast(`Erreur lors de la réindexation de "${docTitle}"`, "error");
     } finally {
-      btnElement.classList.remove("spinning");
-      btnElement.disabled = false;
+      if (btnElement) {
+        btnElement.classList.remove("spinning");
+        btnElement.disabled = false;
+      }
     }
   }
 
@@ -3310,8 +3315,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch("/api/sync", { method: "POST" });
       const data = await res.json();
       
-      if (data.added > 0) {
-        showToast(`${data.added} nouveau(x) document(s) détecté(s) et indexé(s) !`, "success", 4500);
+      const totalProcessed = (data.added || 0) + (data.retried || 0);
+      if (totalProcessed > 0) {
+        const parts = [];
+        if (data.added > 0) parts.push(`${data.added} nouveau(x) document(s) détecté(s)`);
+        if (data.retried > 0) parts.push(`${data.retried} document(s) relancé(s)`);
+        showToast(`${parts.join(" et ")} ! Indexation en cours...`, "success", 4500);
         loadFoldersAndDocuments();
       } else {
         showToast("Tous les documents PDF sont déjà synchronisés.", "info");
