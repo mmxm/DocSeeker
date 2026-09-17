@@ -4478,6 +4478,10 @@ document.addEventListener("DOMContentLoaded", () => {
   // Upload, Dropzone & Doublons Stricts
   // =========================================================================
   openUploadBtn.addEventListener("click", () => {
+    if (!navigator.onLine) {
+      showToast("L'importation de documents nécessite une connexion réseau active.", "warning");
+      return;
+    }
     uploadModal.style.display = "flex";
     uploadProgressContainer.style.display = "none";
     uploadProgressBar.style.width = "0%";
@@ -4513,6 +4517,10 @@ document.addEventListener("DOMContentLoaded", () => {
   dropZone.addEventListener("drop", (e) => {
     e.preventDefault();
     dropZone.classList.remove("dragover");
+    if (!navigator.onLine) {
+      showToast("L'importation de documents nécessite une connexion réseau active.", "warning");
+      return;
+    }
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       handleFilesUpload(e.dataTransfer.files);
     }
@@ -4536,6 +4544,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const hasPdfs = Array.from(e.dataTransfer.files).some(f => f.name.toLowerCase().endsWith(".pdf"));
       if (hasPdfs) {
         e.preventDefault();
+        if (!navigator.onLine) {
+          showToast("L'importation de documents nécessite une connexion réseau active.", "warning");
+          return;
+        }
         uploadModal.style.display = "flex";
         handleFilesUpload(e.dataTransfer.files);
       }
@@ -4558,6 +4570,11 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function handleFilesUpload(fileList) {
+    if (!navigator.onLine) {
+      showToast("L'importation de documents nécessite une connexion réseau active.", "warning");
+      return;
+    }
+
     const rawFiles = Array.from(fileList || []);
     const pdfFiles = rawFiles.filter(f => f.name.toLowerCase().endsWith(".pdf"));
 
@@ -4576,6 +4593,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     let successCount = 0;
+    let networkAborted = false;
     const duplicates = [];
     const errors = [];
     const total = pdfFiles.length;
@@ -4633,7 +4651,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (!res.ok) {
           const errorData = await res.json().catch(() => ({}));
-          errors.push({ file: file.name, error: errorData.detail || "Erreur serveur" });
+          const errMsg = errorData.error || errorData.message || errorData.detail || `Erreur HTTP ${res.status}`;
+          errors.push({ file: file.name, error: errMsg });
           continue;
         }
 
@@ -4641,13 +4660,29 @@ document.addEventListener("DOMContentLoaded", () => {
         uploadProgressBar.style.width = `${Math.round(((i + 1) / total) * 100)}%`;
       } catch (err) {
         console.error(`Upload error for ${file.name}:`, err);
-        errors.push({ file: file.name, error: err.message });
+        const errMsg = err.message || "Erreur réseau";
+        errors.push({ file: file.name, error: errMsg });
+
+        const isNetworkFailure = !navigator.onLine || 
+          err.name === "TypeError" || 
+          (err.message && (err.message.includes("fetch") || err.message.includes("network") || err.message.includes("Network")));
+        if (isNetworkFailure) {
+          networkAborted = true;
+          for (let j = i + 1; j < total; j++) {
+            errors.push({ file: pdfFiles[j].name, error: "Non envoyé (coupure réseau)" });
+          }
+          break;
+        }
       }
     }
 
     uploadProgressBar.style.width = "100%";
 
-    if (successCount > 0 && duplicates.length === 0 && errors.length === 0) {
+    if (networkAborted) {
+      uploadProgressBar.style.backgroundColor = "var(--warning)";
+      uploadStatusText.textContent = `Coupure réseau : ${successCount} conservé(s), ${errors.length} non envoyé(s)`;
+      showToast(`Coupure réseau : ${successCount} document(s) sauvegardé(s).`, successCount > 0 ? "warning" : "error");
+    } else if (successCount > 0 && duplicates.length === 0 && errors.length === 0) {
       uploadProgressBar.style.backgroundColor = "var(--success)";
       uploadStatusText.textContent = total === 1
         ? "Document téléversé ! Indexation en arrière-plan..."

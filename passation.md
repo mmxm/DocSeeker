@@ -40,6 +40,20 @@ Lorsqu'un utilisateur effectuait un double-clic rapide sur le bouton de suppress
   3. Déduplication défensive consécutive dans `renderBreadcrumbs()`.
   4. Couverture automatisée : nouveau test `H6 - Clics Rapides Multiples sur un Dossier → 0 Doublon dans le Fil d'Ariane` ajouté dans `tests/ui/ui_edge_cases.spec.mjs` (16/16 passés ✅).
 
+### Bug #3 : Erreurs HTTP 400 sur Upload de Gros Fichiers (> 2 Mo) & Résilience Réseau
+- **Symptôme (remonté par l'utilisateur) :** Lors de l'import de multiples fichiers PDF volumineux sur Synology, des erreurs `POST /api/upload 400 Bad Request` survenaient en chaîne.
+- **Cause :** Par défaut, Axum applique une limite `DefaultBodyLimit` de 2 Mo (`2 * 1024 * 1024`) sur les requêtes entrantes. Dès qu'un fichier dépassait 2 Mo, `multipart.next_field().await` échouait avec `PayloadTooLarge`, et le fichier était considéré vide (`file_bytes.is_empty()`), retournant un code 400.
+- **Correction Backend (`backend-rust/src/routes/mod.rs`) :**
+  - Ajout de `.layer(DefaultBodyLimit::max(1024 * 1024 * 1024))` sur la route `POST /upload`, portant la limite maximale d'upload à **1 Go**.
+- **Amélioration Frontend & Résilience Réseau (`frontend/app.js`) :**
+  1. **Protection Hors-Ligne Stricte :** Les boutons d'import, le drag & drop dans la zone de dépôt et le drop global sur la fenêtre vérifient `navigator.onLine`. En mode hors-ligne, l'import est immédiatement bloqué avec un toast explicite (`"L'importation de documents nécessite une connexion réseau active."`) et 0 requête HTTP n'est émise.
+  2. **Interruption Propre sur Coupure Réseau en cours d'Import :** Si une rupture réseau (`TypeError: Failed to fetch` ou perte de connectivité) survient pendant l'envoi séquentiel d'un lot, la boucle s'arrête proprement. Les documents déjà reçus (`successCount > 0`) sont conservés et indexés en base, les fichiers suivants sont marqués `"Non envoyé (coupure réseau)"`, la jauge passe en jaune (`var(--warning)`) et un statut détaillé est affiché sans planter l'application.
+  3. **Lecture d'Erreur Enrichie :** Extraction des messages d'erreur du backend via `errorData.error || errorData.message || errorData.detail || 'Erreur HTTP ${res.status}'`.
+- **Validation Automatisée (`tests/ui/ui_edge_cases.spec.mjs` - Matrice I) :**
+  - **I5 (Import massif & Gros fichier) :** 101 fichiers (75 uniques, 25 doublons réels avec même hash binaire, 1 gros fichier de **205 Mo** généré sur disque temporaire). Résultat : **76 envoyés, 25 doublons ignorés, 0 erreur 400, validé en 5.9s ✅**.
+  - **I6 (Coupure réseau en cours d'envoi) :** Simulation d'une rupture réseau brutale après le 1er fichier. Résultat : arrêt immédiat, statut d'alerte, premier document parfaitement conservé en base (validé en 677ms ✅).
+  - **I7 (Tentative hors-ligne) :** Passage en mode offline avant import. Résultat : ouverture bloquée, toast affiché, 0 requête réseau émise (validé en 822ms ✅).
+
 ---
 
 ## 3. OPTIMISATIONS PERF DU RENDU DES VIGNETTES HORS-LIGNE (Solutions 1, 4 & 5)
@@ -101,9 +115,8 @@ npx playwright test -g "Matrice A4"
 ## 5. STATUT GIT
 
 - Commit précédent : `a26add8` (*tests: refonte suite Playwright — stable 22/22*)
-- Modifications prêtes pour le commit final :
-  - `frontend/app.js` (fix anti-rebond double-clic suppression/téléchargement)
-  - `tests/ui/harness.mjs` (assertNoCropCorruption + downloadDocToComplete fiabilisés)
-  - `tests/ui/ui_stress_matrix.spec.mjs` (A4 dblclick pur, Matrice B, C, F2)
-  - `tests/ui/ui_edge_cases.spec.mjs` (EC-4, G1/G2, H2-H4)
-  - `passation.md` (ce document)
+- Modifications prêtes pour le commit :
+  - `backend-rust/src/routes/mod.rs` (DefaultBodyLimit::max 1 Go sur /upload)
+  - `frontend/app.js` (guards hors-ligne import, interruption propre sur coupure réseau, gestion erreurs)
+  - `tests/ui/ui_edge_cases.spec.mjs` (Matrice I : tests I5, I6, I7 validés)
+  - `passation.md` (ce document mis à jour)

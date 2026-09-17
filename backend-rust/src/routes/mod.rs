@@ -5,6 +5,7 @@ pub mod media;
 pub mod search;
 
 use axum::{
+    extract::DefaultBodyLimit,
     middleware,
     routing::{get, patch, post},
     Router,
@@ -40,7 +41,7 @@ pub fn create_api_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/documents/batch-move", post(documents::batch_move_documents))
         .route("/documents/:id/reindex", post(documents::reindex_document))
         .route("/check-hash/:file_hash", get(documents::check_hash))
-        .route("/upload", post(documents::upload_document))
+        .route("/upload", post(documents::upload_document).layer(DefaultBodyLimit::max(1024 * 1024 * 1024)))
         .route("/sync", post(documents::sync_documents_handler))
         .route("/sync/check", post(documents::sync_check_handler))
         // Pipeline

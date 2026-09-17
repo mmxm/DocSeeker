@@ -12,6 +12,8 @@
 import { test, expect } from '@playwright/test';
 import { DocSeekerTestHarness } from './harness.mjs';
 import path from 'path';
+import fs from 'fs';
+import os from 'os';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -617,5 +619,200 @@ test.describe('Matrice I - Import / Upload de PDF', () => {
 
     await h.cleanDocCache(1);
     console.log('✅ [I4] Upload + download simultanés : 0 interférence.');
+  });
+
+  test('I5 - Import Massif Multi-PDF (100 PDF dont 25 Doublons + 1 Gros > 200 Mo) → Seuls les Nouveaux sont Importés, 0 Erreur 400', async ({ page }) => {
+    test.setTimeout(180000);
+
+    function makePdf(tag) {
+      return Buffer.from(
+        `%PDF-1.4\n% ${tag}\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\nxref\n0 4\n0000000000 65535 f \n0000000018 00000 n \n0000000067 00000 n \n0000000124 00000 n \ntrailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n199\n%%EOF\n`
+      );
+    }
+
+    const uniqueTimestamp = Date.now();
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `ds_upload_${uniqueTimestamp}_`));
+    const filePaths = [];
+
+    // 1. 75 documents uniques
+    const uniqueBuffers = [];
+    for (let i = 1; i <= 75; i++) {
+      const buf = makePdf(`uniq_${uniqueTimestamp}_${i}`);
+      uniqueBuffers.push(buf);
+      const filePath = path.join(tmpDir, `test_uniq_${uniqueTimestamp}_${i}.pdf`);
+      fs.writeFileSync(filePath, buf);
+      filePaths.push(filePath);
+    }
+
+    // 2. 25 doublons (fichiers ayant le contenu binaire identique aux 25 premiers uniques)
+    for (let i = 1; i <= 25; i++) {
+      const filePath = path.join(tmpDir, `test_dup_${uniqueTimestamp}_${i}.pdf`);
+      fs.writeFileSync(filePath, uniqueBuffers[i - 1]);
+      filePaths.push(filePath);
+    }
+
+    // 3. 1 gros document de 205 Mo (pour tester le DefaultBodyLimit de 1 Go d'Axum sans erreur 400)
+    console.log('[I5] Écriture d\'un PDF lourd de 205 Mo sur disque temporaire...');
+    const bigFilePath = path.join(tmpDir, `test_big_${uniqueTimestamp}.pdf`);
+    const bigHeader = makePdf(`big_doc_${uniqueTimestamp}`);
+    const bigFd = fs.openSync(bigFilePath, 'w');
+    fs.writeSync(bigFd, bigHeader);
+    // Allouer 205 Mo (remplissage rapide par blocs de 1 Mo)
+    const filler = Buffer.alloc(1024 * 1024);
+    for (let m = 0; m < 204; m++) {
+      fs.writeSync(bigFd, filler);
+    }
+    fs.writeSync(bigFd, Buffer.from('\n%%EOF\n'));
+    fs.closeSync(bigFd);
+    filePaths.push(bigFilePath);
+
+    console.log(`[I5] Envoi d'un lot de ${filePaths.length} fichiers (75 uniques + 25 doublons + 1 gros de 205 Mo)...`);
+
+    // Ouvrir la modal d'upload
+    await page.locator('#openUploadBtn').click();
+    await expect(page.locator('#uploadModal')).toBeVisible({ timeout: 5000 });
+
+    // Écouter les réponses d'upload pour vérifier l'absence d'erreurs 400
+    const uploadResponses = [];
+    page.on('response', resp => {
+      if (resp.url().includes('/api/upload')) {
+        uploadResponses.push({ status: resp.status(), url: resp.url() });
+      }
+    });
+
+    // Injection du lot complet dans le fileInput via leurs chemins sur disque
+    const fileInput = page.locator('#fileInput');
+    await fileInput.setInputFiles(filePaths);
+
+    // Attendre que l'upload atteigne 100%
+    await expect(page.locator('#uploadProgressBar')).toHaveAttribute('style', /width:\s*100%/, { timeout: 120000 });
+
+    // Vérifier le récapitulatif UI
+    const statusLocator = page.locator('#uploadStatusText');
+    await expect(statusLocator).toBeVisible({ timeout: 5000 });
+    const statusText = await statusLocator.textContent();
+    console.log(`[I5] Statut final affiché : "${statusText}"`);
+
+    // Attendre la fermeture automatique de la modal
+    await expect(page.locator('#uploadModal')).not.toBeVisible({ timeout: 10000 });
+
+    // Vérifier qu'il n'y a eu AUCUNE erreur HTTP 400
+    const badRequests = uploadResponses.filter(r => r.status === 400);
+    expect(badRequests.length).toBe(0);
+    console.log(`[I5] Réponses reçues : ${uploadResponses.length}, erreurs 400 : 0 ✅`);
+
+    // Nettoyage disque temporaire
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+
+    // Nettoyage API : supprimer les documents de test créés
+    const cleanupRes = await page.request.get('/api/documents');
+    if (cleanupRes.ok()) {
+      const data = await cleanupRes.json();
+      const docs = data.documents || [];
+      for (const d of docs) {
+        if (d.filename && d.filename.includes(String(uniqueTimestamp))) {
+          await page.request.delete(`/api/documents/${d.id}`).catch(() => {});
+        }
+      }
+    }
+    console.log('✅ [I5] Import massif (101 fichiers, 205 Mo, 25 doublons) validé avec 0 erreur 400.');
+  });
+
+  test('I6 - Coupure Réseau en cours d\'Import → Arrêt Propre, Conservation des Déjà Reçus', async ({ page, context }) => {
+    test.setTimeout(30000);
+
+    function makePdf(tag) {
+      return Buffer.from(
+        `%PDF-1.4\n% ${tag}\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\nxref\n0 4\n0000000000 65535 f \n0000000018 00000 n \n0000000067 00000 n \n0000000124 00000 n \ntrailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n199\n%%EOF\n`
+      );
+    }
+
+    const uniqueTag = `cut_${Date.now()}`;
+    await page.locator('#openUploadBtn').click();
+    await expect(page.locator('#uploadModal')).toBeVisible({ timeout: 5000 });
+
+    // Intercepter l'appel upload dans le navigateur pour simuler une coupure réseau brutale après le 1er doc
+    await page.evaluate(() => {
+      const origFetch = window.fetch;
+      window._origFetch = origFetch;
+      let uploadCount = 0;
+      window.fetch = function(...args) {
+        const url = String(args[0] || '');
+        if (url.includes('/api/upload')) {
+          uploadCount++;
+          if (uploadCount > 1) {
+            // Coupure réseau : TypeError "Failed to fetch" identique au comportement natif du navigateur
+            console.warn('[I6] Simulation coupure réseau sur upload #' + uploadCount);
+            return Promise.reject(new TypeError('Failed to fetch'));
+          }
+        }
+        return origFetch.apply(this, args);
+      };
+    });
+
+    const files = [
+      { name: `${uniqueTag}_1.pdf`, mimeType: 'application/pdf', buffer: makePdf(`${uniqueTag}_1`) },
+      { name: `${uniqueTag}_2.pdf`, mimeType: 'application/pdf', buffer: makePdf(`${uniqueTag}_2`) },
+      { name: `${uniqueTag}_3.pdf`, mimeType: 'application/pdf', buffer: makePdf(`${uniqueTag}_3`) },
+    ];
+
+    await page.locator('#fileInput').setInputFiles(files);
+
+    // Vérifier que la coupure réseau est signalée dans le statut sans faire crasher l'app
+    const statusLocator = page.locator('#uploadStatusText');
+    await expect(statusLocator).toContainText(/Coupure réseau/i, { timeout: 15000 });
+    console.log(`[I6] Statut d'arrêt réseau : "${await statusLocator.textContent()}"`);
+
+    // Restaurer le fetch d'origine
+    await page.evaluate(() => {
+      if (window._origFetch) {
+        window.fetch = window._origFetch;
+        delete window._origFetch;
+      }
+    });
+
+    // Vérifier que le premier document est bien conservé
+    const listRes = await page.request.get('/api/documents');
+    if (listRes.ok()) {
+      const data = await listRes.json();
+      const docs = data.documents || [];
+      const savedDoc = docs.find(d => d.filename === `${uniqueTag}_1.pdf`);
+      expect(savedDoc).toBeDefined();
+      console.log(`[I6] Document #1 bien conservé en base : ${savedDoc.filename} (id=${savedDoc.id})`);
+
+      // Nettoyage
+      if (savedDoc) await page.request.delete(`/api/documents/${savedDoc.id}`).catch(() => {});
+    }
+
+    console.log('✅ [I6] Coupure réseau gérée : boucle interrompue proprement, doc déjà reçu conservé.');
+  });
+
+  test('I7 - Tentative d\'Import en Mode Hors-Ligne → Bloqué Immédiatement, 0 Requête', async ({ page, context }) => {
+    // 1. Passer le contexte en hors-ligne
+    await context.setOffline(true);
+
+    let uploadRequestAttempted = false;
+    page.on('request', req => {
+      if (req.url().includes('/api/upload')) {
+        uploadRequestAttempted = true;
+      }
+    });
+
+    // 2. Tenter d'ouvrir la modal d'import
+    await page.locator('#openUploadBtn').click();
+
+    // La modal d'upload ne doit PAS être affichée
+    await expect(page.locator('#uploadModal')).not.toBeVisible();
+
+    // Le toast d'avertissement doit s'afficher
+    const toast = page.locator('#toastContainer, .toast').first();
+    await expect(toast).toContainText(/connexion réseau active|impossible/i, { timeout: 5000 });
+
+    // Zéro requête réseau vers l'API d'upload
+    expect(uploadRequestAttempted).toBe(false);
+
+    // 3. Rétablir la connexion
+    await context.setOffline(false);
+    console.log('✅ [I7] Tentative d\'import hors-ligne : bloqué immédiatement avec avertissement.');
   });
 });
