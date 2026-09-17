@@ -83,48 +83,37 @@ pub fn generate_crops_for_page(
         return None;
     }
 
-    let mut target_crop_path = None;
+    let target_occ = occs.iter().find(|o| o.occ_id == requested_occ_id).or_else(|| occs.first());
+    let target_occ = match target_occ {
+        Some(o) => o,
+        None => return None,
+    };
 
-    // Rendu groupé de TOUTES les occurrences de la page (économise les réouvertures/rendus du PDF)
-    for occ in &occs {
-        let occ_filename = if !safe_hash.is_empty() {
-            format!("p{}_occ{}_{}.webp", page_number, occ.occ_id, safe_hash)
-        } else {
-            format!("p{}_occ{}.webp", page_number, occ.occ_id)
-        };
-        let occ_path = doc_cache_dir.join(&occ_filename);
+    let target_filename = if !safe_hash.is_empty() {
+        format!("p{}_occ{}_{}.webp", page_number, target_occ.occ_id, safe_hash)
+    } else {
+        format!("p{}_occ{}.webp", page_number, target_occ.occ_id)
+    };
+    let target_path = doc_cache_dir.join(&target_filename);
 
-        if !occ_path.exists() {
-            let res = pdf_engine.render_crop(
-                &pdf_path,
-                page_number,
-                occ.rect,
-                &occ_path,
-                &occ.highlight_rects,
-            );
-            if let Err(e) = res {
-                warn!("[Crop] Échec génération vignette doc {} p{} occ {} : {}", doc_id, page_number, occ.occ_id, e);
-            }
-        }
-
-        if occ.occ_id == requested_occ_id {
-            target_crop_path = Some(occ_path);
+    // 1. FAST-PATH PRIORITAIRE : Rendu immédiat de l'occurrence demandée
+    if !target_path.exists() {
+        if let Err(e) = pdf_engine.render_crop(
+            &pdf_path,
+            page_number,
+            target_occ.rect,
+            &target_path,
+            &target_occ.highlight_rects,
+        ) {
+            warn!("[Crop] Échec génération vignette doc {} p{} occ {} : {}", doc_id, page_number, target_occ.occ_id, e);
         }
     }
 
-    // Si l'occ_id demandé n'a pas été trouvé exactement, utiliser la première occurrence
-    if target_crop_path.is_none() {
-        if let Some(first_occ) = occs.first() {
-            let occ_filename = if !safe_hash.is_empty() {
-                format!("p{}_occ{}_{}.webp", page_number, first_occ.occ_id, safe_hash)
-            } else {
-                format!("p{}_occ{}.webp", page_number, first_occ.occ_id)
-            };
-            target_crop_path = Some(doc_cache_dir.join(&occ_filename));
-        }
+    if target_path.exists() {
+        Some(target_path)
+    } else {
+        None
     }
-
-    target_crop_path.filter(|p| p.exists())
 }
 
 

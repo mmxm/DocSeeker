@@ -26,20 +26,12 @@ async fn serve_file_cache(
     content_type: &'static str,
     if_none_match: Option<&str>,
 ) -> Response {
-    let meta = match tokio::fs::metadata(path).await {
-        Ok(m) => m,
-        Err(_) => return (StatusCode::NOT_FOUND, "Fichier introuvable").into_response(),
+    // ETag déterministe basé sur le nom du fichier (contenant doc, page, occ et query_hash statiques)
+    let etag = if let Some(file_name) = path.file_name().and_then(|f| f.to_str()) {
+        format!("\"w-{}\"", file_name)
+    } else {
+        "\"w-crop\"".to_string()
     };
-
-    let file_len = meta.len();
-    let mtime = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-
-    let etag = format!("\"w-{}-{}\"", file_len, mtime);
 
     if let Some(req_etag) = if_none_match {
         if req_etag == etag {

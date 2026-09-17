@@ -5210,6 +5210,13 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         const visibleFolderCards = Array.from(document.querySelectorAll(".folder-card")).filter(el => el.style.display !== "none");
         foldersSection.style.display = visibleFolderCards.length > 0 ? "block" : "none";
+      } else {
+        document.querySelectorAll(".folder-card[data-folder-id]").forEach(folderEl => {
+          folderEl.style.display = "";
+        });
+        if (!isSearchActive && !currentSearchQuery && document.querySelectorAll(".folder-card").length > 0) {
+          foldersSection.style.display = "block";
+        }
       }
     });
   }

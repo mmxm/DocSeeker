@@ -1,12 +1,14 @@
 use image::{ImageFormat, Rgba};
 use pdfium_render::prelude::*;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tracing::info;
+use lru::LruCache;
 
 pub struct PdfEngine {
     pdfium: Arc<Mutex<Pdfium>>,
-    page_cache: Arc<Mutex<Option<(PathBuf, i64, f64, f64, image::RgbaImage)>>>,
+    page_cache: Arc<Mutex<LruCache<(PathBuf, i64), Arc<(f64, f64, image::RgbaImage)>>>>,
 }
 
 // Pdfium est enveloppé dans un Mutex, garantissant qu'un seul thread y accède à la fois.
@@ -68,7 +70,7 @@ impl PdfEngine {
 
         Ok(Self {
             pdfium: Arc::new(Mutex::new(pdfium)),
-            page_cache: Arc::new(Mutex::new(None)),
+            page_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(8).unwrap()))),
         })
     }
 
@@ -236,23 +238,23 @@ impl PdfEngine {
     ) -> Result<(), String> {
         let render_scale = 1.5;
 
-        // Récupération de la page rendue (depuis le cache éphémère ou rendu Pdfium)
-        let (page_width, page_height, mut img) = {
+        // Récupération de la page rendue (depuis le cache LRU en RAM ou rendu Pdfium)
+        let page_data = {
             let mut cache = self.page_cache.lock().map_err(|e| e.to_string())?;
-            if let Some((ref p, pg, pw, ph, ref cached_img)) = *cache {
-                if p == file_path && pg == page_number {
-                    (pw, ph, cached_img.clone())
-                } else {
-                    let (pw, ph, rendered) = self.render_page_internal(file_path, page_number, render_scale)?;
-                    *cache = Some((file_path.to_path_buf(), page_number, pw, ph, rendered.clone()));
-                    (pw, ph, rendered)
-                }
+            let key = (file_path.to_path_buf(), page_number);
+            if let Some(cached) = cache.get(&key) {
+                Arc::clone(cached)
             } else {
                 let (pw, ph, rendered) = self.render_page_internal(file_path, page_number, render_scale)?;
-                *cache = Some((file_path.to_path_buf(), page_number, pw, ph, rendered.clone()));
-                (pw, ph, rendered)
+                let entry = Arc::new((pw, ph, rendered));
+                cache.put(key, Arc::clone(&entry));
+                entry
             }
         };
+
+        let page_width = page_data.0;
+        let page_height = page_data.1;
+        let raw_img = &page_data.2;
 
         let bounds = search_core::crop::calculate_crop_bounds(rect, page_width, page_height, None, None);
         let crop_x0 = bounds.x0;
@@ -260,10 +262,17 @@ impl PdfEngine {
         let crop_x1 = bounds.x1;
         let crop_y1 = bounds.y1;
 
-        // Incrustation du surlignage jaune semi-transparent sur les rectangles
-        let yellow_color = Rgba(search_core::crop::GOODNOTES_YELLOW_RGBA); // Jaune Goodnotes translucide mutualisé
+        // Découpe immédiate du rectangle de crop depuis l'image source brute en RAM
+        let cx = (crop_x0 * render_scale).round() as u32;
+        let cy = (crop_y0 * render_scale).round() as u32;
+        let cw = (((crop_x1 - crop_x0) * render_scale).round() as u32).max(1);
+        let ch = (((crop_y1 - crop_y0) * render_scale).round() as u32).max(1);
 
+        // Cloner uniquement le rectangle découpé (ex: 250x120 px au lieu de 1200x1600 px !)
+        let mut cropped = image::imageops::crop_imm(raw_img, cx, cy, cw, ch).to_image();
 
+        // Incrustation du surlignage jaune semi-transparent uniquement sur la zone découpée
+        let yellow_color = Rgba(search_core::crop::GOODNOTES_YELLOW_RGBA);
         let all_hl = if highlight_rects.is_empty() {
             vec![rect]
         } else {
@@ -271,33 +280,32 @@ impl PdfEngine {
         };
 
         for hl in all_hl {
-            let rx0 = (hl[0] * render_scale).round() as u32;
-            let ry0 = (hl[1] * render_scale).round() as u32;
-            let rx1 = ((hl[2] * render_scale).round() as u32).min(img.width());
-            let ry1 = ((hl[3] * render_scale).round() as u32).min(img.height());
+            let hx0 = (hl[0] * render_scale).round() as i64;
+            let hy0 = (hl[1] * render_scale).round() as i64;
+            let hx1 = (hl[2] * render_scale).round() as i64;
+            let hy1 = (hl[3] * render_scale).round() as i64;
+
+            // Coordonnées relatives à la vignette découpée
+            let rx0 = (hx0 - cx as i64).clamp(0, cw as i64) as u32;
+            let ry0 = (hy0 - cy as i64).clamp(0, ch as i64) as u32;
+            let rx1 = (hx1 - cx as i64).clamp(0, cw as i64) as u32;
+            let ry1 = (hy1 - cy as i64).clamp(0, ch as i64) as u32;
 
             for py in ry0..ry1 {
                 for px in rx0..rx1 {
-                    let current = img.get_pixel(px, py);
-                    // Alpha blending sécurisé sans dépassement u8 à 256
+                    let current = cropped.get_pixel(px, py);
                     let r = ((current[0] as u32 * 127 + yellow_color[0] as u32 * 128) / 255).min(255) as u8;
                     let g = ((current[1] as u32 * 127 + yellow_color[1] as u32 * 128) / 255).min(255) as u8;
                     let b = ((current[2] as u32 * 127 + yellow_color[2] as u32 * 128) / 255).min(255) as u8;
-                    img.put_pixel(px, py, Rgba([r, g, b, 255]));
+                    cropped.put_pixel(px, py, Rgba([r, g, b, 255]));
                 }
             }
         }
 
-        // Découpe du rectangle de crop
-        let cx = (crop_x0 * render_scale).round() as u32;
-        let cy = (crop_y0 * render_scale).round() as u32;
-        let cw = ((crop_x1 - crop_x0) * render_scale).round() as u32;
-        let ch = ((crop_y1 - crop_y0) * render_scale).round() as u32;
-
-        let cropped = image::imageops::crop(&mut img, cx, cy, cw, ch).to_image();
-
         if let Some(parent) = output_webp.parent() {
-            std::fs::create_dir_all(parent).ok();
+            if !parent.exists() {
+                std::fs::create_dir_all(parent).ok();
+            }
         }
 
         cropped
