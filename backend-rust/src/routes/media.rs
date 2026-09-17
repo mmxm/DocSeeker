@@ -46,7 +46,7 @@ async fn serve_file_cache(
             return Response::builder()
                 .status(StatusCode::NOT_MODIFIED)
                 .header(header::ETAG, etag)
-                .header(header::CACHE_CONTROL, "public, max-age=604800, immutable")
+                .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
                 .body(Body::empty())
                 .unwrap_or_else(|_| (StatusCode::NOT_MODIFIED, "").into_response());
         }
@@ -57,7 +57,7 @@ async fn serve_file_cache(
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, content_type),
-                (header::CACHE_CONTROL, "public, max-age=604800, immutable"),
+                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
                 (header::ETAG, &etag),
             ],
             bytes,
@@ -132,7 +132,49 @@ pub async fn get_crop(
         return serve_file_cache(&webp_path, "image/webp", if_none_match).await;
     }
 
-    // 2. Récupération des données en base avec libération IMMÉDIATE du verrou SQLite
+    // 2. Coalescence Single-Flight par page : si une tâche pour cette page est déjà en cours, attendre sa fin
+    let flight_key = format!("{}_{}_{}", doc_id, page, query_hash);
+    let maybe_wait_notify = {
+        let mut inflight = match state.crop_in_flight.lock() {
+            Ok(guard) => guard,
+            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur lock in-flight").into_response(),
+        };
+        if let Some(notify) = inflight.get(&flight_key) {
+            Some(Arc::clone(notify))
+        } else {
+            inflight.insert(flight_key.clone(), Arc::new(tokio::sync::Notify::new()));
+            None
+        }
+    };
+
+    if let Some(notify) = maybe_wait_notify {
+        // Une autre requête génère déjà le lot de cette page : attendre la fin du rendu
+        notify.notified().await;
+        if webp_path.exists() {
+            return serve_file_cache(&webp_path, "image/webp", if_none_match).await;
+        }
+    }
+
+    // Guard RAII garantissant la notification des requêtes en attente à la sortie du scope
+    struct FlightGuard {
+        key: String,
+        state: Arc<AppState>,
+    }
+    impl Drop for FlightGuard {
+        fn drop(&mut self) {
+            if let Ok(mut inflight) = self.state.crop_in_flight.lock() {
+                if let Some(notify) = inflight.remove(&self.key) {
+                    notify.notify_waiters();
+                }
+            }
+        }
+    }
+    let _flight_guard = FlightGuard {
+        key: flight_key,
+        state: Arc::clone(&state),
+    };
+
+    // 3. Récupération des données en base avec libération IMMÉDIATE du verrou SQLite
     let (words_json, filename) = {
         let conn = match state.db.lock() {
             Ok(c) => c,
@@ -155,7 +197,7 @@ pub async fn get_crop(
         }
     }; // <-- La connexion SQLite est déverrouillée immédiatement ici !
 
-    // 3. Acquisition d'un permis de rendu Pdfium (limite à 2 tâches concurrentes pour préserver la RAM)
+    // 4. Acquisition d'un permis de rendu Pdfium dynamique
     let permit = match state.crop_semaphore.clone().acquire_owned().await {
         Ok(p) => p,
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur sémaphore").into_response(),

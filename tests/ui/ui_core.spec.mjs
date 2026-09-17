@@ -365,6 +365,7 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
     await expect(deleteBtn).toBeHidden({ timeout: 5000 });
     console.log('✅ [Core-11] Bouton nuage barré validé.');
 
+    await page.waitForTimeout(300);
     await cacheBtn.click();
     await expect(cacheBtn).toHaveClass(/cached/, { timeout: 35000 });
 

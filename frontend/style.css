@@ -857,6 +857,51 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
   border-bottom: none;
 }
 
+/* Skeleton Loading progressif */
+@keyframes skeleton-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(90deg, rgba(226, 232, 240, 0.5) 25%, rgba(241, 245, 249, 0.9) 50%, rgba(226, 232, 240, 0.5) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  border-radius: 4px;
+}
+
+.doc-card-skeleton {
+  pointer-events: none;
+  cursor: default;
+  opacity: 0.85;
+}
+
+.doc-card-skeleton .skeleton-title {
+  height: 16px;
+  width: 38%;
+  min-width: 140px;
+}
+
+.doc-card-skeleton .skeleton-badge {
+  height: 14px;
+  width: 48px;
+  border-radius: 10px;
+}
+
+.doc-card-skeleton .skeleton-cover {
+  width: 70px;
+  height: 98px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.doc-card-skeleton .skeleton-line {
+  height: 12px;
+  border-radius: 3px;
+  margin-bottom: 8px;
+}
+
+
 .doc-card:hover {
   background-color: rgba(241, 245, 249, 0.6);
   border-radius: 4px;

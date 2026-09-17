@@ -7,6 +7,7 @@ pub mod routes;
 pub mod search;
 pub mod static_files;
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use rusqlite::Connection;
 use lru::LruCache;
@@ -24,5 +25,7 @@ pub struct AppState {
     pub pipeline: Arc<IndexingPipeline>,
     pub rate_limiter: Arc<LoginRateLimiter>,
     pub crop_semaphore: Arc<tokio::sync::Semaphore>,
+    pub crop_in_flight: Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
     pub search_cache: Arc<Mutex<LruCache<String, SearchResponse>>>,
 }
+

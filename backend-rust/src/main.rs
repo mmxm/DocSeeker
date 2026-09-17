@@ -236,7 +236,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     let rate_limiter = Arc::new(LoginRateLimiter::new());
-    let crop_semaphore = Arc::new(tokio::sync::Semaphore::new(2));
+    let num_cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2);
+    let crop_permits = num_cpus.clamp(2, 8);
+    let crop_semaphore = Arc::new(tokio::sync::Semaphore::new(crop_permits));
+    let crop_in_flight = Arc::new(Mutex::new(std::collections::HashMap::new()));
     let search_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(100).unwrap())));
 
     let state = Arc::new(AppState {
@@ -246,6 +251,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pipeline,
         rate_limiter,
         crop_semaphore,
+        crop_in_flight,
         search_cache,
     });
 

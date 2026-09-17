@@ -345,6 +345,7 @@ document.addEventListener("DOMContentLoaded", () => {
       this.rootMargin = rootMargin;
       this.debounceMs = debounceMs;
       this.pendingDebounce = new Map(); // img element -> timerId
+      this.inFlightFetches = new Map(); // img element -> AbortController
       this._blobUrls = new Set();       // blob: URLs créées (pour révocation à clear())
       this.observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
@@ -353,10 +354,19 @@ document.addEventListener("DOMContentLoaded", () => {
             this.scheduleLoad(img);
           } else {
             this.cancelPending(img);
-            if (img.dataset.loaded !== "true" && img._cropReqId && window.offlineCropRenderer) {
-              img._wasCancelled = true;
-              window.offlineCropRenderer.cancelTask(img._cropReqId);
-              img._cropReqId = null;
+            if (img.dataset.loaded !== "true") {
+              if (this.inFlightFetches.has(img)) {
+                img._wasCancelled = true;
+                const ctrl = this.inFlightFetches.get(img);
+                try { ctrl.abort(); } catch (_) {}
+                this.inFlightFetches.delete(img);
+                img.dataset.loaded = "false";
+              }
+              if (img._cropReqId && window.offlineCropRenderer) {
+                img._wasCancelled = true;
+                window.offlineCropRenderer.cancelTask(img._cropReqId);
+                img._cropReqId = null;
+              }
             }
           }
         });
@@ -379,6 +389,15 @@ document.addEventListener("DOMContentLoaded", () => {
       if (this.pendingDebounce.has(img)) {
         clearTimeout(this.pendingDebounce.get(img));
         this.pendingDebounce.delete(img);
+      }
+      if (this.inFlightFetches && this.inFlightFetches.has(img)) {
+        img._wasCancelled = true;
+        const ctrl = this.inFlightFetches.get(img);
+        try { ctrl.abort(); } catch (_) {}
+        this.inFlightFetches.delete(img);
+        if (img.dataset.loaded !== "true") {
+          img.dataset.loaded = "false";
+        }
       }
     }
 
@@ -502,31 +521,57 @@ document.addEventListener("DOMContentLoaded", () => {
         if (renderOfflineCrop()) return;
       }
 
-      img.onload = () => {
-        img.style.opacity = "1";
-      };
+      // Requête réseau en ligne avec annulation AbortController au défilement
+      const controller = new AbortController();
+      this.inFlightFetches.set(img, controller);
 
-      img.onerror = () => {
-        if (renderOfflineCrop()) return;
+      fetch(srcUrl, { signal: controller.signal })
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.blob();
+        })
+        .then(blob => {
+          this.inFlightFetches.delete(img);
+          if (img._wasCancelled) {
+            img.dataset.loaded = "false";
+            return;
+          }
+          if (img._blobUrl) {
+            URL.revokeObjectURL(img._blobUrl);
+            this._blobUrls.delete(img._blobUrl);
+          }
+          const blobUrl = URL.createObjectURL(blob);
+          img._blobUrl = blobUrl;
+          this._blobUrls.add(blobUrl);
+          img.src = blobUrl;
+          img.dataset.loaded = "true";
+          img.style.opacity = "1";
+        })
+        .catch(err => {
+          this.inFlightFetches.delete(img);
+          if (err.name === 'AbortError' || img._wasCancelled) {
+            img.dataset.loaded = "false";
+            return;
+          }
 
-        const vEl = img.closest('.vignette-item') || img.closest('.vertical-occ-card');
-        if (isOfflineMode && vEl) {
-          this.applySnippetFallback(img, vEl);
-          return;
-        }
+          if (renderOfflineCrop()) return;
 
-        // En cas d'erreur standard, réessayer une fois après 500ms
-        if (!img.dataset.retried) {
-          img.dataset.retried = "true";
-          setTimeout(() => {
-            img.src = srcUrl;
-          }, 500);
-        } else if (vEl) {
-          this.applySnippetFallback(img, vEl);
-        }
-      };
+          const vEl = img.closest('.vignette-item') || img.closest('.vertical-occ-card');
+          if (isOfflineMode && vEl) {
+            this.applySnippetFallback(img, vEl);
+            return;
+          }
 
-      img.src = srcUrl;
+          // En cas d'erreur standard, réessayer une fois après 500ms
+          if (!img.dataset.retried) {
+            img.dataset.retried = "true";
+            setTimeout(() => {
+              this.loadImg(img);
+            }, 500);
+          } else if (vEl) {
+            this.applySnippetFallback(img, vEl);
+          }
+        });
     }
 
     clear() {
@@ -534,6 +579,12 @@ document.addEventListener("DOMContentLoaded", () => {
         clearTimeout(timer);
       }
       this.pendingDebounce.clear();
+      if (this.inFlightFetches) {
+        for (const [, ctrl] of this.inFlightFetches.entries()) {
+          try { ctrl.abort(); } catch (e) {}
+        }
+        this.inFlightFetches.clear();
+      }
       // Révoquer toutes les blob: URLs de la session précédente pour libérer la mémoire
       for (const url of this._blobUrls) {
         try { URL.revokeObjectURL(url); } catch (e) {}
@@ -1243,6 +1294,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (window.pdfCacheManager) window.pdfCacheManager.invalidate(id).catch(() => {});
       }
       showToast(`${count} document(s) supprimé(s).`, "info");
+      clearFolderDocsCache();
       if (currentSearchQuery) {
         performSearch(currentSearchQuery);
       } else {
@@ -2062,6 +2114,67 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // Cache LRU en mémoire vive des documents par dossier (folderId -> docs[])
+  const _folderDocsCache = new Map();
+  const FOLDER_DOCS_CACHE_MAX = 25;
+
+  function setFolderDocsCache(folderId, docs) {
+    const key = (folderId !== null && folderId !== undefined) ? String(folderId) : "root";
+    if (_folderDocsCache.has(key)) {
+      _folderDocsCache.delete(key);
+    } else if (_folderDocsCache.size >= FOLDER_DOCS_CACHE_MAX) {
+      const oldestKey = _folderDocsCache.keys().next().value;
+      _folderDocsCache.delete(oldestKey);
+    }
+    _folderDocsCache.set(key, docs);
+  }
+
+  function getFolderDocsCache(folderId) {
+    const key = (folderId !== null && folderId !== undefined) ? String(folderId) : "root";
+    if (_folderDocsCache.has(key)) {
+      const docs = _folderDocsCache.get(key);
+      _folderDocsCache.delete(key);
+      _folderDocsCache.set(key, docs);
+      return docs;
+    }
+    return null;
+  }
+
+  function clearFolderDocsCache() {
+    _folderDocsCache.clear();
+  }
+
+  // Rendu progressif avec cartes de chargement squelettes élégantes
+  function renderFolderLoadingSkeletons(count = 4) {
+    emptyState.style.display = "none";
+    resultsContainer.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+    for (let i = 0; i < count; i++) {
+      const card = document.createElement("div");
+      card.className = "doc-card doc-card-skeleton";
+      card.innerHTML = `
+        <div class="doc-card-header">
+          <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+            <div class="skeleton-shimmer skeleton-title"></div>
+          </div>
+          <div style="display: flex; gap: 6px;">
+            <div class="skeleton-shimmer skeleton-badge"></div>
+          </div>
+        </div>
+        <div class="doc-card-body" style="padding-top: 4px;">
+          <div class="skeleton-shimmer skeleton-cover"></div>
+          <div style="flex: 1; padding: 4px 0 0 12px;">
+            <div class="skeleton-shimmer skeleton-line" style="width: 75%;"></div>
+            <div class="skeleton-shimmer skeleton-line" style="width: 50%;"></div>
+            <div class="skeleton-shimmer skeleton-line" style="width: 65%;"></div>
+          </div>
+        </div>
+      `;
+      fragment.appendChild(card);
+    }
+    resultsContainer.appendChild(fragment);
+  }
+
   function navigateToCrumb(index) {
     if (isNavigatingFolder) return;
     currentSearchQuery = "";
@@ -2079,6 +2192,25 @@ document.addEventListener("DOMContentLoaded", () => {
     currentFolderName = target.name;
     updateFolderFilterVisibility();
     clearSelection();
+
+    // Rendu instantané immédiat (0 ms) des sous-dossiers depuis la mémoire
+    if (Array.isArray(allFolders) && allFolders.length > 0) {
+      const currentSubfolders = allFolders.filter(f => {
+        if (currentFolderId === null) return f.parent_id === null || f.parent_id === undefined;
+        return Number(f.parent_id) === Number(currentFolderId);
+      });
+      renderFolders(currentSubfolders);
+    }
+
+    // Rendu instantané des documents si déjà dans le cache LRU, sinon skeletons progressifs
+    const cachedDocs = getFolderDocsCache(currentFolderId);
+    if (cachedDocs) {
+      currentLoadedDocs = cachedDocs;
+      renderDocumentLibrary(cachedDocs);
+    } else {
+      renderFolderLoadingSkeletons(4);
+    }
+
     loadFoldersAndDocuments();
   }
 
@@ -2100,6 +2232,22 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     updateFolderFilterVisibility();
     clearSelection();
+
+    // Rendu instantané immédiat (0 ms) des sous-dossiers depuis la mémoire
+    if (Array.isArray(allFolders) && allFolders.length > 0) {
+      const subfolders = allFolders.filter(f => Number(f.parent_id) === Number(folder.id));
+      renderFolders(subfolders);
+    }
+
+    // Rendu instantané des documents si déjà dans le cache LRU, sinon skeletons progressifs
+    const cachedDocs = getFolderDocsCache(folder.id);
+    if (cachedDocs) {
+      currentLoadedDocs = cachedDocs;
+      renderDocumentLibrary(cachedDocs);
+    } else {
+      renderFolderLoadingSkeletons(4);
+    }
+
     loadFoldersAndDocuments();
   }
 
@@ -2156,36 +2304,43 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-      // S'assurer que le gestionnaire de cache est initialisé pour un affichage fiable immédiat des statuts
-      if (window.downloadQueueManager) {
-        await window.downloadQueueManager.ensureInitialized(1500).catch(() => {});
+      // Si les dossiers sont déjà en mémoire, afficher immédiatement les dossiers du niveau courant
+      if (Array.isArray(allFolders) && allFolders.length > 0) {
+        const currentFolders = allFolders.filter(f => {
+          if (currentFolderId === null) return f.parent_id === null || f.parent_id === undefined;
+          return Number(f.parent_id) === Number(currentFolderId);
+        });
+        renderFolders(currentFolders);
       }
 
-      // 1. Récupérer les dossiers immédiatement depuis le serveur
-      const parentParam = currentFolderId ? currentFolderId : "root";
-      const foldersRes = await fetch(`/api/folders?parent_id=${parentParam}`);
-      if (!foldersRes.ok) {
-        throw new Error(`Réseau indisponible (HTTP ${foldersRes.status})`);
+      // Si les documents du dossier ne sont pas encore affichés, afficher les skeletons progressifs
+      if (!getFolderDocsCache(currentFolderId) && resultsContainer.querySelectorAll(".doc-card").length === 0) {
+        renderFolderLoadingSkeletons(4);
       }
-      const foldersData = await foldersRes.json();
-      if (!foldersData || !Array.isArray(foldersData.folders)) {
-        throw new Error("Réponse dossiers invalide");
-      }
-      const currentFolders = foldersData.folders;
 
-      // Charger également tous les dossiers en mémoire pour le déplacement et le cache
-      const allFoldersRes = await fetch("/api/folders");
-      if (allFoldersRes.ok) {
-        const allFoldersData = await allFoldersRes.json();
-        allFolders = allFoldersData.folders || [];
+      // Charger tous les dossiers UNIQUEMENT si allFolders est encore vide
+      const foldersPromise = (!allFolders || allFolders.length === 0)
+        ? fetch("/api/folders").then(r => r.ok ? r.json() : null).catch(() => null)
+        : Promise.resolve(null);
+
+      // Charger en parallèle les documents du dossier courant
+      const docFolderParam = currentFolderId ? currentFolderId : "root";
+      const docsPromise = fetch(`/api/documents?folder_id=${docFolderParam}`);
+
+      const [foldersData, docsRes] = await Promise.all([foldersPromise, docsPromise]);
+
+      if (foldersData && Array.isArray(foldersData.folders)) {
+        allFolders = foldersData.folders;
+        const currentFolders = allFolders.filter(f => {
+          if (currentFolderId === null) return f.parent_id === null || f.parent_id === undefined;
+          return Number(f.parent_id) === Number(currentFolderId);
+        });
+        renderFolders(currentFolders);
         if (window.downloadQueueManager) {
-          await window.downloadQueueManager.syncFolders(allFolders);
+          window.downloadQueueManager.syncFolders(allFolders).catch(() => {});
         }
       }
 
-      // 2. Récupérer les documents du dossier courant
-      const docFolderParam = currentFolderId ? currentFolderId : "root";
-      const docsRes = await fetch(`/api/documents?folder_id=${docFolderParam}`);
       if (!docsRes.ok) {
         throw new Error(`Réseau indisponible (HTTP ${docsRes.status})`);
       }
@@ -2194,17 +2349,25 @@ document.addEventListener("DOMContentLoaded", () => {
         throw new Error("Réponse documents invalide");
       }
       const fetchedDocs = docsData.documents;
+
+      // Mettre en cache LRU en RAM
+      setFolderDocsCache(currentFolderId, fetchedDocs);
+
+      // Synchronisation locale asynchrone non-bloquante
       if (window.downloadQueueManager && fetchedDocs.length > 0) {
-        await window.downloadQueueManager.syncDocFolders(fetchedDocs);
+        window.downloadQueueManager.syncDocFolders(fetchedDocs).catch(() => {});
       }
 
       // Si le filtre "Hors-ligne uniquement" est coché, restreindre l'affichage
       if (filterOfflineOnly && filterOfflineOnly.checked && window.downloadQueueManager) {
+        const currentFolders = (allFolders || []).filter(f => {
+          if (currentFolderId === null) return f.parent_id === null || f.parent_id === undefined;
+          return Number(f.parent_id) === Number(currentFolderId);
+        });
         const visibleFolders = currentFolders.filter(f => window.downloadQueueManager.getCachedDocsCountForFolder(f.id) > 0);
         renderFolders(visibleFolders);
         currentLoadedDocs = fetchedDocs.filter(d => window.downloadQueueManager.isDocumentCached(d.id));
       } else {
-        renderFolders(currentFolders);
         currentLoadedDocs = fetchedDocs;
       }
 
@@ -2794,7 +2957,7 @@ document.addEventListener("DOMContentLoaded", () => {
       e.stopPropagation();
       if (!window.downloadQueueManager) return;
       const now = Date.now();
-      if (now - lastCacheActionTime < 400) return;
+      if (now - lastCacheActionTime < 250) return;
       lastCacheActionTime = now;
 
       if (!window.downloadQueueManager.isDocumentCached(doc.id)) return;
@@ -2837,7 +3000,7 @@ document.addEventListener("DOMContentLoaded", () => {
         e.stopPropagation();
         if (!window.downloadQueueManager) return;
         const now = Date.now();
-        if (now - lastCacheActionTime < 500) {
+        if (now - lastCacheActionTime < 250) {
           // Ignorer le clic fantôme consécutif à une suppression (double-clic décalé sous la souris)
           return;
         }
@@ -3403,6 +3566,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
       folderModal.style.display = "none";
       showToast(`Dossier "${name}" créé avec succès !`, "success");
+      clearFolderDocsCache();
+      allFolders = [];
       loadFoldersAndDocuments();
     } catch (err) {
       console.error(err);
@@ -3424,6 +3589,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch(`/api/folders/${folderId}`, { method: "DELETE" });
       if (res.ok) {
         showToast(`Dossier "${folderName}" supprimé.`, "info");
+        clearFolderDocsCache();
+        allFolders = [];
         loadFoldersAndDocuments();
       } else {
         showToast("Erreur lors de la suppression du dossier.", "error");
@@ -3458,6 +3625,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       showToast(`${count} document${count > 1 ? 's' : ''} déplacé${count > 1 ? 's' : ''} dans "${folderName}"`, "success");
       clearSelection();
+      clearFolderDocsCache();
 
       if (currentSearchQuery) {
         performSearch(currentSearchQuery);
@@ -3719,6 +3887,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || "Erreur lors du renommage");
       }
+
+      clearFolderDocsCache();
 
       // Mettre à jour dans les données en mémoire
       const docItem = currentLoadedDocs.find(d => d.id === docIdToRename);
@@ -4466,6 +4636,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (window.pdfCacheManager) window.pdfCacheManager.invalidate(docId).catch(() => {});
         selectedDocIds.delete(docId);
         updateSelectionUI();
+        clearFolderDocsCache();
         if (currentActiveDocId === docId) {
           closeSplitViewer();
         }

@@ -151,6 +151,7 @@ fn setup_test_state() -> (Arc<AppState>, String) {
         pipeline,
         rate_limiter: Arc::new(LoginRateLimiter::new()),
         crop_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
+        crop_in_flight: Arc::new(Mutex::new(std::collections::HashMap::new())),
         search_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(50).unwrap()))),
     });
 

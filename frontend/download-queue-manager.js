@@ -601,7 +601,12 @@ class DownloadQueueManager {
       this._notify();
     } catch (err) {
       console.warn(`[DownloadQueueManager] Erreur ou interruption pour le doc ${docId}:`, err);
-      task.status = 'error';
+      if (err && err.message && err.message.includes("Worker réinitialisé")) {
+        // Le worker a été rechargé (activation SW) : ré-enfiler automatiquement pour reprise transparente
+        this.queue.unshift(docId);
+      } else {
+        task.status = 'error';
+      }
     } finally {
       this.activeTasks.delete(docId);
       this._notify();
