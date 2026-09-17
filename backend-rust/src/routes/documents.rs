@@ -265,25 +265,46 @@ pub async fn upload_document(
     let mut target_folder_id: Option<i64> = None;
     let mut file_bytes: Vec<u8> = Vec::new();
 
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let field_name = field.name().unwrap_or("").to_string();
-        if field_name == "file" {
-            if let Some(fname) = field.file_name() {
-                uploaded_filename = fname.to_string();
-            }
-            if let Ok(bytes) = field.bytes().await {
-                file_bytes = bytes.to_vec();
-            }
-        } else if field_name == "title" {
-            if let Ok(text) = field.text().await {
-                let trimmed = text.trim().to_string();
-                if !trimmed.is_empty() {
-                    custom_title = Some(trimmed);
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                let field_name = field.name().unwrap_or("").to_string();
+                if field_name == "file" {
+                    if let Some(fname) = field.file_name() {
+                        uploaded_filename = fname.to_string();
+                    }
+                    match field.bytes().await {
+                        Ok(bytes) => file_bytes = bytes.to_vec(),
+                        Err(e) => {
+                            return Err((
+                                StatusCode::BAD_REQUEST,
+                                Json(serde_json::json!({
+                                    "error": format!("Erreur lors de la lecture du fichier : {}", e)
+                                })),
+                            ).into_response());
+                        }
+                    }
+                } else if field_name == "title" {
+                    if let Ok(text) = field.text().await {
+                        let trimmed = text.trim().to_string();
+                        if !trimmed.is_empty() {
+                            custom_title = Some(trimmed);
+                        }
+                    }
+                } else if field_name == "folder_id" {
+                    if let Ok(text) = field.text().await {
+                        target_folder_id = text.trim().parse::<i64>().ok();
+                    }
                 }
             }
-        } else if field_name == "folder_id" {
-            if let Ok(text) = field.text().await {
-                target_folder_id = text.trim().parse::<i64>().ok();
+            Ok(None) => break,
+            Err(e) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("Erreur de transmission multipart : {}", e)
+                    })),
+                ).into_response());
             }
         }
     }
@@ -296,8 +317,10 @@ pub async fn upload_document(
         return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Seuls les fichiers PDF sont acceptés"}))).into_response());
     }
 
-    // Validation signature magique PDF
-    if file_bytes.len() < 5 || !file_bytes.starts_with(b"%PDF-") {
+    // Validation signature magique PDF (conforme ISO 32000-1 §7.5.2 : %PDF- dans les 1024 premiers octets)
+    let header_window = &file_bytes[..file_bytes.len().min(1024)];
+    let has_pdf_magic = header_window.windows(5).any(|w| w == b"%PDF-");
+    if !has_pdf_magic {
         return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Format invalide : signature PDF manquante"}))).into_response());
     }
 
