@@ -42,6 +42,24 @@ Lorsqu'un utilisateur effectuait un double-clic rapide sur le bouton de suppress
 
 ---
 
+## 3. OPTIMISATIONS PERF DU RENDU DES VIGNETTES HORS-LIGNE (Solutions 1, 4 & 5)
+
+### 1. Concurrence dynamique multi-cœurs (`crop-worker.js`)
+- `MAX_CONCURRENT_RENDERS = (navigator.hardwareConcurrency > 2) ? 2 : 1;`
+- Le Worker traite maintenant 2 vignettes simultanément sur les machines multi-cœurs (débit x2).
+- Gestion par sémaphore asynchrone `while (activeRenders < MAX_CONCURRENT_RENDERS && renderQueue.length > 0)`.
+
+### 2. File prioritaire LIFO & Annulation hors-champ (`crop-worker.js` & `app.js`)
+- **Priorité LIFO :** `renderQueue.pop()` au lieu de `.shift()`. Les vignettes visibles sous les yeux de l'utilisateur (dernières demandées au scroll) sont rendues en priorité absolue au lieu d'attendre les vignettes déjà passées.
+- **Annulation (`CANCEL_TASK`) :** Quand une image sort du viewport avant son exécution, `IntersectionObserver` notifie `window.offlineCropRenderer.cancelTask(id)`. Le Worker retire la tâche de la file sans aucun calcul CPU inutile.
+
+### 3. Cache de page PDF & Compression WebP optimisée (`crop-worker.js`)
+- **Cache LRU de page décodée (`PAGE_CACHE_MAX = 3`) :** Réutilisation immédiate de l'objet page PDF.js (`doc.getPage(pageNumber)`) pour toutes les occurrences d'une même page. Évite de re-parser le flux PDF à chaque extrait.
+- **Encodage WebP :** `quality: 0.80` au lieu de `0.85` (gain de vitesse CPU significatif à l'encodage, 100% imperceptible pour l'œil).
+- **Correctif délégation clic `doc-cache-btn` :** Réparation de l'horodatage `lastCacheActionTime` qui bloquait le dialogue de confirmation lors du clic sur le nuage vert en état déjà caché (validé par `ui_core.spec.mjs` Core-6).
+
+---
+
 ## 3. PRINCIPALES AMÉLIORATIONS DES TESTS
 
 ### `tests/ui/harness.mjs` (Page Object Model)

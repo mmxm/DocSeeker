@@ -43,10 +43,51 @@ function calculateCropBounds(x0, y0, x1, y1, pageWidth, pageHeight,
 let wasmReady = true; // Wasm supprimé de ce worker — flag toujours vrai pour compatibilité
 
 
-// Sémaphore / File d'attente (1 tâche séquentielle pour préserver la fluidité sur mobile/tablette)
-const MAX_CONCURRENT_RENDERS = 1;
+// Sémaphore / File d'attente (2 tâches concurrentes sur multi-cœurs pour accélérer le débit sans saturer la RAM)
+const MAX_CONCURRENT_RENDERS = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency && navigator.hardwareConcurrency > 2) ? 2 : 1;
 let activeRenders = 0;
 const renderQueue = [];
+
+// Cache LRU de pages décodées (max 3 pages) pour réutilisation immédiate lors d'occurrences multiples sur la même page
+const pageCache = new Map(); // `${docId}_${pageNumber}` -> { page, docId, lastUsed }
+const PAGE_CACHE_MAX = 3;
+
+async function getOrLoadPage(doc, docId, pageNumber) {
+  const key = `${docId}_${pageNumber}`;
+  if (pageCache.has(key)) {
+    const item = pageCache.get(key);
+    item.lastUsed = Date.now();
+    return item.page;
+  }
+  const page = await doc.getPage(pageNumber);
+
+  while (pageCache.size >= PAGE_CACHE_MAX) {
+    let oldestKey = null;
+    let oldestTime = Infinity;
+    for (const [k, v] of pageCache.entries()) {
+      if (v.lastUsed < oldestTime) {
+        oldestTime = v.lastUsed;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey) {
+      try { pageCache.get(oldestKey).page.cleanup(); } catch (_) {}
+      pageCache.delete(oldestKey);
+    } else break;
+  }
+
+  pageCache.set(key, { page, docId, lastUsed: Date.now() });
+  return page;
+}
+
+function clearPageCache(docId = null) {
+  for (const [k, v] of pageCache.entries()) {
+    if (!docId || v.docId === docId) {
+      try { v.page.cleanup(); } catch (_) {}
+      pageCache.delete(k);
+    }
+  }
+}
 
 // Cache LRU de documents PDF.js : la taille est adaptée à la RAM disponible.
 // Un PDF chargé en mémoire dans ce Worker peut peser 2× sa taille sur disque
@@ -210,6 +251,7 @@ async function loadPdfDoc(docId, isOffline = false) {
           }
         }
         if (oldestId) {
+          clearPageCache(oldestId);
           try { pdfDocCache.get(oldestId).doc.destroy(); } catch (e) {}
           pdfDocCache.delete(oldestId);
         } else break;
@@ -227,25 +269,24 @@ async function loadPdfDoc(docId, isOffline = false) {
 }
 
 function processQueue() {
-  if (activeRenders >= MAX_CONCURRENT_RENDERS || renderQueue.length === 0) {
-    return;
+  while (activeRenders < MAX_CONCURRENT_RENDERS && renderQueue.length > 0) {
+    // Priorité LIFO : les vignettes demandées le plus récemment (sous les yeux de l'utilisateur) sont rendues en premier
+    const { id, task, resolve, reject } = renderQueue.pop();
+    activeRenders++;
+
+    executeCropRender(task)
+      .then(resolve)
+      .catch(reject)
+      .finally(() => {
+        activeRenders--;
+        processQueue();
+      });
   }
-
-  const { task, resolve, reject } = renderQueue.shift();
-  activeRenders++;
-
-  executeCropRender(task)
-    .then(resolve)
-    .catch(reject)
-    .finally(() => {
-      activeRenders--;
-      processQueue();
-    });
 }
 
-function enqueueCrop(task) {
+function enqueueCrop(id, task) {
   return new Promise((resolve, reject) => {
-    renderQueue.push({ task, resolve, reject });
+    renderQueue.push({ id, task, resolve, reject });
     processQueue();
   });
 }
@@ -255,7 +296,8 @@ async function executeCropRender(task) {
 
   // Wasm supprimé — calcul effectué en JS pur (traduction fidèle de crop.rs)
   const doc = await loadPdfDoc(docId, isOffline);
-  const page = await doc.getPage(pageNumber);
+  // Réutilisation directe de la page PDF si déjà décodée récemment (gain majeur sur multi-occurrences)
+  const page = await getOrLoadPage(doc, docId, pageNumber);
 
   try {
     const [x0, y0, x1, y1] = rect;
@@ -295,30 +337,43 @@ async function executeCropRender(task) {
 
     let blob;
     try {
-      blob = await canvas.convertToBlob({ type: 'image/webp', quality: 0.85 });
+      blob = await canvas.convertToBlob({ type: 'image/webp', quality: 0.80 });
     } catch (e) {
       blob = await canvas.convertToBlob({ type: 'image/png' });
     }
     return blob;
-  } finally {
-    page.cleanup();
+  } catch (err) {
+    throw err;
   }
 }
 
 self.onmessage = async (e) => {
   const { id, type, payload } = e.data;
 
+  if (type === 'CANCEL_TASK') {
+    const targetId = payload?.id;
+    if (targetId) {
+      const idx = renderQueue.findIndex(item => item.id === targetId);
+      if (idx !== -1) {
+        const [item] = renderQueue.splice(idx, 1);
+        if (item?.resolve) item.resolve(null);
+      }
+    }
+    return;
+  }
+
   if (type === 'CLEAR_QUEUE') {
+    clearPageCache();
     while (renderQueue.length > 0) {
       const { resolve } = renderQueue.shift();
-      resolve(null);
+      if (resolve) resolve(null);
     }
     return;
   }
 
   if (type === 'RENDER_CROP') {
     try {
-      const blob = await enqueueCrop(payload);
+      const blob = await enqueueCrop(id, payload);
       self.postMessage({ id, success: true, blob });
     } catch (err) {
       const isNetworkOffline = (typeof self !== 'undefined' && self.navigator && self.navigator.onLine === false);

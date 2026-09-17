@@ -126,7 +126,19 @@ document.addEventListener("DOMContentLoaded", () => {
       this.callbacks.clear();
     }
 
-    async renderAndCache(docId, pageNumber, highlightRects, rect, cropUrl, isOffline = false) {
+    cancelTask(id) {
+      if (!id) return;
+      if (this.worker) {
+        this.worker.postMessage({ type: 'CANCEL_TASK', payload: { id } });
+      }
+      if (this.callbacks.has(id)) {
+        const { resolve } = this.callbacks.get(id);
+        this.callbacks.delete(id);
+        resolve(null);
+      }
+    }
+
+    async renderAndCache(docId, pageNumber, highlightRects, rect, cropUrl, isOffline = false, onReqIdAssigned = null) {
       // 1. Vérification immédiate dans CacheStorage (0ms, évite tout calcul PDF redondant)
       if (cropUrl && typeof caches !== 'undefined') {
         try {
@@ -141,6 +153,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
       if (!this.worker) return null;
       const id = ++this.reqId;
+      if (typeof onReqIdAssigned === 'function') {
+        onReqIdAssigned(id);
+      }
       const blobPromise = new Promise((resolve, reject) => {
         this.callbacks.set(id, { resolve, reject });
         this.worker.postMessage({
@@ -338,6 +353,11 @@ document.addEventListener("DOMContentLoaded", () => {
             this.scheduleLoad(img);
           } else {
             this.cancelPending(img);
+            if (img.dataset.loaded !== "true" && img._cropReqId && window.offlineCropRenderer) {
+              img._wasCancelled = true;
+              window.offlineCropRenderer.cancelTask(img._cropReqId);
+              img._cropReqId = null;
+            }
           }
         });
       }, {
@@ -363,6 +383,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     scheduleLoad(img) {
+      img._wasCancelled = false;
       if (img.dataset.loaded === "true") return;
       if (this.pendingDebounce.has(img)) {
         clearTimeout(this.pendingDebounce.get(img));
@@ -433,7 +454,10 @@ document.addEventListener("DOMContentLoaded", () => {
               if (rect && rect.length === 4) hlRects = [rect];
             }
             if (rect && rect.length === 4) {
-              window.offlineCropRenderer.renderAndCache(docId, pageNum, hlRects, rect, srcUrl, isOfflineMode).then(blob => {
+              window.offlineCropRenderer.renderAndCache(docId, pageNum, hlRects, rect, srcUrl, isOfflineMode, (id) => {
+                img._cropReqId = id;
+              }).then(blob => {
+                img._cropReqId = null;
                 if (blob) {
                   // Révoquer l'ancienne blob URL de cet élément si elle existait
                   if (img._blobUrl) {
@@ -448,9 +472,18 @@ document.addEventListener("DOMContentLoaded", () => {
                   img.style.display = "block";
                   img.style.opacity = "1";
                 } else {
+                  if (img._wasCancelled) {
+                    img.dataset.loaded = "false";
+                    return;
+                  }
                   this.applySnippetFallback(img, vEl);
                 }
               }).catch(err => {
+                img._cropReqId = null;
+                if (img._wasCancelled) {
+                  img.dataset.loaded = "false";
+                  return;
+                }
                 const isExpectedOffline = (err?.code === 'PDF_OFFLINE_UNAVAILABLE' || isOfflineMode || !navigator.onLine);
                 if (!isExpectedOffline) {
                   console.warn('[DynamicCropManager] offlineCropRenderer error:', err);
@@ -2808,13 +2841,12 @@ document.addEventListener("DOMContentLoaded", () => {
           // Ignorer le clic fantôme consécutif à une suppression (double-clic décalé sous la souris)
           return;
         }
-        lastCacheActionTime = now;
-
         await window.downloadQueueManager.ensureInitialized(1500).catch(() => {});
         const isCurrentlyCached = window.downloadQueueManager.isDocumentCached(doc.id);
         if (isCurrentlyCached) {
           await handleDeleteDocCache(e);
         } else {
+          lastCacheActionTime = now;
           cacheBtn.className = "doc-cache-btn downloading";
           cacheBtn.title = "Téléchargement en cours...";
           cacheBtn.innerHTML = `<span class="spin-indicator"></span>`;
