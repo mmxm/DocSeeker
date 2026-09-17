@@ -829,5 +829,141 @@ test.describe('Matrice de Résistance Agressive & Garde-fous Performance / RAM',
     console.log(`[F3] DOM après reset : ${finalMetrics.domNodeCount} nodes`);
     console.log('✅ [F3] DOM nodes stables, 0 fuite mémoire détectée.');
   });
+
+  // =========================================================================
+  // MATRICE S : Parcours Intensif 10 Cycles — Ouverture PDF, Scroll Panneau/Viewer, Recherche Interne & Reset
+  // =========================================================================
+
+  const intensiveStressModes = [
+    { mode: 'Online',  isOffline: false },
+    { mode: 'Offline', isOffline: true  },
+  ];
+
+  for (const cfg of intensiveStressModes) {
+    test(`Matrice S.${cfg.mode} - 10 Cycles d'Ouverture PDF, Scroll Panneau/Viewer, Recherche Interne, Détection Fuite RAM & Reset`, async ({ page, context }) => {
+      test.setTimeout(240000); // 4 minutes pour les 10 cycles complets
+
+      // 1. Initialisation
+      await harness.goto('/');
+
+      if (cfg.isOffline) {
+        // En mode hors-ligne : garantir que les documents de test 1, 2 et 3 sont à 100% en cache
+        console.log(`[Matrice S.${cfg.mode}] Préparation du cache local pour les documents 1, 2, 3...`);
+        await harness.ensureDocCached(1);
+        await harness.ensureDocCached(2);
+        await harness.ensureDocCached(3);
+        await context.setOffline(true);
+        await harness.setOfflineFilter(true);
+      }
+
+      // Recherche initiale globale garantissant des résultats multi-documents
+      await harness.injectSearchQuery('grossesse', { expectResultsIn: 12000 });
+      const docCards = page.locator('.doc-card');
+      await expect(docCards.first()).toBeVisible({ timeout: 10000 });
+
+      const startMetrics = await harness.getPerformanceMetrics();
+      const cycleTimes = [];
+      const ramSnapshots = [];
+
+      const docCount = await docCards.count();
+      expect(docCount).toBeGreaterThanOrEqual(2);
+
+      // Effectuer 10 cycles séquentiels d'ouverture avec alternance de documents
+      const TOTAL_CYCLES = 10;
+      for (let cycle = 1; cycle <= TOTAL_CYCLES; cycle++) {
+        const cycleStart = Date.now();
+        const docIndex = (cycle - 1) % Math.min(docCount, 3);
+        const targetDocCard = docCards.nth(docIndex);
+        const docId = await targetDocCard.getAttribute('data-doc-id');
+
+        // A. Clic sur le premier extrait / vignette du document
+        const vignette = targetDocCard.locator('.vignette-item').first();
+        await expect(vignette).toBeVisible({ timeout: 6000 });
+        const targetPage = Number(await vignette.getAttribute('data-page') || 1);
+        await vignette.click();
+
+        // B. Vérifier l'ouverture du Split View
+        const viewerPane = page.locator('#viewerPane');
+        await expect(viewerPane).toBeVisible({ timeout: 12000 });
+        await expect(page.locator('#docDetailView')).toBeVisible({ timeout: 6000 });
+
+        // C. Vérification de la page dans le badge du viewer
+        await expect(page.locator('#viewerPageBadge')).toHaveText(`Page ${targetPage}`, { timeout: 8000 });
+
+        // D. Vérification du scroll & de la carte active dans le panneau latéral
+        const activeCard = page.locator('#docOccurrencesList .vertical-occ-card.active');
+        await expect(activeCard).toBeVisible({ timeout: 8000 });
+        const activeCardPage = await activeCard.getAttribute('data-page');
+        expect(Number(activeCardPage)).toBe(targetPage);
+
+        // Vérifier que la carte active est bien scrollée dans le conteneur latéral
+        const isSidebarScrolledProperly = await page.evaluate(() => {
+          const active = document.querySelector('#docOccurrencesList .vertical-occ-card.active');
+          const container = document.getElementById('docOccurrencesList');
+          if (!active || !container) return false;
+          const aRect = active.getBoundingClientRect();
+          const cRect = container.getBoundingClientRect();
+          // La carte doit être visible dans ou proche de la zone visible du conteneur
+          return aRect.bottom >= cRect.top - 20 && aRect.top <= cRect.bottom + 20;
+        });
+        expect(isSidebarScrolledProperly).toBe(true);
+
+        // E. Vérification du PDF dans l'iframe #pdfFrame (page rendue et visible)
+        const pdfFrame = page.frameLocator('#pdfFrame');
+        await expect(pdfFrame.locator(`.page[data-page-number="${targetPage}"]`)).toBeVisible({ timeout: 15000 });
+
+        // F. Recherche interne au sein du document ouvert
+        const internalQuery = (cycle % 2 === 0) ? 'femme' : 'foetus';
+        const docSearchInput = page.locator('#docSearchInput');
+        await docSearchInput.fill(internalQuery);
+        await docSearchInput.press('Enter');
+        await page.waitForTimeout(600);
+
+        // Vérifier que le badge de décompte interne s'actualise
+        const countBadge = page.locator('#docDetailCount');
+        await expect(countBadge).toBeVisible({ timeout: 6000 });
+        const countText = await countBadge.textContent();
+        expect(countText).toContain('résultat');
+
+        // G. Fermeture du viewer pour retour aux résultats globaux
+        const closeBtn = page.locator('#closeViewerBtn');
+        await closeBtn.click();
+        await expect(viewerPane).toBeHidden({ timeout: 6000 });
+        await expect(page.locator('#generalView')).toBeVisible({ timeout: 6000 });
+        await expect(docCards.first()).toBeVisible({ timeout: 6000 });
+
+        // Mesure métriques de fin de cycle
+        const cycleDuration = Date.now() - cycleStart;
+        cycleTimes.push(cycleDuration);
+
+        const currentMetrics = await harness.getPerformanceMetrics();
+        ramSnapshots.push(currentMetrics.jsHeapMB);
+        console.log(`[Matrice S.${cfg.mode}] Cycle ${cycle}/${TOTAL_CYCLES} (Doc #${docId}, p.${targetPage}) : ${cycleDuration}ms | Heap: ${currentMetrics.jsHeapMB}MB | DOM: ${currentMetrics.domNodeCount}`);
+      }
+
+      // H. Vérification de non-dégradation / absence de lag exponentiel
+      const avgEarly = (cycleTimes[0] + cycleTimes[1] + cycleTimes[2]) / 3;
+      const avgLate  = (cycleTimes[7] + cycleTimes[8] + cycleTimes[9]) / 3;
+      console.log(`[Matrice S.${cfg.mode}] Moyenne 3 premiers cycles : ${avgEarly.toFixed(0)}ms | 3 derniers : ${avgLate.toFixed(0)}ms`);
+      // Tolérance généreuse pour machine locale : pas d'explosion x3.5 du temps
+      expect(avgLate).toBeLessThan(avgEarly * 3.5);
+
+      // I. Réinitialisation de la recherche globale et vérification du retour strict à la racine
+      await harness.clearSearch();
+      if (cfg.isOffline) {
+        await harness.setOfflineFilter(false);
+        await context.setOffline(false);
+      }
+      await expect(page.locator('#foldersSection')).toBeVisible({ timeout: 8000 });
+      const searchVal = await page.locator('#searchInput').inputValue();
+      expect(searchVal).toBe('');
+
+      // J. Garde-fou RAM & fuite mémoire
+      const endMetrics = await harness.getPerformanceMetrics();
+      harness.assertResourceGuard(startMetrics, endMetrics, { maxHeapGrowthMB: 80, maxDurationMs: 240000 });
+      console.log(`✅ [Matrice S.${cfg.mode}] 10 cycles complets d'ouverture, scroll, surlignage, recherche interne et fermeture validés avec succès !`);
+    });
+  }
 });
+
 

@@ -11,7 +11,7 @@ La suite de tests Playwright de DocSeeker a été entièrement refondue, fiabili
 | Projet | Tests | Statut | Durée | Couverture |
 |---|---|---|---|---|
 | **stable** | **22 / 22** | **100% PASSÉ ✅** | ~42s | Bibliothèque, FTS, Cache OPFS, F5, Sélections, Tri, Filtres hors-ligne O1..O11 |
-| **stress** | **49 / 49** | **100% PASSÉ ✅** | ~3.1m | Matrices A-F (Spam clics, requêtes limites, flapping 50ms..4s, DOM leaks) + Edge Cases |
+| **stress** | **51 / 51** | **100% PASSÉ ✅** | ~3.3m | Matrices A-F + **Matrice S (10 Cycles Parcours Intensif Online & Offline)** + Edge Cases |
 
 ---
 
