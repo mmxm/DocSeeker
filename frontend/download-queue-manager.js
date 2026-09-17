@@ -24,10 +24,21 @@ class DownloadQueueManager {
     this._initWorker();
   }
 
+  reinitializeWorker() {
+    console.log('[DownloadQueueManager] Réinitialisation du Worker de recherche locale...');
+    if (this.worker) {
+      try { this.worker.terminate(); } catch (e) {}
+    }
+    this._workerCallbacks.clear();
+    this._workerFailed = false;
+    this._initWorker();
+  }
+
   _initWorker() {
     if (typeof Worker !== 'undefined') {
       try {
-        this.worker = new Worker('/offline-search-worker.js?v=8.5', { type: 'module' });
+        const v = (typeof window !== 'undefined' && window.DOCSEEKER_VERSION) || (typeof document !== 'undefined' && document.querySelector('meta[name="app-version"]')?.getAttribute('content')) || '8.6';
+        this.worker = new Worker(`/offline-search-worker.js?v=${v}`, { type: 'module' });
         this.worker.onerror = (err) => {
           console.warn('[DownloadQueueManager] Erreur ou échec du Web Worker offline:', err);
           this._workerFailed = true;

@@ -7,20 +7,25 @@
  * 3. Routage résilient avec fallback automatique sur incident réseau.
  */
 
-const CACHE_NAME = 'docseeker-app-shell-v17';
+const APP_VERSION = '8.6';
+const CACHE_NAME = `docseeker-app-shell-v${APP_VERSION}`;
 const CROP_CACHE_NAME = 'docseeker_offline_crops';
 const COVER_CACHE_NAME = 'docseeker_covers';
+
+const VERSIONED_ASSETS = [
+  '/style.css',
+  '/app.js',
+  '/pdf-cache.js',
+  '/download-queue-manager.js',
+  '/offline-search-worker.js',
+  '/worker-setup.js',
+  '/crop-worker.js'
+].map((asset) => `${asset}?v=${APP_VERSION}`);
 
 const APP_SHELL_ASSETS = [
   '/',
   '/index.html',
-  '/style.css?v=8.5',
-  '/app.js?v=8.5',
-  '/pdf-cache.js?v=8.5',
-  '/download-queue-manager.js?v=8.5',
-  '/offline-search-worker.js?v=8.5',
-  '/worker-setup.js?v=8.5',
-  '/crop-worker.js?v=8.5',
+  ...VERSIONED_ASSETS,
   '/favicon.ico',
   '/placeholder-cover.png',
   '/wasm/search_wasm/search_wasm.js',

@@ -1,3 +1,6 @@
+// Source unique de vérité pour la version de l'application
+window.DOCSEEKER_VERSION = (typeof document !== 'undefined' && document.querySelector('meta[name="app-version"]')?.getAttribute('content')) || '8.6';
+
 document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
   // Helper Réseau Sécurisé (Immunité WHATWG contre URL credentials)
@@ -72,8 +75,17 @@ document.addEventListener("DOMContentLoaded", () => {
       this.worker = null;
       this.reqId = 0;
       this.callbacks = new Map();
+      this.initWorker();
+    }
+
+    initWorker() {
+      if (this.worker) {
+        try { this.worker.terminate(); } catch (e) {}
+      }
+      this.callbacks.clear();
       if (typeof Worker !== 'undefined') {
-        this.worker = new Worker('/crop-worker.js?v=8.5', { type: 'module' });
+        const v = window.DOCSEEKER_VERSION || '8.6';
+        this.worker = new Worker(`/crop-worker.js?v=${v}`, { type: 'module' });
         this.worker.onmessage = (e) => {
           const { id, success, blob, error, code } = e.data;
           if (this.callbacks.has(id)) {
@@ -96,6 +108,11 @@ document.addEventListener("DOMContentLoaded", () => {
           this.callbacks.clear();
         };
       }
+    }
+
+    reinitializeWorker() {
+      console.log('[OfflineCropRenderer] Réinitialisation du Worker de crop avec la version', window.DOCSEEKER_VERSION);
+      this.initWorker();
     }
 
     clearQueue() {
@@ -4713,8 +4730,21 @@ document.addEventListener("DOMContentLoaded", () => {
   // Enregistrement du Service Worker & Persistance du stockage
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js")
-      .then((reg) => console.log("[ServiceWorker] Enregistré avec succès:", reg.scope))
+      .then((reg) => {
+        console.log("[ServiceWorker] Enregistré avec succès:", reg.scope);
+        reg.update().catch(() => {});
+      })
       .catch((err) => console.warn("[ServiceWorker] Échec enregistrement:", err));
+
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      console.log("[ServiceWorker] Nouveau contrôleur actif (mise à jour Service Worker activée)");
+      if (window.offlineCropRenderer && typeof window.offlineCropRenderer.reinitializeWorker === "function") {
+        window.offlineCropRenderer.reinitializeWorker();
+      }
+      if (window.downloadQueueManager && typeof window.downloadQueueManager.reinitializeWorker === "function") {
+        window.downloadQueueManager.reinitializeWorker();
+      }
+    });
   }
 
   if (navigator.storage && navigator.storage.persist) {

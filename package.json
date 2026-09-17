@@ -1,12 +1,14 @@
 {
   "name": "docseeker-tests",
-  "version": "2.0.0",
+  "version": "8.6",
   "description": "DocSeeker - Tests Automatiques UI & Moteur Hors-Ligne",
   "private": true,
   "type": "module",
   "scripts": {
+    "test:version": "node tests/test_version_consistency.mjs",
     "test:ui": "playwright test",
-    "test:ui:headed": "playwright test --headed"
+    "test:ui:headed": "playwright test --headed",
+    "bump": "bash scripts/bump_version.sh"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.0"

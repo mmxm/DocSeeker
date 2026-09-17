@@ -11,7 +11,9 @@ use std::path::PathBuf;
 pub struct EmbeddedFrontend;
 
 fn get_cache_control(path: &str) -> &'static str {
-    if path.ends_with(".html") || path == "index.html" {
+    if path == "sw.js" {
+        "no-cache, no-store, must-revalidate"
+    } else if path.ends_with(".html") || path == "index.html" {
         "no-cache"
     } else if path.starts_with("pdfjs/") {
         // Assets de PDF.js (viewer.mjs, pdf.mjs, pdf.worker.mjs, etc.) : mise en cache avec revalidation
