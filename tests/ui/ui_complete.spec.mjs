@@ -948,8 +948,9 @@ test.describe('DocSeeker - Suite Complète de Tests UI Automatisés (En ligne & 
         harness.assertZeroErrors();
         await harness.setOffline(false);
       } else if (sc.heavyQuery) {
+        await harness.cleanDocCache(sc.docId);
         await harness.openFolder(130);
-        await harness.downloadDocToComplete(sc.docId);
+        await harness.downloadDocToComplete(sc.docId, 45000);
 
         await harness.setOffline(true);
         await harness.setOfflineFilter(true);
@@ -961,8 +962,9 @@ test.describe('DocSeeker - Suite Complète de Tests UI Automatisés (En ligne & 
         harness.assertZeroErrors();
         await harness.setOffline(false);
       } else if (sc.noMatchQuery) {
+        await harness.cleanDocCache(sc.docId);
         await harness.openFolder(130);
-        await harness.downloadDocToComplete(sc.docId);
+        await harness.downloadDocToComplete(sc.docId, 45000);
 
         await harness.setOffline(true);
         await harness.setOfflineFilter(true);

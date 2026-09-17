@@ -170,6 +170,12 @@ test.describe('Matrice de Résistance Agressive & Garde-fous Performance / RAM',
   test('Matrice B2 - Recherche en rafale en Full Hors-Ligne (SQLite OPFS & Multi-Archétypes)', async ({ page, context }) => {
     await harness.goto('/');
 
+    // Nettoyage préventif : les tests A1 et A2 peuvent laisser LIGHT et MEDIUM en état
+    // de téléchargement partiel ou annulé, ce qui bloquerait downloadDocToComplete.
+    await harness.cleanDocCache(ARCHETYPES.LIGHT.id);
+    await harness.cleanDocCache(ARCHETYPES.MEDIUM.id);
+    await page.waitForTimeout(300);
+
     // Mettre en cache un document léger et un document moyen
     await harness.downloadDocToComplete(ARCHETYPES.LIGHT.id);
     await harness.downloadDocToComplete(ARCHETYPES.MEDIUM.id);

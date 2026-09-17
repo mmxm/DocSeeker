@@ -166,6 +166,7 @@ async function loadPdfDoc(docId, isOffline = false) {
         disableStream: false,
         ownerDocument: null,
         useSystemFonts: true,
+        disableFontFace: true,
         verbosity: 0,
         isEvalSupported: false,
         standardFontDataUrl: new URL('/pdfjs/web/standard_fonts/', self.location.origin).href,

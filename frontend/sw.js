@@ -7,7 +7,7 @@
  * 3. Routage résilient avec fallback automatique sur incident réseau.
  */
 
-const APP_VERSION = '8.6';
+const APP_VERSION = '8.7';
 const CACHE_NAME = `docseeker-app-shell-v${APP_VERSION}`;
 const CROP_CACHE_NAME = 'docseeker_offline_crops';
 const COVER_CACHE_NAME = 'docseeker_covers';
@@ -106,8 +106,9 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   console.log('[ServiceWorker] Activation...');
   event.waitUntil(
-    caches.keys().then((keys) => {
-      return Promise.all(
+    caches.keys().then(async (keys) => {
+      // 1. Suppression des anciens caches de versions antérieures
+      await Promise.all(
         keys.map((key) => {
           if (key !== CACHE_NAME && key !== CROP_CACHE_NAME && key !== COVER_CACHE_NAME) {
             console.log('[ServiceWorker] Suppression de l\'ancien cache:', key);
@@ -115,6 +116,21 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
+
+      // 2. Invalidation du cache des vignettes lors d'une montée de version
+      // pour purger d'éventuels crops corrompus et forcer le rendu vectoriel natif
+      try {
+        const migrationKey = `/__crop_cache_cleaned_v${APP_VERSION}`;
+        const appCache = await caches.open(CACHE_NAME);
+        const isCleaned = await appCache.match(migrationKey);
+        if (!isCleaned) {
+          console.log(`[ServiceWorker] Purge du cache des vignettes ${CROP_CACHE_NAME} pour v${APP_VERSION}...`);
+          await caches.delete(CROP_CACHE_NAME);
+          await appCache.put(migrationKey, new Response('1'));
+        }
+      } catch (e) {
+        console.warn('[ServiceWorker] Erreur lors de la purge de CROP_CACHE_NAME:', e);
+      }
     }).then(() => self.clients.claim())
   );
 });
