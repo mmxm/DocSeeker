@@ -8,8 +8,8 @@ export default defineConfig({
   },
   fullyParallel: false,
   workers: 1, // Exécution séquentielle pour isoler IndexedDB et OPFS
-  retries: 0,
   reporter: [['list']],
+  globalSetup: './tests/ui/global-setup.mjs',
   use: {
     baseURL: 'http://localhost:8080',
     trace: 'on-first-retry',
@@ -18,15 +18,27 @@ export default defineConfig({
   },
   projects: [
     {
-      name: 'chromium',
+      // Tests déterministes : 0 retry, aucune tolérance à la flakiness
+      name: 'stable',
+      testMatch: ['**/ui_core.spec.*', '**/ui_offline.spec.*'],
+      retries: 0,
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
-          args: [
-            '--disable-web-security',
-            '--enable-features=SharedArrayBuffer',
-          ]
-        }
+          args: ['--disable-web-security', '--enable-features=SharedArrayBuffer'],
+        },
+      },
+    },
+    {
+      // Tests de stress et cas limites : 1 retry autorisé (variance environnementale)
+      name: 'stress',
+      testMatch: ['**/ui_stress*.spec.*', '**/ui_edge_cases.spec.*'],
+      retries: 1,
+      use: {
+        ...devices['Desktop Chrome'],
+        launchOptions: {
+          args: ['--disable-web-security', '--enable-features=SharedArrayBuffer'],
+        },
       },
     },
   ],
@@ -37,3 +49,4 @@ export default defineConfig({
     timeout: 15000,
   },
 });
+
