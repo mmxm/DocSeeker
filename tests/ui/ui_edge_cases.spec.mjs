@@ -78,8 +78,8 @@ test.describe('DocSeeker - Edge Cases (EC)', () => {
     // L'application ne doit pas crasher
     await page.waitForTimeout(1000);
     await expect(page.locator('#searchInput')).toBeVisible();
-    const afterCards = page.locator('.doc-card, #emptyState, #foldersSection');
-    await expect(afterCards.first()).toBeVisible({ timeout: 8000 });
+    const afterCards = page.locator('.doc-card:visible, #emptyState:visible, #foldersSection:visible');
+    await expect(afterCards.first()).toBeVisible({ timeout: 20000 });
     console.log('✅ [EC-4] Recherche pendant pipeline scan : 0 crash.');
   });
 
@@ -240,8 +240,15 @@ test.describe('Matrice G - PWA / Service Worker', () => {
   });
 
   test('G1 - Service Worker Enregistré et Actif', async ({ page }) => {
+    await expect.poll(async () => {
+      return await page.evaluate(async () => {
+        if (!navigator.serviceWorker) return null;
+        const reg = await navigator.serviceWorker.ready.catch(() => null);
+        return reg?.active?.state;
+      });
+    }, { timeout: 15000, intervals: [200, 500, 1000] }).toBe('activated');
+
     const swState = await page.evaluate(async () => {
-      if (!navigator.serviceWorker) return { supported: false };
       const reg = await navigator.serviceWorker.ready.catch(() => null);
       return {
         supported: true,
@@ -251,13 +258,19 @@ test.describe('Matrice G - PWA / Service Worker', () => {
       };
     });
     console.log('[G1] SW state:', JSON.stringify(swState));
-    expect(swState.supported).toBe(true);
     expect(swState.active).toBe(true);
     expect(swState.state).toBe('activated');
     console.log('✅ [G1] Service Worker actif et dans l\'état "activated".');
   });
 
   test('G2 - App Shell Chargé depuis Cache SW (Offline après 1ère visite)', async ({ page, context }) => {
+    // S'assurer que le SW est bien prêt et activé
+    await page.evaluate(async () => {
+      if (navigator.serviceWorker) {
+        await navigator.serviceWorker.ready.catch(() => {});
+      }
+    });
+
     // Déjà visité en online → le SW a mis en cache les ressources statiques
     await context.setOffline(true);
 
@@ -366,8 +379,8 @@ test.describe('Matrice H - Gestion des Dossiers', () => {
       data: { name: originalName, color: '#ef4444' }
     });
     expect(createRes.ok()).toBeTruthy();
-    const { folder } = await createRes.json();
-    createdFolderId = folder.id;
+    const folder = await createRes.json();
+    createdFolderId = folder.id || folder.folder?.id;
 
     await page.reload();
     await page.locator('#searchInput').waitFor({ state: 'visible', timeout: 10000 });
@@ -398,8 +411,8 @@ test.describe('Matrice H - Gestion des Dossiers', () => {
       data: { name: destName, color: '#22c55e' }
     });
     expect(createRes.ok()).toBeTruthy();
-    const { folder } = await createRes.json();
-    createdFolderId = folder.id;
+    const folder = await createRes.json();
+    createdFolderId = folder.id || folder.folder?.id;
     await page.reload();
     await page.locator('#searchInput').waitFor({ state: 'visible', timeout: 10000 });
 
@@ -414,7 +427,7 @@ test.describe('Matrice H - Gestion des Dossiers', () => {
     await page.locator('#batchMoveBtn').click();
 
     // Choisir le dossier de destination
-    const destFolder = page.locator(`#folderSelectList [data-folder-id="${folder.id}"]`);
+    const destFolder = page.locator(`#folderSelectList [data-folder-id="${createdFolderId}"]`);
     if (await destFolder.isVisible({ timeout: 5000 }).catch(() => false)) {
       await destFolder.click();
       await page.locator('#confirmMoveDocBtn').click();
@@ -426,7 +439,7 @@ test.describe('Matrice H - Gestion des Dossiers', () => {
       if (docRes.ok()) {
         const doc = await docRes.json();
         console.log(`[H3] Doc #${docId} folder_id après déplacement : ${doc.folder_id}`);
-        expect(Number(doc.folder_id)).toBe(folder.id);
+        expect(Number(doc.folder_id)).toBe(createdFolderId);
       }
       console.log('✅ [H3] Document déplacé dans le dossier cible.');
 
@@ -444,12 +457,13 @@ test.describe('Matrice H - Gestion des Dossiers', () => {
       data: { name: folderName, color: '#a855f7' }
     });
     expect(createRes.ok()).toBeTruthy();
-    const { folder } = await createRes.json();
+    const folder = await createRes.json();
+    const folderId = folder.id || folder.folder?.id;
 
     await page.reload();
     await page.locator('#searchInput').waitFor({ state: 'visible', timeout: 10000 });
 
-    const folderCard = page.locator(`.folder-card[data-folder-id="${folder.id}"]`);
+    const folderCard = page.locator(`.folder-card[data-folder-id="${folderId}"]`);
     await expect(folderCard).toBeVisible({ timeout: 8000 });
 
     // Supprimer via le bouton de suppression

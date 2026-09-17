@@ -2722,17 +2722,30 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Gestion de la suppression du cache local
+    let lastCacheActionTime = 0;
     const handleDeleteDocCache = async (e) => {
       e.stopPropagation();
       if (!window.downloadQueueManager) return;
-      if (confirm(`Supprimer "${doc.title || doc.filename}" du cache local hors-ligne ?`)) {
-        await window.downloadQueueManager.removeDocumentFromCache(doc.id);
-        updateDocCardCacheUI(doc.id);
-        showToast(`Document "${doc.title || doc.filename}" supprimé du cache local`, "info");
-        if (filterOfflineOnly && filterOfflineOnly.checked) {
-          if (currentSearchQuery) performSearch(currentSearchQuery);
-          else loadFoldersAndDocuments();
+      const now = Date.now();
+      if (now - lastCacheActionTime < 400) return;
+      lastCacheActionTime = now;
+
+      if (!window.downloadQueueManager.isDocumentCached(doc.id)) return;
+
+      if (deleteDocCacheBtn) deleteDocCacheBtn.disabled = true;
+      try {
+        if (confirm(`Supprimer "${doc.title || doc.filename}" du cache local hors-ligne ?`)) {
+          lastCacheActionTime = Date.now();
+          await window.downloadQueueManager.removeDocumentFromCache(doc.id);
+          updateDocCardCacheUI(doc.id);
+          showToast(`Document "${doc.title || doc.filename}" supprimé du cache local`, "info");
+          if (filterOfflineOnly && filterOfflineOnly.checked) {
+            if (currentSearchQuery) performSearch(currentSearchQuery);
+            else loadFoldersAndDocuments();
+          }
         }
+      } finally {
+        if (deleteDocCacheBtn) deleteDocCacheBtn.disabled = false;
       }
     };
 
@@ -2756,6 +2769,13 @@ document.addEventListener("DOMContentLoaded", () => {
       cacheBtn.addEventListener("click", async (e) => {
         e.stopPropagation();
         if (!window.downloadQueueManager) return;
+        const now = Date.now();
+        if (now - lastCacheActionTime < 500) {
+          // Ignorer le clic fantôme consécutif à une suppression (double-clic décalé sous la souris)
+          return;
+        }
+        lastCacheActionTime = now;
+
         await window.downloadQueueManager.ensureInitialized(1500).catch(() => {});
         const isCurrentlyCached = window.downloadQueueManager.isDocumentCached(doc.id);
         if (isCurrentlyCached) {

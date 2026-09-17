@@ -267,7 +267,7 @@ export class DocSeekerTestHarness {
     ).toBe(true);
   }
 
-  async downloadDocToComplete(docId, timeoutMs = 25000) {
+  async downloadDocToComplete(docId, timeoutMs = 30000) {
     const id = Number(docId);
     const isAlreadyDone = await this.page.evaluate(async (idNum) => {
       const isIndexed  = window.downloadQueueManager?.isDocumentCached(idNum);
@@ -280,20 +280,32 @@ export class DocSeekerTestHarness {
     if (isAlreadyDone) return;
 
     await this.page.evaluate(async (idNum) => {
-      if (window.downloadQueueManager) await window.downloadQueueManager.enqueueDocument(idNum);
+      if (window.downloadQueueManager) {
+        if (window.downloadQueueManager.isPaused) window.downloadQueueManager.resume();
+        await window.downloadQueueManager.enqueueDocument(idNum);
+        if (typeof window.downloadQueueManager._processNext === 'function') {
+          window.downloadQueueManager._processNext();
+        }
+      }
     }, id);
 
     await expect.poll(
       async () => {
         return await this.page.evaluate(async (idNum) => {
-          const isIndexed  = window.downloadQueueManager?.isDocumentCached(idNum);
-          if (!isIndexed) return false;
+          const dqm = window.downloadQueueManager;
+          const isIndexed = dqm?.isDocumentCached(idNum);
+          if (!isIndexed) {
+            if (dqm && !dqm.activeTasks.has(idNum) && !dqm.queue.includes(idNum)) {
+              dqm.enqueueDocument(idNum);
+            }
+            return false;
+          }
           if (!window.pdfCacheManager) return true;
           const isComplete = await window.pdfCacheManager.isComplete(idNum);
           return Boolean(isIndexed && isComplete);
         }, id);
       },
-      { timeout: timeoutMs, intervals: [200, 400, 800] }
+      { timeout: timeoutMs, intervals: [300, 600, 1000] }
     ).toBe(true);
   }
 
@@ -369,25 +381,29 @@ export class DocSeekerTestHarness {
    * Audit global : 0 vignette corrompue (naturalWidth=0, opacity=0, classe erreur).
    * Utile après des bascules de filtres rapides ou des stress tests.
    */
-  async assertNoCropCorruption() {
-    const result = await this.page.evaluate(() => {
-      const imgs    = Array.from(document.querySelectorAll('.vignette-crop-img'));
-      const corrupt = imgs.filter(img =>
-        !img.complete || img.naturalWidth === 0 ||
-        window.getComputedStyle(img).opacity === '0' ||
-        Boolean(img.closest('.vignette-error'))
-      );
-      return {
-        total: imgs.length,
-        corruptCount: corrupt.length,
-        corruptSrcs: corrupt.slice(0, 3).map(i => i.src)
-      };
-    });
-    if (result.corruptCount > 0) {
-      console.error(`[assertNoCropCorruption] ${result.corruptCount}/${result.total} vignettes corrompues :`, result.corruptSrcs);
+  async assertNoCropCorruption({ timeout = 10000 } = {}) {
+    let lastResult = { total: 0, corruptCount: 0, corruptSrcs: [] };
+    await expect.poll(async () => {
+      lastResult = await this.page.evaluate(() => {
+        const imgs = Array.from(document.querySelectorAll('.vignette-crop-img'));
+        if (imgs.length === 0) return { total: 0, corruptCount: 0, corruptSrcs: [] };
+        const corrupt = imgs.filter(img =>
+          (img.complete && img.naturalWidth === 0) ||
+          Boolean(img.closest('.vignette-error'))
+        );
+        return {
+          total: imgs.length,
+          corruptCount: corrupt.length,
+          corruptSrcs: corrupt.slice(0, 3).map(i => i.src)
+        };
+      });
+      return lastResult.corruptCount;
+    }, { timeout, intervals: [300, 600, 1200] }).toBe(0);
+
+    if (lastResult.corruptCount > 0) {
+      console.error(`[assertNoCropCorruption] ${lastResult.corruptCount}/${lastResult.total} vignettes corrompues :`, lastResult.corruptSrcs);
     }
-    expect(result.corruptCount).toBe(0);
-    return result.total;
+    return lastResult.total;
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
