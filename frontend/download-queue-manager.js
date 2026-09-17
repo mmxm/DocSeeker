@@ -29,6 +29,9 @@ class DownloadQueueManager {
     if (this.worker) {
       try { this.worker.terminate(); } catch (e) {}
     }
+    for (const [, { reject }] of this._workerCallbacks) {
+      try { reject(new Error("Worker réinitialisé suite à une mise à jour")); } catch (e) {}
+    }
     this._workerCallbacks.clear();
     this._workerFailed = false;
     this._initWorker();
@@ -195,13 +198,16 @@ class DownloadQueueManager {
       if (bundleRes.ok) {
         const bundle = await bundleRes.json();
         await this.sendToWorker('INSERT_BUNDLE', { bundle });
-        this.cachedDocIds.add(id);
+        const isComplete = window.pdfCacheManager ? await window.pdfCacheManager.isComplete(id) : false;
+        if (isComplete) {
+          this.cachedDocIds.add(id);
+        }
         const allDocs = await this.getAllCachedDocs().catch(() => []);
         if (Array.isArray(allDocs)) {
           this._cachedDocsList = allDocs;
         }
         this._notify();
-        console.log(`[DownloadQueueManager] Document ${id} indexé localement avec succès.`);
+        console.log(`[DownloadQueueManager] Document ${id} indexé localement.`);
       }
     } catch (e) {
       console.warn(`[DownloadQueueManager] Erreur ensureDocumentIndexedLocally(${id}):`, e);
@@ -211,10 +217,23 @@ class DownloadQueueManager {
   async getAllCachedDocs() {
     const docs = await this.sendToWorker('GET_ALL_CACHED_DOCS', {});
     if (Array.isArray(docs)) {
-      this._cachedDocsList = docs;
-      this.cachedDocIds = new Set(docs.map(d => Number(d.id)));
+      const verifiedDocs = [];
+      for (const d of docs) {
+        const id = Number(d.id);
+        const isPdfComplete = window.pdfCacheManager ? await window.pdfCacheManager.isComplete(id) : true;
+        if (isPdfComplete) {
+          verifiedDocs.push(d);
+        }
+      }
+      this._cachedDocsList = verifiedDocs;
+      this.cachedDocIds = new Set(verifiedDocs.map(d => Number(d.id)));
+      return verifiedDocs;
     }
     return docs;
+  }
+
+  async reconcileCacheIntegrity() {
+    return await this.getAllCachedDocs();
   }
 
   async removeDocumentFromCache(docId) {
@@ -315,6 +334,8 @@ class DownloadQueueManager {
     if (!id || this.queue.includes(id) || this.activeTasks.has(id)) {
       return;
     }
+
+    await this.ensureInitialized(1500).catch(() => {});
 
     // Vérifier si le document est déjà 100% complet (PDF + SQLite-Wasm index)
     const isBundleIndexed = this.cachedDocIds.has(id);
@@ -491,13 +512,7 @@ class DownloadQueueManager {
       if (bundleRes.ok) {
         const bundle = await bundleRes.json();
         await this.sendToWorker('INSERT_BUNDLE', { bundle });
-        this.cachedDocIds.add(docId);
-        // Rafraîchir la liste complète des documents locaux en cache
-        const allDocs = await this.getAllCachedDocs().catch(() => []);
-        if (Array.isArray(allDocs)) {
-          this._cachedDocsList = allDocs;
-        }
-        this._notify();
+        // NOTE: Ne pas ajouter à cachedDocIds ici : le document n'est disponible qu'une fois son binaire 100% complet !
       }
 
       // 2. Mettre en cache l'image de couverture dans CacheStorage
@@ -571,12 +586,19 @@ class DownloadQueueManager {
             });
 
             await window.pdfCacheManager.markComplete(docId, actualTotal);
+            this.cachedDocIds.add(docId);
+            const allDocs = await this.getAllCachedDocs().catch(() => []);
+            if (Array.isArray(allDocs)) {
+              this._cachedDocsList = allDocs;
+            }
+            this._notify();
           }
         }
       }
 
       task.status = 'complete';
       task.progress = 100;
+      this._notify();
     } catch (err) {
       console.warn(`[DownloadQueueManager] Erreur ou interruption pour le doc ${docId}:`, err);
       task.status = 'error';

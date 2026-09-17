@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { execSync } from 'child_process';
+import { DocSeekerTestHarness } from './harness.mjs';
 
 test.describe('DocSeeker - Suite Complète de Tests UI Automatisés (En ligne & Offline)', () => {
 
@@ -25,6 +26,10 @@ test.describe('DocSeeker - Suite Complète de Tests UI Automatisés (En ligne & 
     page.on('pageerror', (err) => {
       console.error('[Browser PageError]:', err.message);
     });
+  });
+
+  test.afterEach(async ({ context }) => {
+    await context.setOffline(false).catch(() => {});
   });
 
   test('1. Chargement & Exploration de la Bibliothèque en Ligne', async ({ page }) => {
@@ -157,7 +162,7 @@ test.describe('DocSeeker - Suite Complète de Tests UI Automatisés (En ligne & 
     await expect(reloadedCard).toBeVisible({ timeout: 10000 });
     const reloadedBtn = reloadedCard.locator('.doc-cache-btn');
 
-    await expect(reloadedBtn).toHaveClass(/cached/, { timeout: 8000 });
+    await expect(reloadedBtn).toHaveClass(/cached/, { timeout: 5000 });
     await expect(reloadedBtn.locator('polyline')).toBeVisible();
 
     // Vérifier directement dans le worker SQLite-Wasm local (OPFS)
@@ -336,10 +341,12 @@ test.describe('DocSeeker - Suite Complète de Tests UI Automatisés (En ligne & 
     expect(isCachedAfterDelete).toBe(false);
 
     // Vérifier la purge dans SQLite Wasm
-    const cachedDocs = await page.evaluate(async () => {
-      return await window.downloadQueueManager.sendToWorker('GET_ALL_CACHED_DOCS', {});
-    });
-    expect(cachedDocs.some(d => Number(d.id) === 1)).toBe(false);
+    await expect.poll(async () => {
+      const cachedDocs = await page.evaluate(async () => {
+        return await window.downloadQueueManager.sendToWorker('GET_ALL_CACHED_DOCS', {});
+      });
+      return cachedDocs.some(d => Number(d.id) === 1);
+    }, { timeout: 5000 }).toBe(false);
 
     console.log('[Test 7] Suppression du cache local validée avec succès.');
   });
@@ -736,6 +743,7 @@ test.describe('DocSeeker - Suite Complète de Tests UI Automatisés (En ligne & 
     // 1. Indexer localement le Document #2 via bundle (texte FTS dans SQLite, sans binaire PDF dans IndexedDB)
     await page.evaluate(async () => {
       await window.downloadQueueManager.ensureInitialized();
+      await window.downloadQueueManager.removeDocumentFromCache(2);
       await window.downloadQueueManager.ensureDocumentIndexedLocally(2);
       if (window.pdfCacheManager) {
         await window.pdfCacheManager.invalidate(2);
@@ -759,32 +767,28 @@ test.describe('DocSeeker - Suite Complète de Tests UI Automatisés (En ligne & 
     await filterOffline.check();
 
     const searchInput = page.locator('#searchInput');
-    await searchInput.fill('le');
-    await page.evaluate(() => window.performSearch && window.performSearch('le'));
+    await searchInput.fill('extra-utérine');
+    await page.evaluate(async () => {
+      if (window.performSearch) {
+        await window.performSearch('extra-utérine');
+      }
+    });
 
-    // 5. Attendre l'affichage de la carte du document 2
+    // 5. Vérifier que le document 2 (sans binaire PDF) est strictement exclu de la recherche hors-ligne
+    const isDoc2Cached = await page.evaluate(() => window.downloadQueueManager.isDocumentCached(2));
+    expect(isDoc2Cached).toBeFalsy();
     const doc2Card = page.locator('.doc-card[data-doc-id="2"]');
-    await expect(doc2Card).toBeVisible({ timeout: 10000 });
+    await expect(doc2Card).toHaveCount(0);
 
-    // 6. Vérifier la présence des vignettes
-    const vignettes = doc2Card.locator('.vignette-item');
-    await expect(vignettes.first()).toBeVisible({ timeout: 10000 });
-
-    // 7. Vérifier que le fallback textuel est activé avec le snippet textuel
-    const snippetFallback = vignettes.first().locator('.vignette-snippet-fallback');
-    await expect(snippetFallback).toBeVisible({ timeout: 10000 });
-    const snippetText = await snippetFallback.textContent();
-    expect(snippetText && snippetText.length).toBeGreaterThan(0);
-
-    // 8. Vérifier qu'aucune erreur réseau n'a été émise dans la console
+    // 6. Vérifier qu'aucune erreur réseau n'a été émise dans la console
     expect(networkErrors).toHaveLength(0);
-    console.log('✅ [Test 13] Zéro NetworkError et fallback visuel textuel validés en mode déconnecté.');
+    console.log('✅ [Test 13] Exclusion stricte du document sans binaire PDF et zéro NetworkError validés.');
 
     // Rétablir la connexion
     await context.setOffline(false);
   });
 
-  test('14. Filtre Hors-Ligne Actif en Présence Réseau (navigator.onLine) & Non-téléchargés (Zéro Console Error & Fallback Snippet)', async ({ page }) => {
+  test('14. Filtre Hors-Ligne Actif en Présence Réseau (navigator.onLine) & Non-téléchargés (Exclusion Stricte & Zéro Console Error)', async ({ page }) => {
     await page.goto('/');
 
     // 1. S'assurer que le document 3 est indexé localement mais SANS son binaire PDF dans IndexedDB
@@ -811,29 +815,167 @@ test.describe('DocSeeker - Suite Complète de Tests UI Automatisés (En ligne & 
     const filterOffline = page.locator('#filterOfflineOnly');
     await filterOffline.check();
 
-    // 4. Lancer une recherche qui matche le document 3
+    // 4. Lancer une recherche qui matcherait le document 3
     const searchInput = page.locator('#searchInput');
     await searchInput.fill('de');
     await page.evaluate(() => window.performSearch && window.performSearch('de'));
 
-    // 5. Attendre la carte du document 3
+    // 5. Vérifier que le document 3 est exclu de la recherche hors-ligne car son binaire est incomplet
+    const isDoc3Cached = await page.evaluate(() => window.downloadQueueManager.isDocumentCached(3));
+    expect(isDoc3Cached).toBeFalsy();
     const doc3Card = page.locator('.doc-card[data-doc-id="3"]');
-    await expect(doc3Card).toBeVisible({ timeout: 10000 });
-
-    // 6. Vérifier que la vignette s'affiche avec le snippet fallback sans planter le worker
-    const vignettes = doc3Card.locator('.vignette-item');
-    await expect(vignettes.first()).toBeVisible({ timeout: 10000 });
-
-    const snippetFallback = vignettes.first().locator('.vignette-snippet-fallback');
-    await expect(snippetFallback).toBeVisible({ timeout: 10000 });
+    await expect(doc3Card).toHaveCount(0);
 
     // Attendre un court délai pour s'assurer qu'aucun message différé d'erreur n'arrive
-    await page.waitForTimeout(600);
+    await page.waitForTimeout(400);
 
-    // 7. Vérifier l'absence totale d'erreur dans la console
+    // 6. Vérifier l'absence totale d'erreur dans la console
     expect(capturedErrors).toHaveLength(0);
-    console.log('✅ [Test 14] Mode filtre hors-ligne avec réseau actif : 0 erreur de worker et fallback visuel confirmé.');
+    console.log('✅ [Test 14] Exclusion stricte du document non-téléchargé et zéro erreur de worker confirmées.');
   });
 
+  // =========================================================================
+  // MATRICE DE TESTS PARAMÉTRÉS (HARNESS POM) : RÉSILIENCE RÉSEAU & CACHE PARTIEL
+  // =========================================================================
+  const resilienceScenarios = [
+    {
+      id: 'R1_Partial15',
+      name: 'Matrice Résilience 1 : Téléchargement partiel (15%), coupure réseau totale, exclusion hors-ligne et reprise à 100%',
+      docId: 1,
+      interruptPercent: 15,
+      query: 'grossesse',
+    },
+    {
+      id: 'R2_Partial50',
+      name: 'Matrice Résilience 2 : Coupure réseau à 50% du transfert binaire, vérification zéro crash et reprise complète',
+      docId: 1,
+      interruptPercent: 50,
+      query: 'patiente',
+    },
+    {
+      id: 'R3_Flapping',
+      name: 'Matrice Résilience 3 : Flapping réseau (Online/Offline répétés) pendant le streaming de fragments 256 Ko',
+      docId: 1,
+      flapping: true,
+      query: 'grossesse',
+    },
+    {
+      id: 'R4_HeavyOffline',
+      name: 'Matrice Résilience 4 : Recherche lourde avec astérisque et multi-termes en coupure réseau totale',
+      docId: 1,
+      heavyQuery: 'grossesse*',
+    },
+    {
+      id: 'R5_NoMatch',
+      name: 'Matrice Résilience 5 : Recherche hors-ligne sans résultat, vérification état vide propre sans erreur',
+      docId: 1,
+      noMatchQuery: 'termeinexistant12345*',
+    }
+  ];
+
+  for (const sc of resilienceScenarios) {
+    test(`15.${sc.id} - ${sc.name}`, async ({ page, context }) => {
+      const harness = new DocSeekerTestHarness(page, context);
+      await harness.goto('/');
+
+      if (sc.interruptPercent) {
+        // 1. Simuler un cache partiel déterministe (incomplet dans IndexedDB)
+        await harness.injectPartialCache(sc.docId, sc.interruptPercent);
+
+        // 2. Vérifier que le document est détecté comme non-complet
+        const isComplete = await page.evaluate(async (id) => {
+          return window.pdfCacheManager ? await window.pdfCacheManager.isComplete(id) : false;
+        }, sc.docId);
+        expect(isComplete).toBeFalsy();
+
+        // 3. Couper la connexion réseau et activer le filtre hors-ligne
+        await harness.setOffline(true);
+        await harness.setOfflineFilter(true);
+
+        // 4. Effectuer une recherche hors-ligne : le document incomplet doit être exclu
+        await harness.search(sc.query);
+        await page.waitForTimeout(500);
+
+        const card = page.locator(`.doc-card[data-doc-id="${sc.docId}"]`);
+        await expect(card).toHaveCount(0);
+        harness.assertZeroErrors();
+
+        // 5. Rétablir la connexion et finaliser le téléchargement
+        await harness.setOffline(false);
+        await harness.setOfflineFilter(false);
+        await harness.clearSearch();
+        await harness.openFolder(130);
+        await harness.downloadDocToComplete(sc.docId);
+
+        // 6. Coupure finale et recherche hors-ligne : le document complet doit être visible avec vignettes
+        await harness.setOffline(true);
+        await harness.setOfflineFilter(true);
+        await harness.search(sc.query);
+
+        const docCard = await harness.getDocCard(sc.docId);
+        await expect(docCard).toBeVisible({ timeout: 10000 });
+        await harness.assertVignettesVisible(sc.docId, 1);
+
+        harness.assertZeroErrors();
+        await harness.setOffline(false);
+      } else if (sc.flapping) {
+        await harness.cleanDocCache(sc.docId);
+        await harness.openFolder(130);
+        const card = await harness.getDocCard(sc.docId);
+        const btn = card.locator('.doc-cache-btn');
+        
+        // Démarrer le téléchargement
+        await btn.click();
+        
+        // Simuler des micro-coupures réseau rapides pendant le streaming des fragments
+        await harness.setOffline(true);
+        await page.waitForTimeout(150);
+        await harness.setOffline(false);
+        await harness.setOfflineFilter(false);
+        await page.waitForTimeout(150);
+
+        // Reprendre le téléchargement une fois le réseau stabilisé
+        await harness.downloadDocToComplete(sc.docId);
+
+        // Coupure finale et recherche hors-ligne
+        await harness.setOffline(true);
+        await harness.setOfflineFilter(true);
+        await harness.search(sc.query);
+
+        const docCard = await harness.getDocCard(sc.docId);
+        await expect(docCard).toBeVisible({ timeout: 10000 });
+        await harness.assertVignettesVisible(sc.docId, 1);
+        harness.assertZeroErrors();
+        await harness.setOffline(false);
+      } else if (sc.heavyQuery) {
+        await harness.openFolder(130);
+        await harness.downloadDocToComplete(sc.docId);
+
+        await harness.setOffline(true);
+        await harness.setOfflineFilter(true);
+        await harness.search(sc.heavyQuery);
+
+        const docCard = await harness.getDocCard(sc.docId);
+        await expect(docCard).toBeVisible({ timeout: 10000 });
+        await harness.assertVignettesVisible(sc.docId, 1);
+        harness.assertZeroErrors();
+        await harness.setOffline(false);
+      } else if (sc.noMatchQuery) {
+        await harness.openFolder(130);
+        await harness.downloadDocToComplete(sc.docId);
+
+        await harness.setOffline(true);
+        await harness.setOfflineFilter(true);
+        await harness.search(sc.noMatchQuery);
+
+        const emptyState = page.locator('#emptyState');
+        await expect(emptyState).toBeVisible({ timeout: 6000 });
+        harness.assertZeroErrors();
+        await harness.setOffline(false);
+      }
+    });
+  }
+
 });
+
 

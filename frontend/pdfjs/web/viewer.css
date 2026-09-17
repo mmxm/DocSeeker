@@ -5036,7 +5036,6 @@ dialog :link{
     }
 
 #toolbarContainer #loadingBar{
-    display:none !important;
     --progressBar-percent:0%;
     --progressBar-end-offset:0;
 

@@ -2092,9 +2092,9 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-      // En mode en ligne : démarrer l'initialisation du gestionnaire de cache en tâche de fond non bloquante
+      // S'assurer que le gestionnaire de cache est initialisé pour un affichage fiable immédiat des statuts
       if (window.downloadQueueManager) {
-        window.downloadQueueManager.ensureInitialized(2000).catch(() => {});
+        await window.downloadQueueManager.ensureInitialized(1500).catch(() => {});
       }
 
       // 1. Récupérer les dossiers immédiatement depuis le serveur
@@ -2756,6 +2756,7 @@ document.addEventListener("DOMContentLoaded", () => {
       cacheBtn.addEventListener("click", async (e) => {
         e.stopPropagation();
         if (!window.downloadQueueManager) return;
+        await window.downloadQueueManager.ensureInitialized(1500).catch(() => {});
         const isCurrentlyCached = window.downloadQueueManager.isDocumentCached(doc.id);
         if (isCurrentlyCached) {
           await handleDeleteDocCache(e);
@@ -2955,13 +2956,18 @@ document.addEventListener("DOMContentLoaded", () => {
     const isOffline = !navigator.onLine || (filterOfflineOnly && filterOfflineOnly.checked);
     if (isOffline) {
       if (window.downloadQueueManager) {
-        return await window.downloadQueueManager.sendToWorker('SEARCH', {
+        const searchResult = await window.downloadQueueManager.sendToWorker('SEARCH', {
           query,
           titlesOnly: isTitlesOnly,
           folderId: isFolderOnly ? folderId : null,
           limit,
           offset,
         });
+        if (searchResult && Array.isArray(searchResult.results)) {
+          searchResult.results = searchResult.results.filter(d => window.downloadQueueManager.isDocumentCached(d.id));
+          searchResult.total_documents = searchResult.results.length;
+        }
+        return searchResult;
       }
       throw new Error("Moteur de recherche hors-ligne indisponible");
     }
@@ -2981,13 +2987,18 @@ document.addEventListener("DOMContentLoaded", () => {
         if (filterOfflineChip) filterOfflineChip.classList.add("active");
       }
       if (window.downloadQueueManager) {
-        return await window.downloadQueueManager.sendToWorker('SEARCH', {
+        const searchResult = await window.downloadQueueManager.sendToWorker('SEARCH', {
           query,
           titlesOnly: isTitlesOnly,
           folderId: isFolderOnly ? folderId : null,
           limit,
           offset,
         });
+        if (searchResult && Array.isArray(searchResult.results)) {
+          searchResult.results = searchResult.results.filter(d => window.downloadQueueManager.isDocumentCached(d.id));
+          searchResult.total_documents = searchResult.results.length;
+        }
+        return searchResult;
       }
       throw netErr;
     }

@@ -13943,7 +13943,7 @@ const PDFViewerApplication = {
       length
     }) => {
       this._contentLength = length;
-      if (!this._externalProgressManaged || (this.loadingBar && this.loadingBar.percent >= 100)) {
+      if (this.loadingBar && this.loadingBar.percent >= 100) {
         this.loadingBar?.hide();
       }
       try {

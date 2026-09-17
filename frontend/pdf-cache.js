@@ -215,9 +215,9 @@ class PdfCacheManager {
     const id = Number(docId);
     const prev = this.progressCache.get(id) || {};
 
-    // Si le document est déjà vérifié comme 100% complet avec tous ses fragments,
+    // Si le document est déjà vérifié comme 100% complet ou si le gestionnaire de téléchargement le sait déjà complet,
     // on interdit formellement de le rétrograder en mode "téléchargement" lors du parcours local
-    if (prev.status === "complete" && prev.progress >= 100) {
+    if ((prev.status === "complete" && prev.progress >= 100) || (window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(id))) {
       return;
     }
 
@@ -432,29 +432,44 @@ class PdfCacheManager {
     this.progressCache.delete(id);
     this._notifyProgress(id, { status: "none", progress: 0, downloadedBytes: 0, totalBytes: 0 });
 
+    if (typeof window !== "undefined" && window.downloadQueueManager) {
+      window.downloadQueueManager.cachedDocIds.delete(id);
+      if (Array.isArray(window.downloadQueueManager._cachedDocsList)) {
+        window.downloadQueueManager._cachedDocsList = window.downloadQueueManager._cachedDocsList.filter(d => Number(d.id) !== id);
+      }
+      window.downloadQueueManager._notify();
+    }
+
     try {
       const db = await this.init();
       if (!db) return;
 
       // 1. Supprimer les métadonnées
-      const metaTx = db.transaction(DOCSEEKER_META_STORE, "readwrite");
-      metaTx.objectStore(DOCSEEKER_META_STORE).delete(normUrl);
+      await new Promise((resolve) => {
+        const metaTx = db.transaction(DOCSEEKER_META_STORE, "readwrite");
+        metaTx.objectStore(DOCSEEKER_META_STORE).delete(normUrl);
+        metaTx.oncomplete = () => resolve();
+        metaTx.onerror = () => resolve();
+      });
 
       // 2. Parcourir et supprimer tous les fragments de ce document
-      const chunkTx = db.transaction(DOCSEEKER_CHUNK_STORE, "readwrite");
-      const store = chunkTx.objectStore(DOCSEEKER_CHUNK_STORE);
-      const req = store.openKeyCursor();
+      await new Promise((resolve) => {
+        const chunkTx = db.transaction(DOCSEEKER_CHUNK_STORE, "readwrite");
+        const store = chunkTx.objectStore(DOCSEEKER_CHUNK_STORE);
+        const prefix = `${normUrl}#`;
+        const range = IDBKeyRange.bound(prefix, prefix + "\uffff");
+        const req = store.openKeyCursor(range);
 
-      req.onsuccess = (evt) => {
-        const cursor = evt.target.result;
-        if (cursor) {
-          const key = String(cursor.key);
-          if (key.startsWith(`${normUrl}#`) || key.startsWith(`${id}#`)) {
+        req.onsuccess = (evt) => {
+          const cursor = evt.target.result;
+          if (cursor) {
             store.delete(cursor.key);
+            cursor.continue();
           }
-          cursor.continue();
-        }
-      };
+        };
+        chunkTx.oncomplete = () => resolve();
+        chunkTx.onerror = () => resolve();
+      });
     } catch (e) {
       console.warn(`[PdfCacheManager] Erreur invalidation doc ${id}:`, e);
     }
