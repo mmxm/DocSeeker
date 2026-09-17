@@ -815,4 +815,114 @@ test.describe('Matrice I - Import / Upload de PDF', () => {
     await context.setOffline(false);
     console.log('✅ [I7] Tentative d\'import hors-ligne : bloqué immédiatement avec avertissement.');
   });
+
+  test('I8 - Import avec En-Tête Spécial (BOM / Scanner) → Indexation Complète → Recherche Mots-Clés → Ouverture Split View', async ({ page }) => {
+    test.setTimeout(45000);
+
+    // 1. Préparation d'un vrai PDF de 2 pages avec en-tête spécial (BOM UTF-8 + en-tête scanner)
+    const basePdfPath = path.resolve(__dirname, '../../data/documents/025_grossesse_extra_uterine.pdf');
+    expect(fs.existsSync(basePdfPath)).toBe(true);
+    const basePdfBytes = fs.readFileSync(basePdfPath);
+
+    const uniqueTag = `flw_${Date.now()}`;
+    const testFileName = `test_flow_${uniqueTag}.pdf`;
+
+    // Concaténer : BOM UTF-8 (\xef\xbb\xbf) + commentaire scanner unique (garantissant un hash SHA-256 unique) + flux PDF
+    const bomAndHeader = Buffer.from(`\xef\xbb\xbf% Synology Scanner Header ISO-32000-1 Test ${uniqueTag}\n`);
+    const customPdfBuffer = Buffer.concat([bomAndHeader, basePdfBytes]);
+
+    console.log(`[I8] Téléversement du document avec BOM UTF-8 : ${testFileName} (${customPdfBuffer.length} octets)...`);
+
+    let createdDoc = null;
+    try {
+      // 2. Téléversement via l'UI
+      await page.locator('#openUploadBtn').click();
+      await expect(page.locator('#uploadModal')).toBeVisible({ timeout: 5000 });
+
+      const fileInput = page.locator('#fileInput');
+      await fileInput.setInputFiles([
+        { name: testFileName, mimeType: 'application/pdf', buffer: customPdfBuffer }
+      ]);
+
+      // Attendre que la barre atteigne 100% et la fermeture automatique de la modal
+      await expect(page.locator('#uploadProgressBar')).toHaveAttribute('style', /width:\s*100%/, { timeout: 15000 });
+      await expect(page.locator('#uploadModal')).not.toBeVisible({ timeout: 10000 });
+      console.log(`[I8] Upload 100% terminé pour ${testFileName}.`);
+
+      // 3. Vérification de l'Indexation Complète en arrière-plan
+      // Polling via page.evaluate pour utiliser la session authentifiée du navigateur
+      await expect.poll(async () => {
+        const data = await page.evaluate(async () => {
+          try {
+            const res = await fetch('/api/documents');
+            return res.ok ? await res.json() : null;
+          } catch (_) { return null; }
+        });
+        if (!data) return null;
+        const doc = (data.documents || []).find(d => d.filename === testFileName);
+        if (doc && doc.status === 'ready' && doc.total_pages > 0) {
+          createdDoc = doc;
+          return 'ready';
+        }
+        return doc ? doc.status : 'not_found';
+      }, {
+        message: 'Attente statut ready et indexation du document téléversé',
+        timeout: 20000,
+        intervals: [500, 1000, 1500]
+      }).toBe('ready');
+
+      expect(createdDoc).toBeDefined();
+      expect(createdDoc.total_pages).toBe(2);
+      console.log(`[I8] Document indexé avec succès : id=${createdDoc.id}, pages=${createdDoc.total_pages}, statut=${createdDoc.status} ✅`);
+
+      // Recharger la bibliothèque dans la page pour voir la carte indexée
+      await page.reload();
+      await page.locator('#searchInput').waitFor({ state: 'visible', timeout: 10000 });
+
+      const docCard = page.locator(`.doc-card[data-doc-id="${createdDoc.id}"]`);
+      await expect(docCard).toBeVisible({ timeout: 8000 });
+
+      // Vérifier l'absence totale du badge "Échec" et la présence du nombre de pages
+      await expect(docCard.locator('.doc-failed-overlay')).not.toBeVisible();
+      await expect(docCard).toContainText('2 p.');
+      console.log('[I8] Carte visible dans la bibliothèque : 2 p., 0 badge Échec ✅');
+
+      // 4. Recherche de Mots-Clés (FTS / BM25)
+      // "coelioscopie" est un terme médical présent à la page 2 de ce document
+      await h.injectSearchQuery('coelioscopie');
+
+      // Vérifier l'apparition de la carte dans les résultats de recherche
+      const searchResultCard = page.locator(`.doc-card[data-doc-id="${createdDoc.id}"]`);
+      await expect(searchResultCard).toBeVisible({ timeout: 8000 });
+
+      // Vérifier que le ruban de vignettes d'extraits est généré
+      const vignettes = searchResultCard.locator('.vignette-item');
+      await expect(vignettes.first()).toBeVisible({ timeout: 8000 });
+      console.log(`[I8] Recherche "coelioscopie" validée : vignettes trouvées pour le document.`);
+
+      // 5. Clic Vignette & Ouverture Split View
+      await vignettes.first().click();
+      await expect(page.locator('#workspace')).toHaveClass(/split-active/, { timeout: 10000 });
+      await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 5000 });
+
+      // Vérifier que le visualiseur s'ouvre et affiche le document
+      const viewerTitle = page.locator('#viewerDocTitle');
+      await expect(viewerTitle).toBeVisible();
+      console.log(`[I8] Split View ouvert avec succès pour "${await viewerTitle.textContent()}".`);
+
+      // Fermer le Split View
+      await page.locator('#closeViewerBtn').click();
+      await expect(page.locator('#workspace')).not.toHaveClass(/split-active/, { timeout: 5000 });
+
+      // Réinitialiser la recherche
+      await h.clearSearch();
+
+      console.log(`✅ [I8] Flux complet (Import BOM -> Indexation -> Recherche -> Split View) validé avec succès !`);
+    } finally {
+      // 6. Nettoyage garanti du document de test
+      if (createdDoc && createdDoc.id) {
+        await page.request.delete(`/api/documents/${createdDoc.id}`).catch(() => {});
+      }
+    }
+  });
 });

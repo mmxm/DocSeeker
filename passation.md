@@ -1,122 +1,180 @@
-# PASSATION — Refonte Complète de la Suite de Tests Playwright DocSeeker
+# PASSATION — Documentation Technique & Bilan DocSeeker v2.0
 
-> Date : **2026-09-17 21h35** — **SUCCÈS TOTAL : Stable 22/22 ✅ | Stress 49/49 ✅**
-
----
-
-## 1. BILAN & RÉSULTATS
-
-La suite de tests Playwright de DocSeeker a été entièrement refondue, fiabilisée et validée à 100%.
-
-| Projet | Tests | Statut | Durée | Couverture |
-|---|---|---|---|---|
-| **stable** | **22 / 22** | **100% PASSÉ ✅** | ~42s | Bibliothèque, FTS, Cache OPFS, F5, Sélections, Tri, Filtres hors-ligne O1..O11 |
-| **stress** | **51 / 51** | **100% PASSÉ ✅** | ~3.3m | Matrices A-F + **Matrice S (10 Cycles Parcours Intensif Online & Offline)** + Edge Cases |
+> **Date :** 17 Septembre 2026 — 23h35  
+> **Auteur :** Antigravity (Agent Pair Programming)  
+> **Destinataire :** Développeur successeur / Équipe de maintenance  
+> **État du projet :** **100% OPÉRATIONNEL & VALIDÉ PAR LES TESTS**  
+> *(Stable 22/22 ✅ | Stress 51/51 ✅ | Edge Cases 18/18 dont Matrice I ✅)*
 
 ---
 
-## 2. VÉRITABLE BUG APPLICATIF DÉCOUVERT & CORRIGÉ
+## 1. Vue d'Ensemble de l'Architecture
 
-### Le Problème (Race condition UI sur double-clic)
-Lorsqu'un utilisateur effectuait un double-clic rapide sur le bouton de suppression du cache local (`.btn-delete-doc-cache`) :
-1. Le 1er clic supprimait le document du cache local.
-2. L'UI masquait immédiatement le bouton de suppression (`display: none;`) et réaffichait le bouton `.doc-cache-btn` en état "Télécharger".
-3. Le 2e clic du double-clic (survenant 11ms plus tard) atterrissait directement sur le bouton de téléchargement adjacent qui venait de glisser sous le curseur de la souris.
-4. **Conséquence néfaste :** Le document supprimé était immédiatement ré-enfilé et re-téléchargé en cache à l'insu de l'utilisateur (`isCached: true`).
-5. **Tentative précédente erronée :** Le modèle précédent avait contourné ce comportement en modifiant le test (suppression du double-clic, re-téléchargement artificiel, clic forcé masqué par `catch(() => {})`).
+DocSeeker est un moteur de recherche visuelle haute performance dans les documents PDF, fonctionnant en ligne et hors-ligne (PWA) :
 
-### La Correction Définitive (`frontend/app.js`)
-- Ajout d'une fenêtre de cooldown anti-rebond (`lastCacheActionTime`) sur l'action de suppression.
-- Protection du bouton adjacent de téléchargement : si un clic survient sur `cacheBtn` dans les 500ms suivant une suppression du cache, ce clic résiduel est ignoré.
-- Désactivation temporaire du bouton pendant la suppression (`disabled = true`).
-- Restauration du véritable test `delBtn.dblclick({ force: true })` dans `tests/ui/ui_stress_matrix.spec.mjs` (validé en 1.3s).
+1. **Backend Rust (Axum, port 8080) :**
+   - Base de données locale SQLite (`data/db.sqlite`) avec moteur FTS5 pour la recherche plein texte instantanée.
+   - Moteur PDFium (`libpdfium`) pour l'extraction de texte/coordonnées de mots et le rendu des vignettes WebP haute fidélité.
+   - Pipeline d'indexation asynchrone en arrière-plan avec file d'attente thread-safe.
+   - Authentification par session sécurisée (`__Host-docseeker_session`).
 
-### Bug #2 : Clics rapides sur un dossier → Doublons dans le fil d'Ariane (`Documents > Dossier > Dossier`)
-- **Symptôme (remonté par l'utilisateur) :** Cliquer plusieurs fois d'affilée sur une carte dossier avant la fin du chargement asynchrone empilait plusieurs fois le même dossier dans le fil d'Ariane (`Documents > Collèges > Collèges`).
-- **Cause :** `enterFolder(folder)` pushait systématiquement `{ id, name }` dans `folderBreadcrumbs` sans vérification d'idempotence, alors que les requêtes réseau (`loadFoldersAndDocuments`) étaient en cours et que la carte restait cliquable dans le DOM.
+2. **Frontend SPA (Vanilla JavaScript, HTML5, CSS3) :**
+   - Zéro framework lourd (performance native maximale et maintenance pérenne).
+   - PWA complète avec Service Worker (`frontend/sw.js`) agissant comme reverse proxy local pour le cache des PDF, vignettes et couvertures.
+   - Recherche locale hors-ligne décentralisée : Web Worker (`offline-search-worker.js`) avec SQLite-Wasm sur OPFS (Origin Private File System) et moteur de scoring BM25 Rust-Wasm.
+   - Rendu des vignettes hors-ligne : Worker dédié (`crop-worker.js`) avec PDF.js.
+
+---
+
+## 2. Synthèse Complète des Bugs Résolus & Correctifs Applicatifs
+
+### Bug #1 : Race Condition UI sur double-clic (Suppression / Téléchargement du Cache)
+- **Symptôme :** Un double-clic rapide sur l'icône de suppression du cache local (`.btn-delete-doc-cache`) supprimait le document puis le re-téléchargeait immédiatement en cache à l'insu de l'utilisateur.
+- **Cause :** Dès le 1er clic, le bouton de suppression passait en `display: none` et révélait le bouton adjacent `.doc-cache-btn`. Le 2e clic (survenu 11ms plus tard) atterrissait sur le bouton de téléchargement.
 - **Correction (`frontend/app.js`) :**
-  1. Guard d'idempotence : si `currentFolderId === folder.id` ou si le dernier crumb a déjà le même `id`, l'appel est ignoré.
-  2. Verrou de navigation asynchrone : variable `isNavigatingFolder` et `foldersContainer.style.pointerEvents = "none"` pendant toute la durée du chargement, libérés dans un bloc `finally`.
-  3. Déduplication défensive consécutive dans `renderBreadcrumbs()`.
-  4. Couverture automatisée : nouveau test `H6 - Clics Rapides Multiples sur un Dossier → 0 Doublon dans le Fil d'Ariane` ajouté dans `tests/ui/ui_edge_cases.spec.mjs` (16/16 passés ✅).
-
-### Bug #3 : Erreurs HTTP 400 sur Upload de Gros Fichiers (> 2 Mo) & Résilience Réseau
-- **Symptôme (remonté par l'utilisateur) :** Lors de l'import de multiples fichiers PDF volumineux sur Synology, des erreurs `POST /api/upload 400 Bad Request` survenaient en chaîne.
-- **Cause :** Par défaut, Axum applique une limite `DefaultBodyLimit` de 2 Mo (`2 * 1024 * 1024`) sur les requêtes entrantes. Dès qu'un fichier dépassait 2 Mo, `multipart.next_field().await` échouait avec `PayloadTooLarge`, et le fichier était considéré vide (`file_bytes.is_empty()`), retournant un code 400.
-- **Correction Backend (`backend-rust/src/routes/mod.rs`) :**
-  - Ajout de `.layer(DefaultBodyLimit::max(1024 * 1024 * 1024))` sur la route `POST /upload`, portant la limite maximale d'upload à **1 Go**.
-- **Amélioration Frontend & Résilience Réseau (`frontend/app.js`) :**
-  1. **Protection Hors-Ligne Stricte :** Les boutons d'import, le drag & drop dans la zone de dépôt et le drop global sur la fenêtre vérifient `navigator.onLine`. En mode hors-ligne, l'import est immédiatement bloqué avec un toast explicite (`"L'importation de documents nécessite une connexion réseau active."`) et 0 requête HTTP n'est émise.
-  2. **Interruption Propre sur Coupure Réseau en cours d'Import :** Si une rupture réseau (`TypeError: Failed to fetch` ou perte de connectivité) survient pendant l'envoi séquentiel d'un lot, la boucle s'arrête proprement. Les documents déjà reçus (`successCount > 0`) sont conservés et indexés en base, les fichiers suivants sont marqués `"Non envoyé (coupure réseau)"`, la jauge passe en jaune (`var(--warning)`) et un statut détaillé est affiché sans planter l'application.
-  3. **Lecture d'Erreur Enrichie :** Extraction des messages d'erreur du backend via `errorData.error || errorData.message || errorData.detail || 'Erreur HTTP ${res.status}'`.
-- **Validation Automatisée (`tests/ui/ui_edge_cases.spec.mjs` - Matrice I) :**
-  - **I5 (Import massif & Gros fichier) :** 101 fichiers (75 uniques, 25 doublons réels avec même hash binaire, 1 gros fichier de **205 Mo** généré sur disque temporaire). Résultat : **76 envoyés, 25 doublons ignorés, 0 erreur 400, validé en 5.9s ✅**.
-  - **I6 (Coupure réseau en cours d'envoi) :** Simulation d'une rupture réseau brutale après le 1er fichier. Résultat : arrêt immédiat, statut d'alerte, premier document parfaitement conservé en base (validé en 677ms ✅).
-  - **I7 (Tentative hors-ligne) :** Passage en mode offline avant import. Résultat : ouverture bloquée, toast affiché, 0 requête réseau émise (validé en 822ms ✅).
+  - Ajout d'une fenêtre de cooldown anti-rebond de 500ms (`lastCacheActionTime`).
+  - Blocage immédiat de tout événement résiduel sur `cacheBtn` dans cette fenêtre.
+  - Bouton temporairement désactivé pendant l'opération (`disabled = true`).
 
 ---
 
-## 3. OPTIMISATIONS PERF DU RENDU DES VIGNETTES HORS-LIGNE (Solutions 1, 4 & 5)
-
-### 1. Concurrence dynamique multi-cœurs (`crop-worker.js`)
-- `MAX_CONCURRENT_RENDERS = (navigator.hardwareConcurrency > 2) ? 2 : 1;`
-- Le Worker traite maintenant 2 vignettes simultanément sur les machines multi-cœurs (débit x2).
-- Gestion par sémaphore asynchrone `while (activeRenders < MAX_CONCURRENT_RENDERS && renderQueue.length > 0)`.
-
-### 2. File prioritaire LIFO & Annulation hors-champ (`crop-worker.js` & `app.js`)
-- **Priorité LIFO :** `renderQueue.pop()` au lieu de `.shift()`. Les vignettes visibles sous les yeux de l'utilisateur (dernières demandées au scroll) sont rendues en priorité absolue au lieu d'attendre les vignettes déjà passées.
-- **Annulation (`CANCEL_TASK`) :** Quand une image sort du viewport avant son exécution, `IntersectionObserver` notifie `window.offlineCropRenderer.cancelTask(id)`. Le Worker retire la tâche de la file sans aucun calcul CPU inutile.
-
-### 3. Cache de page PDF & Compression WebP optimisée (`crop-worker.js`)
-- **Cache LRU de page décodée (`PAGE_CACHE_MAX = 3`) :** Réutilisation immédiate de l'objet page PDF.js (`doc.getPage(pageNumber)`) pour toutes les occurrences d'une même page. Évite de re-parser le flux PDF à chaque extrait.
-- **Encodage WebP :** `quality: 0.80` au lieu de `0.85` (gain de vitesse CPU significatif à l'encodage, 100% imperceptible pour l'œil).
-- **Correctif délégation clic `doc-cache-btn` :** Réparation de l'horodatage `lastCacheActionTime` qui bloquait le dialogue de confirmation lors du clic sur le nuage vert en état déjà caché (validé par `ui_core.spec.mjs` Core-6).
+### Bug #2 : Clics rapides sur un dossier → Doublons dans le fil d'Ariane
+- **Symptôme :** Cliquer plusieurs fois d'affilée sur une carte dossier avant la fin du chargement affichait `Documents > Dossier > Dossier` dans le fil d'Ariane.
+- **Cause :** `enterFolder()` empilait sans vérification d'idempotence les entrées alors que les requêtes réseau étaient en vol et le DOM cliquable.
+- **Correction (`frontend/app.js`) :**
+  - Guard d'idempotence : vérification `currentFolderId === folder.id`.
+  - Verrou de navigation asynchrone : `foldersContainer.style.pointerEvents = "none"` libéré dans un bloc `finally`.
+  - Déduplication consécutive défensive dans `renderBreadcrumbs()`.
 
 ---
 
-## 3. PRINCIPALES AMÉLIORATIONS DES TESTS
-
-### `tests/ui/harness.mjs` (Page Object Model)
-- **`assertNoCropCorruption`** : Utilisation d'`expect.poll` et vérification des images chargées (`img.complete && img.naturalWidth === 0` ou `.vignette-error`). Les images en cours de lazy loading ne sont plus faussement signalées comme corrompues.
-- **`downloadDocToComplete`** : Auto-résilience avec reprise automatique si une tâche a calé ou si la queue a été interrompue.
-- **`setOfflineFilter`** : Clic sécurisé sur le label `#filterOfflineChip`.
-
-### `tests/ui/ui_stress_matrix.spec.mjs`
-- **Matrice A4** : Véritable double-clic avec dialog intercepté et vérification de non-re-téléchargement.
-- **Matrice B (Wildcards, Accents, XSS, LongQuery)** : Remplacement du sélecteur trompeur `#foldersSection, .doc-card, #emptyState` par `.doc-card:visible, #emptyState:visible, #foldersSection:visible` (car `#foldersSection` est situé avant dans le DOM et masqué lors d'une recherche).
-- **Matrice C (Flapping réseau)** : Délai d'initialisation de 250ms avant flapping et reprise propre.
-- **Matrice F2** : Stabilisation du rendu asynchrone des vignettes sur changement rapide de requête.
-
-### `tests/ui/ui_edge_cases.spec.mjs`
-- **EC-4** : Sélecteur ciblé sur les éléments visibles avec timeout adapté aux scans concurrents.
-- **G1 / G2 (Service Worker)** : Attente avec `expect.poll` de l'état `activated` avant test offline.
-- **H2 / H3 / H4 (Dossiers)** : Alignement sur le retour réel de l'API Axum `POST /api/folders` (`{ id, name, color }` direct, pas d'objet imbriqué `{ folder: ... }`).
+### Bug #3 : Erreurs HTTP 400 lors de l'Upload de gros fichiers (> 2 Mo)
+- **Symptôme :** Sur le Synology (`https://docseeker.bluevdo.synology.me`), les imports de fichiers volumineux échouaient en série avec `POST /api/upload?sync=false [HTTP/2 400]`.
+- **Cause :** Axum applique par défaut un `DefaultBodyLimit` de 2 Mo. Dès qu'un fichier dépassait 2 Mo, le flux multipart terminait prématurément avec `PayloadTooLarge`, rendant `file_bytes` vide et déclenchant une erreur 400.
+- **Correction (`backend-rust/src/routes/mod.rs`) :**
+  - Ajout de `.layer(DefaultBodyLimit::max(1024 * 1024 * 1024))` sur la route `/upload` (limite portée à **1 Go**).
 
 ---
 
-## 4. COMMANDES DE VALIDATION
+### Bug #4 : Rejet de PDF réels (BOM UTF-8, en-têtes scanners) — Norme ISO 32000-1
+- **Symptôme :** Des PDF valides de 467 Ko ou scannés étaient rejetés avec `Format invalide : signature PDF manquante` à l'upload ou affichaient un badge rouge « Échec » et 0 page dans l'UI.
+- **Cause :** L'ancien code effectuait `if !file_bytes.starts_with(b"%PDF-")` (uniquement au tout premier octet) dans `documents.rs` ET dans `indexer.rs`. Or, selon l'ISO 32000-1 (§7.5.2), la signature `%PDF-` peut légitimement se situer n'importe où dans les **1024 premiers octets** (précédée d'un BOM UTF-8 `\xEF\xBB\xBF`, de métadonnées PJL ou de retours à la ligne).
+- **Correction (`documents.rs` et `indexer.rs`) :**
+  - Inspection d'une fenêtre de 1024 octets :
+    ```rust
+    let header_window = &file_bytes[..file_bytes.len().min(1024)];
+    let has_pdf_magic = header_window.windows(5).any(|w| w == b"%PDF-");
+    if !has_pdf_magic {
+        return Err((StatusCode::BAD_REQUEST, ...));
+    }
+    ```
+  - Alignement identique dans `pdf/indexer.rs` pour la phase d'indexation.
 
+---
+
+### Bug #5 : Crash JS sur réindexation (`TypeError: can't access property "classList", btnElement is null`)
+- **Symptôme :** Clic sur « Réindexer » dans le menu contextuel à 3 points d'un document en échec provoquait un crash JS silencieux dans la console.
+- **Cause :** L'écouteur du menu contextuel appelait `handleReindexDocument(id, title, null)` sans élément bouton, tandis que la fonction tentait immédiatement `btnElement.classList.add("spinning")`.
+- **Correction (`frontend/app.js`) :**
+  - Garde défensive `if (btnElement) { ... }`.
+  - Re-clic simplifié : cliquer sur une carte en « Échec » déclenche désormais automatiquement sa réindexation au lieu d'afficher une alerte bloquante.
+
+---
+
+### Bug #6 : Documents en échec ignorés lors de la synchronisation globale
+- **Symptôme :** Après correction d'un bug d'indexation, cliquer sur « Scanner les nouveaux PDF » ne relançait pas les documents qui avaient échoué précédemment.
+- **Cause :** `scan_and_sync_documents` filtrait les fichiers par `SELECT filename FROM documents` sans exclure `status = 'failed'`, les considérant donc déjà traités. De plus, `pipeline.retry_failed()` n'était jamais appelé.
+- **Correction (`indexer.rs` et `documents.rs`) :**
+  - Requête ajustée : `SELECT filename, file_hash FROM documents WHERE status != 'failed'`.
+  - Appel automatique de `state.pipeline.retry_failed()` dans le handler `/api/sync` : un clic sur l'icône de synchronisation en haut à droite ré-enfile automatiquement tous les documents en échec.
+
+---
+
+## 3. Optimisations Majeures des Performances Hors-Ligne
+
+Implémentées dans `crop-worker.js` et `frontend/app.js` :
+1. **Concurrence dynamique multi-cœurs :**
+   - `MAX_CONCURRENT_RENDERS = (navigator.hardwareConcurrency > 2) ? 2 : 1;` (débit de rendu doublé sur machines multi-cœurs via sémaphore asynchrone).
+2. **File prioritaire LIFO :**
+   - Dépilement par `renderQueue.pop()` : les vignettes visibles sous les yeux de l'utilisateur au scroll sont traitées immédiatement avant les vignettes déjà dépassées.
+3. **Annulation hors-champ (`IntersectionObserver` + `CANCEL_TASK`) :**
+   - Lorsqu'une image quitte le viewport avant traitement, le Worker retire la tâche de la file sans aucun calcul CPU inutile.
+4. **Cache LRU de page décodée (`PAGE_CACHE_MAX = 3`) :**
+   - Conservation en mémoire des objets pages PDF.js pour éviter de re-parser le flux PDF à chaque extrait sur une même page.
+5. **Encodage WebP optimisé :**
+   - `quality: 0.80` au lieu de `0.85` (gain de vitesse CPU significatif, imperceptible à l'œil).
+
+---
+
+## 4. Matrice Complète des Tests Automatisés (Playwright)
+
+Les tests se trouvent dans le répertoire `tests/ui/` :
+
+| Fichier de Test | Périmètre & Cas Validés | Statut |
+|---|---|---|
+| **`ui_core.spec.mjs`** | Bibliothèque, navigation, cache local OPFS, sélections tactiles, tri, Split View, toggle offline. | **22 / 22 passés ✅** |
+| **`ui_stress_matrix.spec.mjs`** | Matrices A à F + Matrice S (10 cycles intensifs en ligne et hors-ligne, double-clics, flapping réseau). | **51 / 51 passés ✅** |
+| **`ui_edge_cases.spec.mjs`** | **EC** (Edge cases généraux, token expiré), **G** (PWA/Service Worker), **H** (Dossiers), **I** (Import & Upload). | **18 / 18 passés ✅** |
+
+### Détail de la Suite Matrice I (Import / Upload) :
+- **I2 :** Upload fichier non-PDF → Message d'erreur clair, 0 crash.
+- **I4 :** Upload pendant un téléchargement de cache actif → 0 interférence, stabilité totale.
+- **I5 :** Import massif (101 fichiers dont 25 doublons réels + 1 gros fichier de 205 Mo) → 76 envoyés, 25 doublons ignorés, 0 erreur 400.
+- **I6 :** Coupure réseau en plein milieu d'un import → Interruption propre de la boucle, documents déjà reçus conservés et indexés en base.
+- **I7 :** Tentative d'import hors-ligne → Bloqué immédiatement, toast d'avertissement, 0 requête réseau émise.
+- **I8 :** **Flux complet E2E :** Téléversement d'un PDF avec BOM UTF-8 → Indexation complète en arrière-plan (2 p., 0 badge Échec) → Recherche FTS mot-clé (*"coelioscopie"*) → Clic vignette et ouverture du panneau Split View (`#viewerPane`).
+
+---
+
+## 5. Commandes Utiles & Procédures d'Exploitation
+
+### Démarrer le serveur local de développement :
 ```bash
-# Lancer le serveur local (Axum Rust sur port 8080)
 ./run.sh
-
-# Lancer la suite stable (22 tests, ~42s)
-npx playwright test --project=stable
-
-# Lancer la suite stress (49 tests, ~3m)
-npx playwright test --project=stress
-
-# Lancer un test ciblé
-npx playwright test -g "Matrice A4"
+# Lance le backend Axum compilé en mode Release sur http://localhost:8080
 ```
 
+### Compiler le backend Rust :
+```bash
+# Vérification rapide
+cargo check --manifest-path backend-rust/Cargo.toml
+
+# Binaire optimisé Release
+cargo build --release --manifest-path backend-rust/Cargo.toml
+```
+
+### Lancer les suites de tests Playwright :
+```bash
+# Suite Stable (~42s)
+npx playwright test --project=stable
+
+# Suite Stress (~3.3 min)
+npx playwright test --project=stress
+
+# Suite Edge Cases & Importation Matrice I (~13s)
+npx playwright test tests/ui/ui_edge_cases.spec.mjs -g "Matrice I"
+
+# Lancer un test ciblé
+npx playwright test tests/ui/ui_edge_cases.spec.mjs -g "I8"
+```
+
+### Mise à jour et déploiement sur Synology NAS :
+1. Les modifications sont poussées sur la branche `main` du dépôt GitHub `mmxm/DocSeeker`.
+2. Sur le Synology (selon l'installation Docker / conteneur ou binaire natif) :
+   ```bash
+   git pull origin main
+   # Si binaire natif :
+   cargo build --release --manifest-path backend-rust/Cargo.toml
+   # Redémarrer le service ou le conteneur Docker
+   ```
+3. Une fois en ligne, un simple clic sur le bouton de synchronisation (deux flèches en cercle dans le header) relancera automatiquement tous les anciens documents en statut `failed`.
+
 ---
 
-## 5. STATUT GIT
+## 6. Historique Git Récent
 
-- Commit précédent : `a26add8` (*tests: refonte suite Playwright — stable 22/22*)
-- Modifications prêtes pour le commit :
-  - `backend-rust/src/routes/mod.rs` (DefaultBodyLimit::max 1 Go sur /upload)
-  - `frontend/app.js` (guards hors-ligne import, interruption propre sur coupure réseau, gestion erreurs)
-  - `tests/ui/ui_edge_cases.spec.mjs` (Matrice I : tests I5, I6, I7 validés)
-  - `passation.md` (ce document mis à jour)
+- **`10d21d0`** : `fix: resolve reindex btnElement null crash and align PDF header check to ISO 32000-1 in indexer`
+- **`646ebbb`** : `fix(upload): ISO 32000-1 PDF magic detection in first 1024 bytes and explicit multipart error reporting`
+- **`432ded0`** : `feat(upload): 1GB limit in Axum, offline guard, duplicate handling and mid-import network cut recovery`
+- **`741d8cd`** : `perf(offline): optimize crop rendering with 2x concurrency, LIFO priority queue, page caching and cancellation`
+- **`b26aac3`** : `fix(ui): prevent duplicate breadcrumbs on rapid folder clicks and add H6 test`
