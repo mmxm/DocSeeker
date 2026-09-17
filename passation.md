@@ -31,6 +31,15 @@ Lorsqu'un utilisateur effectuait un double-clic rapide sur le bouton de suppress
 - Désactivation temporaire du bouton pendant la suppression (`disabled = true`).
 - Restauration du véritable test `delBtn.dblclick({ force: true })` dans `tests/ui/ui_stress_matrix.spec.mjs` (validé en 1.3s).
 
+### Bug #2 : Clics rapides sur un dossier → Doublons dans le fil d'Ariane (`Documents > Dossier > Dossier`)
+- **Symptôme (remonté par l'utilisateur) :** Cliquer plusieurs fois d'affilée sur une carte dossier avant la fin du chargement asynchrone empilait plusieurs fois le même dossier dans le fil d'Ariane (`Documents > Collèges > Collèges`).
+- **Cause :** `enterFolder(folder)` pushait systématiquement `{ id, name }` dans `folderBreadcrumbs` sans vérification d'idempotence, alors que les requêtes réseau (`loadFoldersAndDocuments`) étaient en cours et que la carte restait cliquable dans le DOM.
+- **Correction (`frontend/app.js`) :**
+  1. Guard d'idempotence : si `currentFolderId === folder.id` ou si le dernier crumb a déjà le même `id`, l'appel est ignoré.
+  2. Verrou de navigation asynchrone : variable `isNavigatingFolder` et `foldersContainer.style.pointerEvents = "none"` pendant toute la durée du chargement, libérés dans un bloc `finally`.
+  3. Déduplication défensive consécutive dans `renderBreadcrumbs()`.
+  4. Couverture automatisée : nouveau test `H6 - Clics Rapides Multiples sur un Dossier → 0 Doublon dans le Fil d'Ariane` ajouté dans `tests/ui/ui_edge_cases.spec.mjs` (16/16 passés ✅).
+
 ---
 
 ## 3. PRINCIPALES AMÉLIORATIONS DES TESTS

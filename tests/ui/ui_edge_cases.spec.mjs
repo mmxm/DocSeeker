@@ -505,6 +505,42 @@ test.describe('Matrice H - Gestion des Dossiers', () => {
       console.log('ℹ️ [H5] Bouton delete-folder-cache non visible pour Martingale (peut-être aucun doc en cache).');
     }
   });
+
+  test('H6 - Clics Rapides Multiples sur un Dossier → 0 Doublon dans le Fil d\'Ariane', async ({ page }) => {
+    // 1. Localiser un dossier visible à la racine
+    const folderCard = page.locator('.folder-card').first();
+    await expect(folderCard).toBeVisible({ timeout: 8000 });
+    const folderName = (await folderCard.locator('.folder-name, .folder-title').textContent()).trim();
+
+    // 2. Déclencher des clics rapides consécutifs sur la carte
+    await Promise.all([
+      folderCard.click({ force: true }),
+      folderCard.click({ force: true }).catch(() => {}),
+      folderCard.click({ force: true }).catch(() => {}),
+    ]);
+
+    // 3. Attendre que le chargement se stabilise
+    await page.waitForTimeout(1000);
+    await expect(page.locator('#sectionTitle')).toContainText(folderName, { timeout: 5000 });
+
+    // 4. Vérifier que le fil d'Ariane n'a pas de doublons
+    const breadcrumbItems = page.locator('#breadcrumbsNav .breadcrumb-item');
+    const count = await breadcrumbItems.count();
+    console.log(`[H6] Nombre de miettes dans le fil d'ariane : ${count}`);
+
+    // Il doit y avoir exactement 2 éléments : "Documents" et "[folderName]"
+    expect(count).toBe(2);
+    await expect(breadcrumbItems.nth(0)).toContainText('Documents');
+    await expect(breadcrumbItems.nth(1)).toContainText(folderName);
+
+    // Vérifier également qu'un seul élément a le nom du dossier
+    const matchingCrumbs = page.locator('#breadcrumbsNav .breadcrumb-item', { hasText: folderName });
+    expect(await matchingCrumbs.count()).toBe(1);
+
+    // Revenir à la racine
+    await h.navigateToBreadcrumbRoot();
+    console.log('✅ [H6] Clics rapides multiples sur un dossier : 0 doublon dans le fil d\'ariane.');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

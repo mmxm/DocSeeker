@@ -69,6 +69,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let userManuallyChangedSort = false;
   let isSearchActive = false;
   let loadFoldersSeq = 0;
+  let isNavigatingFolder = false;
 
   class OfflineCropRenderer {
     constructor() {
@@ -1350,6 +1351,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   brandBtn.addEventListener("click", () => {
+    isNavigatingFolder = false;
+    if (foldersContainer) foldersContainer.style.pointerEvents = "";
     searchInput.value = "";
     clearSearchBtn.style.display = "none";
     currentSearchQuery = "";
@@ -1940,6 +1943,15 @@ document.addEventListener("DOMContentLoaded", () => {
   function renderBreadcrumbs() {
     breadcrumbsNav.innerHTML = "";
 
+    // Sécurité défensive : dédupliquer les entrées consécutives dans le fil d'Ariane
+    const deduplicated = [];
+    folderBreadcrumbs.forEach((crumb) => {
+      if (deduplicated.length === 0 || deduplicated[deduplicated.length - 1].id !== crumb.id) {
+        deduplicated.push(crumb);
+      }
+    });
+    folderBreadcrumbs = deduplicated;
+
     folderBreadcrumbs.forEach((crumb, index) => {
       const isLast = (index === folderBreadcrumbs.length - 1);
 
@@ -2018,11 +2030,18 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function navigateToCrumb(index) {
+    if (isNavigatingFolder) return;
     currentSearchQuery = "";
     isSearchActive = false;
     lastSearchResultsData = null;
     folderBreadcrumbs = folderBreadcrumbs.slice(0, index + 1);
     const target = folderBreadcrumbs[index];
+    if (!target) return;
+    if (currentFolderId === target.id && !isSearchActive) return;
+
+    isNavigatingFolder = true;
+    if (foldersContainer) foldersContainer.style.pointerEvents = "none";
+
     currentFolderId = target.id;
     currentFolderName = target.name;
     updateFolderFilterVisibility();
@@ -2031,9 +2050,21 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function enterFolder(folder) {
+    if (!folder || folder.id === undefined || folder.id === null) return;
+    // Si une navigation est déjà en cours ou qu'on est déjà dans ce dossier, ignorer les clics multiples
+    if (isNavigatingFolder) return;
+    if (currentFolderId === folder.id) return;
+    const lastCrumb = folderBreadcrumbs[folderBreadcrumbs.length - 1];
+    if (lastCrumb && lastCrumb.id === folder.id) return;
+
+    isNavigatingFolder = true;
+    if (foldersContainer) foldersContainer.style.pointerEvents = "none";
+
     currentFolderId = folder.id;
     currentFolderName = folder.name;
-    folderBreadcrumbs.push({ id: folder.id, name: folder.name });
+    if (!lastCrumb || lastCrumb.id !== folder.id) {
+      folderBreadcrumbs.push({ id: folder.id, name: folder.name });
+    }
     updateFolderFilterVisibility();
     clearSelection();
     loadFoldersAndDocuments();
@@ -2190,6 +2221,9 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         showToast("Erreur de chargement des documents et dossiers", "error");
       }
+    } finally {
+      isNavigatingFolder = false;
+      if (foldersContainer) foldersContainer.style.pointerEvents = "";
     }
   }
 
