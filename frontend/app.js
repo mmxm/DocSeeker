@@ -2957,7 +2957,7 @@ document.addEventListener("DOMContentLoaded", () => {
       e.stopPropagation();
       if (!window.downloadQueueManager) return;
       const now = Date.now();
-      if (now - lastCacheActionTime < 250) return;
+      if (now - lastCacheActionTime < 60) return;
       lastCacheActionTime = now;
 
       if (!window.downloadQueueManager.isDocumentCached(doc.id)) return;
@@ -2966,6 +2966,10 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         if (confirm(`Supprimer "${doc.title || doc.filename}" du cache local hors-ligne ?`)) {
           lastCacheActionTime = Date.now();
+          if (cacheBtn) {
+            cacheBtn.style.pointerEvents = "none";
+            setTimeout(() => { if (cacheBtn) cacheBtn.style.pointerEvents = ""; }, 60);
+          }
           await window.downloadQueueManager.removeDocumentFromCache(doc.id);
           updateDocCardCacheUI(doc.id);
           showToast(`Document "${doc.title || doc.filename}" supprimé du cache local`, "info");
@@ -3000,7 +3004,7 @@ document.addEventListener("DOMContentLoaded", () => {
         e.stopPropagation();
         if (!window.downloadQueueManager) return;
         const now = Date.now();
-        if (now - lastCacheActionTime < 250) {
+        if (now - lastCacheActionTime < 60 || e.detail > 1) {
           // Ignorer le clic fantôme consécutif à une suppression (double-clic décalé sous la souris)
           return;
         }
