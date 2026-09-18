@@ -134,7 +134,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (this.callbacks.has(id)) {
         const { resolve } = this.callbacks.get(id);
         this.callbacks.delete(id);
-        resolve(null);
+        resolve({ cancelled: true });
       }
     }
 
@@ -369,11 +369,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 this.inFlightFetches.delete(img);
                 img.dataset.loaded = "false";
               }
-              if (img._cropReqId && window.offlineCropRenderer) {
-                img._wasCancelled = true;
-                window.offlineCropRenderer.cancelTask(img._cropReqId);
-                img._cropReqId = null;
-              }
             }
           }
         });
@@ -397,14 +392,21 @@ document.addEventListener("DOMContentLoaded", () => {
         clearTimeout(this.pendingDebounce.get(img));
         this.pendingDebounce.delete(img);
       }
+      if (img._cropReqId) {
+        if (window.offlineCropRenderer) {
+          window.offlineCropRenderer.cancelTask(img._cropReqId);
+        }
+        img._cropReqId = null;
+      }
       if (this.inFlightFetches && this.inFlightFetches.has(img)) {
         img._wasCancelled = true;
         const ctrl = this.inFlightFetches.get(img);
         try { ctrl.abort(); } catch (_) {}
         this.inFlightFetches.delete(img);
-        if (img.dataset.loaded !== "true") {
-          img.dataset.loaded = "false";
-        }
+      }
+      if (img.dataset.loaded !== "true") {
+        img._wasCancelled = true;
+        img.dataset.loaded = "false";
       }
     }
 
@@ -458,22 +460,21 @@ document.addEventListener("DOMContentLoaded", () => {
       const srcUrl = img.getAttribute("data-src");
       if (!srcUrl || img.dataset.loaded === "true") return;
 
-      img.dataset.loaded = "true";
-      this.cancelPending(img);
-      try {
-        this.observer.unobserve(img);
-      } catch (e) {}
+      img._wasCancelled = false;
+      if (this.pendingDebounce.has(img)) {
+        clearTimeout(this.pendingDebounce.get(img));
+        this.pendingDebounce.delete(img);
+      }
 
-      // Détection offline robuste : navigator.onLine peut rester 'true' sur iOS PWA standalone
-      // même en vraie coupure réseau. On considère aussi le filtre offline actif dans l'UI.
+      const vEl = img.closest('.vignette-item') || img.closest('.vertical-occ-card');
+      const docId = vEl && vEl.dataset.docId ? Number(vEl.dataset.docId) : null;
+      const isDocCached = Boolean(docId && window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(docId));
       const isOfflineFilter = document.getElementById("filterOfflineOnly")?.checked || false;
-      const isOfflineMode = !navigator.onLine || isOfflineFilter;
+      const isOfflineMode = !navigator.onLine || isOfflineFilter || isDocCached;
 
       const renderOfflineCrop = () => {
         if (srcUrl.startsWith('/api/crop/') && window.offlineCropRenderer) {
-          const vEl = img.closest('.vignette-item') || img.closest('.vertical-occ-card');
-          if (vEl && vEl.dataset.docId) {
-            const docId = Number(vEl.dataset.docId);
+          if (vEl && docId) {
             const pageNum = Number(vEl.dataset.page);
             let rect = [];
             let hlRects = [];
@@ -487,7 +488,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 img._cropReqId = id;
               }).then(blob => {
                 img._cropReqId = null;
-                if (blob) {
+                if (img._wasCancelled || (blob && blob.cancelled)) {
+                  img.dataset.loaded = "false";
+                  return;
+                }
+                if (blob && blob instanceof Blob) {
                   // Révoquer l'ancienne blob URL de cet élément si elle existait
                   if (img._blobUrl) {
                     URL.revokeObjectURL(img._blobUrl);
@@ -500,12 +505,10 @@ document.addEventListener("DOMContentLoaded", () => {
                   img.dataset.loaded = "true";
                   img.style.display = "block";
                   img.style.opacity = "1";
+                  try { this.observer.unobserve(img); } catch (e) {}
                 } else {
-                  if (img._wasCancelled) {
-                    img.dataset.loaded = "false";
-                    return;
-                  }
                   this.applySnippetFallback(img, vEl);
+                  try { this.observer.unobserve(img); } catch (e) {}
                 }
               }).catch(err => {
                 img._cropReqId = null;
@@ -518,6 +521,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   console.warn('[DynamicCropManager] offlineCropRenderer error:', err);
                 }
                 this.applySnippetFallback(img, vEl);
+                try { this.observer.unobserve(img); } catch (e) {}
               });
               return true;
             }
@@ -526,8 +530,8 @@ document.addEventListener("DOMContentLoaded", () => {
         return false;
       };
 
-      // Si hors-ligne, déléguer immédiatement au crop worker local sans timeout réseau
-      if (isOfflineMode && srcUrl.startsWith('/api/crop/')) {
+      // Si hors-ligne OU si le document est disponible en cache local, déléguer immédiatement au crop worker local
+      if ((isOfflineMode || isDocCached) && srcUrl.startsWith('/api/crop/')) {
         if (renderOfflineCrop()) return;
       }
 
@@ -556,6 +560,7 @@ document.addEventListener("DOMContentLoaded", () => {
           img.src = blobUrl;
           img.dataset.loaded = "true";
           img.style.opacity = "1";
+          try { this.observer.unobserve(img); } catch (e) {}
         })
         .catch(err => {
           this.inFlightFetches.delete(img);
@@ -569,6 +574,7 @@ document.addEventListener("DOMContentLoaded", () => {
           const vEl = img.closest('.vignette-item') || img.closest('.vertical-occ-card');
           if (isOfflineMode && vEl) {
             this.applySnippetFallback(img, vEl);
+            try { this.observer.unobserve(img); } catch (e) {}
             return;
           }
 
@@ -580,6 +586,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }, 500);
           } else if (vEl) {
             this.applySnippetFallback(img, vEl);
+            try { this.observer.unobserve(img); } catch (e) {}
           }
         });
     }
@@ -3178,11 +3185,32 @@ document.addEventListener("DOMContentLoaded", () => {
           isLoadingChunk = true;
 
           try {
-            const fetchUrl = `/api/doc-search?doc_id=${doc.id}&q=${encodeURIComponent(currentSearchQuery || '')}&offset=${loadedCount}&limit=${CHUNK_SIZE}`;
-            const res = await fetch(fetchUrl);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const data = await res.json();
-            const newOccs = data.occurrences || [];
+            let data = null;
+            const isDocCached = Boolean(window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id));
+            const isOfflineFilter = document.getElementById("filterOfflineOnly")?.checked || false;
+            const isOfflineMode = !navigator.onLine || isOfflineFilter || isDocCached;
+
+            if (isOfflineMode && window.downloadQueueManager) {
+              try {
+                data = await window.downloadQueueManager.sendToWorker('DOC_SEARCH', {
+                  docId: doc.id,
+                  query: currentSearchQuery || '',
+                  offset: loadedCount,
+                  limit: CHUNK_SIZE
+                });
+              } catch (offlineErr) {
+                console.warn('[DocSeeker] Erreur recherche offline dans loadMoreVignettes:', offlineErr);
+              }
+            }
+
+            if (!data) {
+              const fetchUrl = `/api/doc-search?doc_id=${doc.id}&q=${encodeURIComponent(currentSearchQuery || '')}&offset=${loadedCount}&limit=${CHUNK_SIZE}`;
+              const res = await fetch(fetchUrl);
+              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              data = await res.json();
+            }
+
+            const newOccs = data?.occurrences || [];
 
             if (newOccs.length === 0) {
               loadedCount = totalAvailableOccurrences;

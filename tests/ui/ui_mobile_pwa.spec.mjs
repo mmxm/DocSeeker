@@ -50,7 +50,7 @@ test.describe('Matrice M - Mobile & PWA', () => {
   // M1 — Header PWA Standalone : CSS audit (backdrop-filter none + isolation)
   // =========================================================================
 
-  test('M1 - Header PWA Standalone : Zéro backdrop-filter, isolation présent, status-bar=black-translucent', async ({ page }) => {
+  test('M1 - Header PWA Standalone : Zéro backdrop-filter, isolation présent, status-bar=default', async ({ page }) => {
     const standaloneAudit = await page.evaluate(() => {
       let hasStandaloneRule = false;
       let headerBackdropFilterInStandalone = null;
@@ -86,9 +86,9 @@ test.describe('Matrice M - Mobile & PWA', () => {
     if (standaloneAudit.headerBackdropFilterInStandalone !== null) {
       expect(standaloneAudit.headerBackdropFilterInStandalone).toBe('none');
     }
-    expect(standaloneAudit.statusBarContent).toBe('black-translucent');
+    expect(standaloneAudit.statusBarContent).toBe('default');
 
-    console.log('✅ [M1] Media query standalone présent, backdrop-filter=none sur .app-header, status-bar=black-translucent.');
+    console.log('✅ [M1] Media query standalone présent, backdrop-filter=none sur .app-header, status-bar=default.');
   });
 
   // =========================================================================

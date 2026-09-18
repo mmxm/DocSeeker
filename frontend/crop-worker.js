@@ -43,18 +43,18 @@ function calculateCropBounds(x0, y0, x1, y1, pageWidth, pageHeight,
 let wasmReady = true; // Wasm supprimé de ce worker — flag toujours vrai pour compatibilité
 
 
-// Sémaphore / File d'attente (2 tâches concurrentes sur multi-cœurs pour accélérer le débit sans saturer la RAM)
-const MAX_CONCURRENT_RENDERS = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency && navigator.hardwareConcurrency > 2) ? 2 : 1;
+// Sémaphore / File d'attente (2 tâches concurrentes pour accélérer le débit de rendu mobile)
+const MAX_CONCURRENT_RENDERS = 2;
 let activeRenders = 0;
 const renderQueue = [];
 
-// Cache LRU de pages décodées (max 3 pages) pour réutilisation immédiate lors d'occurrences multiples sur la même page
+// Cache LRU de pages décodées (max 8 pages) pour réutilisation immédiate lors d'occurrences multiples sur la même page
 const pageCache = new Map(); // `${docId}_${pageNumber}` -> { page, docId, lastUsed }
-const PAGE_CACHE_MAX = 3;
+const PAGE_CACHE_MAX = 8;
 
-// Cache LRU de bitmaps de pages complètes rastérisées (max 3 pages) pour extraction instantanée par GPU
+// Cache LRU de bitmaps de pages complètes rastérisées (max 8 pages) pour extraction instantanée par GPU
 const pageBitmapCache = new Map(); // `${docId}_${pageNumber}` -> { bitmap, docId, lastUsed }
-const PAGE_BITMAP_CACHE_MAX = 3;
+const PAGE_BITMAP_CACHE_MAX = 8;
 const renderingBitmapPromises = new Map(); // `${docId}_${pageNumber}` -> Promise<ImageBitmap|OffscreenCanvas>
 
 async function getOrRenderPageBitmap(page, docId, pageNumber) {
@@ -217,13 +217,6 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
             }
 
             const totalBytes = meta.totalBytes;
-            // Limite de sécurité : si le PDF dépasse 100 Mo, ne pas allouer 500 Mo en RAM contiguë,
-            // retourner null pour déléguer le chargement au streaming RangeReader de PDF.js
-            if (totalBytes > 100 * 1024 * 1024) {
-              try { db.close(); } catch (_) {}
-              return resolve(null);
-            }
-
             const chunkTx = db.transaction('chunks', 'readonly');
             const store = chunkTx.objectStore('chunks');
             const prefix = `${normUrl}#`;
@@ -246,9 +239,10 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
                 const parts = key.slice(prefix.length).split('_');
                 if (parts.length === 2) {
                   const b = parseInt(parts[0], 10);
-                  const chunkBuf = cursor.value;
+                  const chunkVal = cursor.value;
+                  const chunkBuf = chunkVal instanceof ArrayBuffer ? new Uint8Array(chunkVal) : (ArrayBuffer.isView(chunkVal) ? chunkVal : null);
                   if (chunkBuf && chunkBuf.byteLength) {
-                    fullArray.set(new Uint8Array(chunkBuf), b);
+                    fullArray.set(chunkBuf, b);
                     readBytes += chunkBuf.byteLength;
                   }
                 }
@@ -491,7 +485,7 @@ self.onmessage = async (e) => {
       const idx = renderQueue.findIndex(item => item.id === targetId);
       if (idx !== -1) {
         const [item] = renderQueue.splice(idx, 1);
-        if (item?.resolve) item.resolve(null);
+        if (item?.resolve) item.resolve({ cancelled: true });
       }
     }
     return;

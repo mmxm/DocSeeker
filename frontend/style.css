@@ -50,9 +50,13 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+html {
+  background-color: #ffffff;
+}
+
 body.light-theme {
   font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background-color: var(--bg-primary);
+  background-color: #ffffff;
   color: var(--text-main);
   height: 100vh;
   height: 100dvh;
@@ -66,7 +70,7 @@ body.light-theme {
   flex-direction: column;
   height: 100vh;
   height: 100dvh;
-  padding-top: var(--safe-top);
+  padding-top: 0;
   padding-left: var(--safe-left);
   padding-right: var(--safe-right);
 }
@@ -2731,10 +2735,16 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
     flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 10px;
+    padding: calc(env(safe-area-inset-top, 0px) + 6px) max(10px, env(safe-area-inset-right, 0px)) 6px max(10px, env(safe-area-inset-left, 0px));
     gap: 6px 8px;
     min-height: auto;
     height: auto;
+    background-color: #ffffff;
+  }
+
+  .vignette-page-badge {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 
   .header-brand {
@@ -3525,9 +3535,13 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
  * transparente et env(safe-area-inset-top) gère l'espace exactement.
  */
 @media (display-mode: standalone) {
+  html, body {
+    background-color: #ffffff;
+  }
+
   .app-layout {
     isolation: isolate;
-    padding-top: env(safe-area-inset-top, 0px);
+    padding-top: 0;
   }
 
   .app-header {
@@ -3536,7 +3550,8 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
     will-change: auto;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
-    background-color: var(--bg-surface);
+    background-color: #ffffff;
+    padding-top: calc(env(safe-area-inset-top, 0px) + 6px);
   }
 
   /* Supprimer le backdrop-filter du drawer overlay en standalone :

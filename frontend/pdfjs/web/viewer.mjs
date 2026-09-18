@@ -14636,6 +14636,10 @@ initCom(PDFViewerApplication);
       if (HOSTED_VIEWER_ORIGINS.includes(viewerOrigin)) {
         return;
       }
+      // Autoriser explicitement les URLs blob locales et les chemins relatifs de même origine
+      if (typeof file === "string" && (file.startsWith("blob:") || file.startsWith("/"))) {
+        return;
+      }
       const fileOrigin = new URL(file, window.location.href).origin;
       if (fileOrigin !== viewerOrigin) {
         throw new Error("file origin does not match viewer's");
