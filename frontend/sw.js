@@ -7,7 +7,7 @@
  * 3. Routage résilient avec fallback automatique sur incident réseau.
  */
 
-const APP_VERSION = '8.7';
+const APP_VERSION = '9.0';
 const CACHE_NAME = `docseeker-app-shell-v${APP_VERSION}`;
 const CROP_CACHE_NAME = 'docseeker_offline_crops';
 const COVER_CACHE_NAME = 'docseeker_covers';
@@ -185,59 +185,30 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3. Streaming PDF (/api/pdf/{id}) : Network First avec fallback IndexedDB local.
+  // 3. Streaming PDF (/api/pdf/{id}) :
   if (url.pathname.startsWith('/api/pdf/')) {
-    event.respondWith(
-      (async () => {
-        const id = url.pathname.replace('/api/pdf/', '').split('/')[0];
-        
-        // En mode déconnecté : servir immédiatement depuis IndexedDB
-        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    const id = url.pathname.replace('/api/pdf/', '').split('/')[0];
+
+    // En mode déconnecté : servir immédiatement depuis IndexedDB (Range Requests HTTP 206 ou Stream)
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      event.respondWith(
+        (async () => {
           try {
-            const pdfBytes = await getCachedPdfBytesFromIndexedDB(id);
-            if (pdfBytes) {
-              return new Response(pdfBytes, {
-                status: 200,
-                headers: {
-                  'Content-Type': 'application/pdf',
-                  'Content-Length': String(pdfBytes.byteLength),
-                  'Accept-Ranges': 'bytes',
-                },
-              });
-            }
+            const cachedRes = await createIndexedDbPdfResponse(id, event.request);
+            if (cachedRes) return cachedRes;
           } catch (e) {}
           return new Response('PDF non disponible hors-ligne', {
             status: 503,
             statusText: 'PDF Offline Unavailable',
             headers: { 'Content-Type': 'text/plain' },
           });
-        }
+        })()
+      );
+      return;
+    }
 
-        // En ligne : Network direct avec protection d'annulation
-        try {
-          return await fetch(event.request);
-        } catch (netErr) {
-          // Si le client a annulé (AbortError) ou si le réseau est tombé :
-          try {
-            const pdfBytes = await getCachedPdfBytesFromIndexedDB(id);
-            if (pdfBytes) {
-              return new Response(pdfBytes, {
-                status: 200,
-                headers: {
-                  'Content-Type': 'application/pdf',
-                  'Content-Length': String(pdfBytes.byteLength),
-                  'Accept-Ranges': 'bytes',
-                },
-              });
-            }
-          } catch (fallbackErr) {}
-          return new Response('Ressource non disponible', {
-            status: 503,
-            headers: { 'Content-Type': 'text/plain' }
-          });
-        }
-      })()
-    );
+    // En ligne : ne pas intercepter. Le navigateur gère le flux réseau nativement avec le serveur backend.
+    // Cela évite tout conflit d'annulation AbortError dans le Service Worker et préserve le débit maximal.
     return;
   }
 
@@ -365,8 +336,236 @@ self.addEventListener('fetch', (event) => {
 });
 
 /**
+ * Répond à une requête /api/pdf/{id} depuis IndexedDB en supportant :
+ * 1. Les Range Requests (HTTP 206 Partial Content) : allocation minimale de la tranche demandée (ex: 64-256 Ko).
+ * 2. Les requêtes complètes (HTTP 200) : streaming direct sans allouer 500 Mo en RAM pour les gros PDF.
+ */
+async function createIndexedDbPdfResponse(docId, request) {
+  if (typeof indexedDB === 'undefined') return null;
+  const id = Number(docId);
+  if (!id) return null;
+  const normUrl = `/api/pdf/${id}`;
+
+  return new Promise((resolve) => {
+    try {
+      const openReq = indexedDB.open('docseeker_pdf_chunks_v2', 2);
+      openReq.onerror = () => resolve(null);
+      openReq.onsuccess = (evt) => {
+        const db = evt.target.result;
+        if (!db.objectStoreNames.contains('meta') || !db.objectStoreNames.contains('chunks')) {
+          try { db.close(); } catch (e) {}
+          return resolve(null);
+        }
+
+        try {
+          const metaTx = db.transaction('meta', 'readonly');
+          const metaStore = metaTx.objectStore('meta');
+          const metaReq = metaStore.get(normUrl);
+
+          metaReq.onerror = () => { try { db.close(); } catch (e) {} resolve(null); };
+          metaReq.onsuccess = () => {
+            const meta = metaReq.result;
+            if (!meta || !meta.totalBytes || meta.totalBytes <= 0) {
+              try { db.close(); } catch (e) {}
+              return resolve(null);
+            }
+
+            const totalBytes = meta.totalBytes;
+            const prefix = `${normUrl}#`;
+            const rangeHeader = request?.headers?.get('Range') || request?.headers?.get('range');
+
+            // ─── CAS A : Range Request (HTTP 206 Partial Content) ───
+            if (rangeHeader) {
+              const match = rangeHeader.match(/bytes=(\d+)-(\d+)?/);
+              if (match) {
+                const reqStart = parseInt(match[1], 10);
+                const reqEnd = (match[2] !== undefined && match[2] !== '') ? parseInt(match[2], 10) : (totalBytes - 1);
+
+                if (isNaN(reqStart) || reqStart >= totalBytes || reqStart < 0) {
+                  try { db.close(); } catch (e) {}
+                  return resolve(new Response(null, {
+                    status: 416,
+                    statusText: 'Range Not Satisfiable',
+                    headers: {
+                      'Content-Range': `bytes */${totalBytes}`,
+                      'Accept-Ranges': 'bytes',
+                    }
+                  }));
+                }
+
+                const targetStart = reqStart;
+                const targetEnd = Math.min(reqEnd, totalBytes - 1);
+                const sliceLength = targetEnd - targetStart + 1;
+
+                let sliceBuffer;
+                try {
+                  sliceBuffer = new Uint8Array(sliceLength);
+                } catch (allocErr) {
+                  try { db.close(); } catch (e) {}
+                  return resolve(null);
+                }
+
+                const chunkTx = db.transaction('chunks', 'readonly');
+                const chunkStore = chunkTx.objectStore('chunks');
+                const range = IDBKeyRange.bound(prefix, prefix + '\uffff');
+                const cursorReq = chunkStore.openCursor(range);
+
+                let bytesCopied = 0;
+                cursorReq.onerror = () => { try { db.close(); } catch (e) {} resolve(null); };
+                cursorReq.onsuccess = (e) => {
+                  const cursor = e.target.result;
+                  if (cursor) {
+                    const key = String(cursor.key);
+                    const parts = key.slice(prefix.length).split('_');
+                    if (parts.length === 2) {
+                      const b = parseInt(parts[0], 10);
+                      const endExclusive = parseInt(parts[1], 10);
+                      // Vérifier le chevauchement avec [targetStart, targetEnd]
+                      if (endExclusive > targetStart && b <= targetEnd) {
+                        const chunkBuf = cursor.value;
+                        if (chunkBuf && chunkBuf.byteLength) {
+                          const overlapStart = Math.max(b, targetStart);
+                          const overlapEnd = Math.min(endExclusive - 1, targetEnd);
+                          const copyLen = overlapEnd - overlapStart + 1;
+                          const chunkOffset = overlapStart - b;
+                          const destOffset = overlapStart - targetStart;
+
+                          sliceBuffer.set(new Uint8Array(chunkBuf, chunkOffset, copyLen), destOffset);
+                          bytesCopied += copyLen;
+                        }
+                      }
+                    }
+                    cursor.continue();
+                  } else {
+                    try { db.close(); } catch (e) {}
+                    if (bytesCopied === 0) {
+                      return resolve(null);
+                    }
+                    resolve(new Response(sliceBuffer.buffer, {
+                      status: 206,
+                      statusText: 'Partial Content',
+                      headers: {
+                        'Content-Type': 'application/pdf',
+                        'Content-Range': `bytes ${targetStart}-${targetEnd}/${totalBytes}`,
+                        'Content-Length': String(sliceLength),
+                        'Accept-Ranges': 'bytes',
+                      }
+                    }));
+                  }
+                };
+                return;
+              }
+            }
+
+            // ─── CAS B : Requête intégrale (HTTP 200) ───
+            // Pour les PDF <= 100 Mo : buffer complet direct
+            if (totalBytes <= 100 * 1024 * 1024) {
+              const chunkTx = db.transaction('chunks', 'readonly');
+              const chunkStore = chunkTx.objectStore('chunks');
+              const range = IDBKeyRange.bound(prefix, prefix + '\uffff');
+              const cursorReq = chunkStore.openCursor(range);
+              let fullArray;
+              try {
+                fullArray = new Uint8Array(totalBytes);
+              } catch (allocErr) {
+                try { db.close(); } catch (e) {}
+                return resolve(null);
+              }
+              let readBytes = 0;
+
+              cursorReq.onerror = () => { try { db.close(); } catch (e) {} resolve(null); };
+              cursorReq.onsuccess = (e) => {
+                const cursor = e.target.result;
+                if (cursor) {
+                  const key = String(cursor.key);
+                  const parts = key.slice(prefix.length).split('_');
+                  if (parts.length === 2) {
+                    const b = parseInt(parts[0], 10);
+                    const chunkBuf = cursor.value;
+                    if (chunkBuf && chunkBuf.byteLength) {
+                      fullArray.set(new Uint8Array(chunkBuf), b);
+                      readBytes += chunkBuf.byteLength;
+                    }
+                  }
+                  cursor.continue();
+                } else {
+                  try { db.close(); } catch (e) {}
+                  if (readBytes >= totalBytes || (meta.completed && readBytes > 0)) {
+                    resolve(new Response(fullArray.buffer, {
+                      status: 200,
+                      headers: {
+                        'Content-Type': 'application/pdf',
+                        'Content-Length': String(totalBytes),
+                        'Accept-Ranges': 'bytes',
+                      }
+                    }));
+                  } else {
+                    resolve(null);
+                  }
+                }
+              };
+              return;
+            }
+
+            // Pour les très gros PDF (> 100 Mo) demandés sans Range header :
+            // Streaming séquentiel chunk par chunk via ReadableStream (0 allocation 500 Mo en RAM)
+            try { db.close(); } catch (e) {}
+            const stream = new ReadableStream({
+              start(controller) {
+                try {
+                  const streamReq = indexedDB.open('docseeker_pdf_chunks_v2', 2);
+                  streamReq.onerror = () => controller.error(new Error('IndexedDB open error'));
+                  streamReq.onsuccess = (ev) => {
+                    const streamDb = ev.target.result;
+                    const streamTx = streamDb.transaction('chunks', 'readonly');
+                    const streamStore = streamTx.objectStore('chunks');
+                    const streamRange = IDBKeyRange.bound(prefix, prefix + '\uffff');
+                    const streamCursorReq = streamStore.openCursor(streamRange);
+
+                    streamCursorReq.onerror = () => {
+                      try { streamDb.close(); } catch (_) {}
+                      controller.error(new Error('Cursor error'));
+                    };
+                    streamCursorReq.onsuccess = (cev) => {
+                      const cur = cev.target.result;
+                      if (cur) {
+                        const chunkBuf = cur.value;
+                        if (chunkBuf) controller.enqueue(new Uint8Array(chunkBuf));
+                        cur.continue();
+                      } else {
+                        try { streamDb.close(); } catch (_) {}
+                        controller.close();
+                      }
+                    };
+                  };
+                } catch (err) {
+                  controller.error(err);
+                }
+              }
+            });
+
+            resolve(new Response(stream, {
+              status: 200,
+              headers: {
+                'Content-Type': 'application/pdf',
+                'Content-Length': String(totalBytes),
+                'Accept-Ranges': 'bytes',
+              }
+            }));
+          };
+        } catch (txErr) {
+          try { db.close(); } catch (e) {}
+          resolve(null);
+        }
+      };
+    } catch (err) {
+      resolve(null);
+    }
+  });
+}
+
+/**
  * Reconstitue les octets d'un PDF depuis les fragments persistés dans IndexedDB (docseeker_pdf_chunks_v2)
- * Permet au Service Worker de répondre aux requêtes /api/pdf/{id} même en mode 100% hors-ligne.
  */
 async function getCachedPdfBytesFromIndexedDB(docId) {
   if (typeof indexedDB === 'undefined') return null;
@@ -399,8 +598,8 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
             }
 
             const totalBytes = meta.totalBytes;
-            // Limite de sécurité : éviter d'allouer plus de 500 Mo d'un coup dans le Service Worker
-            if (totalBytes > 500 * 1024 * 1024) {
+            // Limite de sécurité : éviter d'allouer plus de 100 Mo d'un coup dans un seul buffer
+            if (totalBytes > 100 * 1024 * 1024) {
               try { db.close(); } catch (e) {}
               return resolve(null);
             }

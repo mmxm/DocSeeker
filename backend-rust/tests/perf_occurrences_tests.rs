@@ -232,4 +232,45 @@ fn test_compound_words_full_highlight() {
     assert_eq!(sub_x1, 200.0);
 }
 
+#[test]
+fn test_fragmented_word_pre_merging_amenorrhee() {
+    use docseeker_backend::search::engine::find_occurrences_on_page;
+    use search_core::WordEntry;
+
+    // Simulation exacte de la fragmentation du mot "Aménorrhée" dans le document 023 (page 1)
+    let words = vec![
+        WordEntry(100.0, 142.1, 150.0, 150.0, "grossesse".to_string(), 0, 1),
+        WordEntry(167.8, 142.1, 196.5, 149.1, "Améno".to_string(), 0, 68),
+        WordEntry(197.7, 142.1, 212.5, 149.1, "rrhée".to_string(), 0, 6900),
+        WordEntry(250.0, 142.1, 300.0, 150.0, "signes".to_string(), 0, 70),
+    ];
+
+    let query_terms = vec!["Aménorrhée".to_string()];
+    let occs = find_occurrences_on_page(&words, &query_terms, "hash", 1, 1, -1.5, "Am%C3%A9norrh%C3%A9e", 842.0);
+
+    assert_eq!(occs.len(), 1, "Le mot fragmenté Améno + rrhée doit être fusionné en une seule occurrence");
+    assert_eq!(occs[0].text_snippet, "Aménorrhée");
+    assert_eq!(occs[0].rect, [167.8, 142.1, 212.5, 149.1]);
+}
+
+#[test]
+fn test_visual_line_grouping_securite_sociale() {
+    use docseeker_backend::search::engine::find_occurrences_on_page;
+    use search_core::WordEntry;
+
+    // Simulation exacte des numéros de ligne divergents pour SÉCURITÉ et SOCIALE dans le document 023
+    let words = vec![
+        WordEntry(267.0, 456.6, 303.3, 465.0, "SÉCURITÉ".to_string(), 0, 31100),
+        WordEntry(307.8, 456.6, 339.5, 465.0, "SOCIALE".to_string(), 0, 31101),
+    ];
+
+    let query_terms = vec!["sécurité".to_string(), "sociale".to_string()];
+    let occs = find_occurrences_on_page(&words, &query_terms, "hash", 1, 1, -2.0, "securite,sociale", 842.0);
+
+    assert_eq!(occs.len(), 1, "SÉCURITÉ et SOCIALE doivent être regroupés dans une seule occurrence");
+    assert_eq!(occs[0].text_snippet, "SÉCURITÉ SOCIALE");
+    assert_eq!(occs[0].rect[0], 267.0);
+    assert_eq!(occs[0].rect[2], 339.5);
+}
+
 

@@ -826,7 +826,7 @@ const defaultOptions = {
     type: Type.BOOLEAN + Type.UNDEFINED
   },
   verbosity: {
-    value: 1,
+    value: 0,
     kind: OptionKind.API
   },
   workerPort: {

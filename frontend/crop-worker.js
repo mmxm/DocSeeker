@@ -217,6 +217,13 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
             }
 
             const totalBytes = meta.totalBytes;
+            // Limite de sécurité : si le PDF dépasse 100 Mo, ne pas allouer 500 Mo en RAM contiguë,
+            // retourner null pour déléguer le chargement au streaming RangeReader de PDF.js
+            if (totalBytes > 100 * 1024 * 1024) {
+              try { db.close(); } catch (_) {}
+              return resolve(null);
+            }
+
             const chunkTx = db.transaction('chunks', 'readonly');
             const store = chunkTx.objectStore('chunks');
             const prefix = `${normUrl}#`;
@@ -267,6 +274,48 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
   });
 }
 
+/**
+ * Vérifie si un document est complètement en cache dans IndexedDB (sans allouer de mémoire binaire)
+ */
+async function isDocumentCachedInIndexedDB(docId) {
+  const id = Number(docId);
+  const normUrl = `/api/pdf/${id || docId}`;
+  return new Promise((resolve) => {
+    try {
+      if (typeof indexedDB === 'undefined') return resolve(false);
+      const req = indexedDB.open('docseeker_pdf_chunks_v2', 2);
+      req.onerror = () => resolve(false);
+      req.onsuccess = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('meta')) {
+          try { db.close(); } catch (_) {}
+          return resolve(false);
+        }
+        try {
+          const tx = db.transaction('meta', 'readonly');
+          const store = tx.objectStore('meta');
+          const metaReq = store.get(normUrl);
+          metaReq.onerror = () => { try { db.close(); } catch (_) {} resolve(false); };
+          metaReq.onsuccess = () => {
+            const meta = metaReq.result;
+            try { db.close(); } catch (_) {}
+            if (meta && meta.totalBytes > 0 && (meta.completed || (meta.downloadedBytes && meta.downloadedBytes >= meta.totalBytes))) {
+              resolve(true);
+            } else {
+              resolve(false);
+            }
+          };
+        } catch (_) {
+          try { db.close(); } catch (_) {}
+          resolve(false);
+        }
+      };
+    } catch (_) {
+      resolve(false);
+    }
+  });
+}
+
 async function loadPdfDoc(docId, isOffline = false) {
   const cached = getCachedPdfDoc(docId);
   if (cached) return cached;
@@ -277,7 +326,7 @@ async function loadPdfDoc(docId, isOffline = false) {
 
   const loadPromise = (async () => {
     try {
-      // 1. Tenter la lecture directe depuis le cache binaire IndexedDB (0ms, 100% hors-ligne)
+      // 1. Tenter la lecture directe depuis le cache binaire IndexedDB (0ms, 100% hors-ligne pour les PDF standards <= 100 Mo)
       const localBytes = await getCachedPdfBytesFromIndexedDB(docId);
       let loadingTask = null;
 
@@ -300,15 +349,18 @@ async function loadPdfDoc(docId, isOffline = false) {
           ...pdfParams,
         });
       } else {
+        // Vérifier si le document est disponible dans IndexedDB (ex: gros PDF > 100 Mo complet)
+        const isLocallyCached = await isDocumentCachedInIndexedDB(docId);
+
         // Détecter si l'application ou le navigateur est en mode hors-ligne
         const isNetworkOffline = (typeof self !== 'undefined' && self.navigator && self.navigator.onLine === false);
-        if (isOffline || isNetworkOffline) {
+        if ((isOffline || isNetworkOffline) && !isLocallyCached) {
           const offlineErr = new Error(`PDF_OFFLINE_UNAVAILABLE: Document ${docId} non mis en cache locale`);
           offlineErr.code = 'PDF_OFFLINE_UNAVAILABLE';
           throw offlineErr;
         }
 
-        // 2. Fallback réseau UNIQUEMENT si en ligne (avec credentials obligatoires pour l'authentification)
+        // 2. Chargement via URL (PDF.js utilisera RangeReader et lira les fragments directement depuis IndexedDB)
         const pdfUrl = new URL(`/api/pdf/${docId}`, self.location.origin).href;
         loadingTask = pdfjsLib.getDocument({
           url: pdfUrl,

@@ -7,6 +7,8 @@ import init, {
   calculate_crop_bounds_wasm,
   find_occurrences_wasm,
   build_search_sql_wasm,
+  build_doc_search_sql_wasm,
+  process_search_results_wasm,
   get_schema_sql,
 } from "../frontend/wasm/search_wasm/search_wasm.js";
 
@@ -144,6 +146,58 @@ if (fs.existsSync(realDbPath)) {
     }
 
     console.log(`✅ [4/5] ${totalOccurrencesFound} occurrences spatiales détectées, ${totalCropsValidated} rectangles de crop validés à 100%.`);
+
+    // 4b. Test de non-régression critique : "Aménorrhée" (mot césuré sur le doc 023 page 1)
+    console.log("Test de non-régression 'Aménorrhée' sur le doc 023 (page 1)...");
+    const page1 = db.prepare("SELECT page_number, words_json, text_content FROM pages WHERE doc_id = ? AND page_number = 1").get(doc.id);
+    assert.ok(page1, "La page 1 du document 023 doit exister");
+
+    for (const testQuery of ["aménorrhée", "Aménorrhée", "amenorrhee"]) {
+      const occsJson = find_occurrences_wasm(
+        page1.words_json,
+        JSON.stringify([testQuery]),
+        "amenorrhee_hash",
+        BigInt(doc.id),
+        1n,
+        -3.8,
+        842.0
+      );
+      const occs = JSON.parse(occsJson);
+      assert.strictEqual(occs.length, 1, `Une seule occurrence de '${testQuery}' doit être trouvée sur la page 1`);
+      assert.strictEqual(occs[0].text_snippet, "Aménorrhée", "Le snippet reconstitué doit être 'Aménorrhée'");
+      assert.deepStrictEqual(occs[0].rect, [167.8, 142.1, 212.5, 149.1], "Le rectangle doit englober les fragments 'Améno' et 'rrhée'");
+      assert.ok(occs[0].crop_url.includes("terms="), "L'URL de crop doit être correctement encodée");
+    }
+
+    // Validation du pipeline complet process_search_results_wasm pour éviter "Aucun extrait visuel"
+    const rawRow = {
+      doc_id: Number(doc.id),
+      filename: doc.filename,
+      title: doc.title || doc.filename,
+      folder_id: null,
+      total_pages: 6,
+      created_at: "2026-09-08",
+      updated_at: "2026-09-16",
+      doc_relevance_score: 387.27,
+      matching_pages_count: 1,
+      page_number: 1,
+      words_json: page1.words_json,
+      page_bm25: -3.8,
+      total_docs: 1,
+      total_occurrences: 1,
+    };
+    const processedResults = JSON.parse(process_search_results_wasm(
+      JSON.stringify([rawRow]),
+      JSON.stringify(["amenorrhee"]),
+      "amenorrhee_hash"
+    ));
+    assert.ok(processedResults.length === 1, "Le résultat de recherche doit contenir le document 023");
+    assert.ok(
+      processedResults[0].vignettes && processedResults[0].vignettes.length > 0,
+      "Le document 023 doit obligatoirement avoir des vignettes générées (jamais 'Aucun extrait visuel')"
+    );
+    assert.strictEqual(processedResults[0].vignettes[0].text_snippet, "Aménorrhée");
+    console.log("✅ [4b/5] Non-régression 'Aménorrhée' (détection spatiale + vignettes) validée à 100%.");
   }
 } else {
   console.log("ℹ️ [4/5] data/db.sqlite non trouvé, test sur données synthétiques.");

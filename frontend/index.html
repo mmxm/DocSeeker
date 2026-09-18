@@ -6,9 +6,10 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <title>DocSeeker - Recherche Visuelle dans vos PDF</title>
-  <meta name="app-version" content="8.7">
-  <link rel="stylesheet" href="/style.css?v=8.7">
+  <meta name="app-version" content="9.0">
+  <link rel="stylesheet" href="/style.css?v=9.0">
   <link rel="icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#ffffff">
 </head>
@@ -39,7 +40,7 @@
           <input 
             type="text" 
             id="searchInput" 
-            placeholder="Rechercher des mots-clés (ex: hémorragie, délivrance, diabète)..." 
+            placeholder="Rechercher des mots-clés..." 
             autocomplete="off"
             spellcheck="false"
           />
@@ -61,7 +62,7 @@
                 <line x1="4" y1="12" x2="14" y2="12"></line>
                 <line x1="4" y1="18" x2="18" y2="18"></line>
               </svg>
-              <span>Titres uniquement</span>
+              <span>Titres</span>
             </label>
 
             <label class="filter-chip" id="filterFolderChip" title="Restreindre la recherche au dossier actuellement ouvert" style="display: none;">
@@ -69,7 +70,7 @@
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
               </svg>
-              <span id="filterFolderLabel">Dans ce dossier uniquement</span>
+              <span id="filterFolderLabel">Dans ce dossier</span>
             </label>
 
             <label class="filter-chip" id="filterOfflineChip" title="Restreindre la recherche aux documents disponibles hors-ligne">
@@ -78,7 +79,7 @@
                 <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
                 <line x1="2" y1="2" x2="22" y2="22"></line>
               </svg>
-              <span id="filterOfflineLabel">Hors-ligne uniquement</span>
+              <span id="filterOfflineLabel">Hors-ligne</span>
             </label>
           </div>
 
@@ -132,13 +133,12 @@
           <span id="pipelineStatusText" class="pipeline-text">Indexation...</span>
         </div>
 
-        <button id="openUploadBtn" class="btn btn-primary btn-icon-text" title="Importer des documents PDF">
+        <button id="openUploadBtn" class="btn btn-primary btn-icon" title="Importer des documents PDF" aria-label="Importer des documents PDF">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
             <polyline points="17 8 12 3 7 8"></polyline>
             <line x1="12" y1="3" x2="12" y2="15"></line>
           </svg>
-          <span class="btn-label-responsive">Importer</span>
         </button>
 
         <!-- Bouton Déconnexion Administrateur -->
@@ -210,27 +210,24 @@
         
         <!-- VUE 1 : Liste générale des documents et dossiers -->
         <div id="generalView">
-          <!-- Fil d'Ariane (Breadcrumbs Goodnotes) -->
-          <div class="breadcrumbs-container">
-            <nav id="breadcrumbsNav" class="breadcrumbs-nav">
-              <span class="breadcrumb-item active" data-folder-id="root">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-                </svg>
-                Documents
-              </span>
-            </nav>
-          </div>
+          <!-- Barre d'arborescence et de tri compacte sur une seule ligne -->
+          <div class="library-toolbar">
+            <div class="breadcrumbs-container">
+              <nav id="breadcrumbsNav" class="breadcrumbs-nav" aria-label="Fil d'Ariane">
+                <span class="breadcrumb-item active" data-folder-id="root" title="Racine de la bibliothèque" aria-label="Racine de la bibliothèque">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                    <polyline points="10 9 9 9 8 9"></polyline>
+                  </svg>
+                </span>
+              </nav>
+            </div>
 
-          <!-- Section des Dossiers (Goodnotes Grid) -->
-          <div id="foldersSection" class="folders-section">
-            <div id="foldersContainer" class="folders-grid"></div>
-          </div>
-
-          <div class="section-bar">
-            <h2 id="sectionTitle" class="section-title">Documents</h2>
             <div class="sort-pill-btn" title="Changer l'ordre d'affichage">
-              <svg class="sort-icon-left" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <svg class="sort-icon-left" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="m3 16 4 4 4-4"></path>
                 <path d="M7 20V4"></path>
                 <path d="m21 8-4-4-4 4"></path>
@@ -238,7 +235,7 @@
               </svg>
               <span class="sort-pill-label">Trier :</span>
               <span id="sortPillCurrent" class="sort-pill-value">Nom (A → Z)</span>
-              <svg class="sort-icon-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <svg class="sort-icon-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="6 9 12 15 18 9"></polyline>
               </svg>
               <select id="sortSelect" class="sort-select-overlay" title="Trier les documents">
@@ -250,7 +247,15 @@
                 <option value="date_add_asc">Ajouté (Plus ancien)</option>
               </select>
             </div>
+            <!-- Titre accessible caché pour la rétrocompatibilité des tests/lecteurs d'écran -->
+            <h2 id="sectionTitle" class="visually-hidden" style="position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); border:0;">Documents</h2>
           </div>
+
+          <!-- Section des Dossiers (Goodnotes Grid) -->
+          <div id="foldersSection" class="folders-section">
+            <div id="foldersContainer" class="folders-grid"></div>
+          </div>
+
           <div id="resultsContainer" class="results-list"></div>
         </div>
 
@@ -277,7 +282,13 @@
 
             <div class="doc-detail-meta">
               <h3 id="docDetailTitle" class="doc-detail-title">Titre du document</h3>
-              <span id="docDetailCount" class="doc-detail-count">0 occurrence trouvée</span>
+              <div class="doc-detail-meta-actions">
+                <span id="docDetailCount" class="doc-detail-count">0 occurrence trouvée</span>
+                <div class="occ-sort-toggle" id="docOccSortToggle" title="Changer l'ordre d'affichage des extraits">
+                  <button type="button" class="occ-sort-btn active" data-sort="page" id="sortOccByPageBtn">Pages</button>
+                  <button type="button" class="occ-sort-btn" data-sort="relevance" id="sortOccByRelevanceBtn">Pertinence</button>
+                </div>
+              </div>
             </div>
           </div>
           <!-- Liste verticale des vignettes ordonnées par page -->
@@ -547,7 +558,13 @@
         <div class="drawer-title-row">
           <div>
             <h4 id="drawerDocTitle" class="drawer-title">Extraits du document</h4>
-            <span id="drawerDocCount" class="drawer-subtitle">0 extrait</span>
+            <div class="drawer-meta-row">
+              <span id="drawerDocCount" class="drawer-subtitle">0 extrait</span>
+              <div class="occ-sort-toggle occ-sort-toggle-sm" id="drawerOccSortToggle" title="Changer l'ordre des extraits">
+                <button type="button" class="occ-sort-btn active" data-sort="page" id="drawerSortOccByPageBtn">Pages</button>
+                <button type="button" class="occ-sort-btn" data-sort="relevance" id="drawerSortOccByRelevanceBtn">Pertinence</button>
+              </div>
+            </div>
           </div>
           <button id="closeDrawerBtn" class="btn btn-icon btn-close-drawer" title="Fermer le tiroir" aria-label="Fermer le tiroir">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
@@ -700,8 +717,8 @@
 
   </div>
 
-  <script src="/pdf-cache.js?v=8.7"></script>
-  <script src="/download-queue-manager.js?v=8.7"></script>
-  <script src="/app.js?v=8.7"></script>
+  <script src="/pdf-cache.js?v=9.0"></script>
+  <script src="/download-queue-manager.js?v=9.0"></script>
+  <script src="/app.js?v=9.0"></script>
 </body>
 </html>

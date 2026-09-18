@@ -277,9 +277,27 @@ body.light-theme {
   display: inline;
 }
 
-.header-actions .btn-primary {
-  height: 32px;
-  padding: 0 12px;
+.header-actions .btn-primary,
+#openUploadBtn.btn-primary,
+.header-actions #openUploadBtn {
+  height: 34px;
+  width: 34px;
+  padding: 0;
+  background-color: var(--accent) !important;
+  color: #ffffff !important;
+  border: 1px solid var(--accent) !important;
+  border-radius: var(--radius-md);
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.28);
+}
+
+.header-actions .btn-primary:hover,
+#openUploadBtn.btn-primary:hover,
+.header-actions #openUploadBtn:hover {
+  background-color: var(--accent-hover) !important;
+  color: #ffffff !important;
+  border-color: var(--accent-hover) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.38);
 }
 
 .btn {
@@ -664,6 +682,7 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
 }
 
 .viewer-search-inner {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -671,9 +690,18 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
   background-color: var(--bg-subtle);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  padding: 0 10px;
+  padding: 0 32px 0 10px;
   height: 34px;
   transition: var(--transition);
+}
+
+.viewer-search-inner .clear-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
 }
 
 .viewer-search-inner:focus-within {
@@ -1466,6 +1494,67 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
   color: var(--accent);
 }
 
+.doc-detail-meta-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.drawer-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.occ-sort-toggle {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-subtle, #f1f5f9);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+  user-select: none;
+}
+
+.occ-sort-btn {
+  background: transparent;
+  border: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted, #64748b);
+  padding: 2px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.2;
+}
+
+.occ-sort-btn:hover {
+  color: var(--text-main, #0f172a);
+}
+
+.occ-sort-btn.active {
+  background: #ffffff;
+  color: var(--accent, #1d4ed8);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.dark-theme .occ-sort-btn.active {
+  background: #1e293b;
+  color: #60a5fa;
+}
+
+.occ-sort-toggle-sm .occ-sort-btn {
+  font-size: 10.5px;
+  padding: 2px 6px;
+}
+
 .doc-vertical-occurrences {
   display: flex;
   flex-direction: column;
@@ -1806,28 +1895,43 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
 }
 
 /* ==========================================================================
-   Fil d'Ariane (Breadcrumbs Goodnotes & Cible Drop)
+   Barre Bibliothèque Unifiée & Fil d'Ariane Compact (Cible Drop)
    ========================================================================== */
-.breadcrumbs-container {
-  padding: 4px 16px 2px;
+.library-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 14px 4px;
   background-color: var(--bg-primary);
   border-bottom: 1px solid rgba(226, 232, 240, 0.6);
+  gap: 10px;
+  min-height: 38px;
+}
+
+.breadcrumbs-container {
+  padding: 0;
+  background-color: transparent;
+  border-bottom: none;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
 }
 
 .breadcrumbs-nav {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
-  font-size: 12.5px;
+  gap: 3px;
+  font-size: 12px;
   font-weight: 600;
 }
 
 .breadcrumb-item {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 8px;
+  gap: 4px;
+  padding: 2px 6px;
   border-radius: var(--radius-sm);
   color: var(--text-muted);
   cursor: pointer;
@@ -1835,6 +1939,7 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
   background-color: var(--bg-surface);
   border: 1px solid var(--border-color);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  font-size: 12px;
 }
 
 .breadcrumb-item:hover {
@@ -1865,6 +1970,7 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
   color: var(--text-dim);
   display: inline-flex;
   align-items: center;
+  margin: 0 1px;
 }
 
 /* ==========================================================================

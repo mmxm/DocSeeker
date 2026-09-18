@@ -71,7 +71,6 @@ struct RawMatchedWord {
     rect: [f64; 4],
     highlight_rect: [f64; 4],
     word: String,
-    block_no: i64,
     line_no: i64,
     matched_terms: Vec<String>,
 }
@@ -96,10 +95,32 @@ pub fn find_occurrences_on_page(
         return Vec::new();
     }
 
+    // Pré-fusion des micro-fragments de mots (coupures de glyphes/styles PDF où gap <= 2.2px)
+    let mut merged_words_data: Vec<WordEntry> = Vec::with_capacity(words_data.len());
+    for w in words_data {
+        if let Some(prev) = merged_words_data.last_mut() {
+            let WordEntry(_prev_x0, ref mut prev_y0, ref mut prev_x1, ref mut prev_y1, ref mut prev_word, _prev_block, _prev_line) = *prev;
+            let WordEntry(next_x0, next_y0, next_x1, next_y1, ref next_word, _next_block, _next_line) = *w;
+            let gap = next_x0 - *prev_x1;
+            let y_diff = (next_y0 - *prev_y0).abs();
+            let is_not_punct = !matches!(prev_word.as_str(), ":" | "-" | "/" | "+" | "." | "," | ";" | "!" | "?")
+                && !matches!(next_word.as_str(), ":" | "-" | "/" | "+" | "." | "," | ";" | "!" | "?");
+
+            if y_diff < 3.5 && gap >= -1.0 && gap <= 2.5 && is_not_punct {
+                *prev_x1 = next_x1;
+                *prev_y0 = prev_y0.min(next_y0);
+                *prev_y1 = prev_y1.max(next_y1);
+                prev_word.push_str(next_word);
+                continue;
+            }
+        }
+        merged_words_data.push(w.clone());
+    }
+
     let mut matched_words: Vec<RawMatchedWord> = Vec::new();
 
-    for w in words_data {
-        let WordEntry(x0, y0, x1, y1, ref word, block_no, line_no) = *w;
+    for w in &merged_words_data {
+        let WordEntry(x0, y0, x1, y1, ref word, _block_no, line_no) = *w;
         let norm_w = normalize_text(word);
         let mut matched_terms_in_word: Vec<String> = Vec::new();
         let mut min_pos = usize::MAX;
@@ -137,7 +158,6 @@ pub fn find_occurrences_on_page(
                 rect: [x0, y0, x1, y1],
                 highlight_rect: [sub_x0, y0, sub_x1, y1],
                 word: word.clone(),
-                block_no,
                 line_no,
                 matched_terms: matched_terms_in_word,
             });
@@ -155,8 +175,12 @@ pub fn find_occurrences_on_page(
         let prev_w = current_occ.last().unwrap();
         let horizontal_diff = next_w.rect[0] - prev_w.rect[2];
 
-        if next_w.block_no == prev_w.block_no
-            && next_w.line_no == prev_w.line_no
+        let vertical_overlap = (next_w.rect[3].min(prev_w.rect[3]) - next_w.rect[1].max(prev_w.rect[1])).max(0.0);
+        let min_height = (next_w.rect[3] - next_w.rect[1]).min(prev_w.rect[3] - prev_w.rect[1]);
+        let is_same_visual_line = (next_w.line_no == prev_w.line_no)
+            || (min_height > 0.0 && vertical_overlap / min_height >= 0.6);
+
+        if is_same_visual_line
             && horizontal_diff >= 0.0
             && horizontal_diff < 25.0
         {

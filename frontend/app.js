@@ -1628,12 +1628,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function updateFolderFilterVisibility() {
     if (currentFolderId === null) {
-      filterFolderLabel.textContent = "Dans ce dossier uniquement";
+      filterFolderLabel.textContent = "Dans ce dossier";
       filterFolderChip.style.display = "none";
       filterCurrentFolderOnly.checked = false;
       filterFolderChip.classList.remove("active");
     } else {
-      filterFolderLabel.textContent = `Dans "${currentFolderName}" uniquement`;
+      filterFolderLabel.textContent = `"${currentFolderName}"`;
       filterFolderChip.style.display = "inline-flex";
     }
   }
@@ -1911,6 +1911,55 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  let currentDocOccurrencesSortMode = 'page'; // 'page' (défaut) | 'relevance'
+
+  function sortDocOccurrences(occs, mode = currentDocOccurrencesSortMode) {
+    if (!occs || occs.length <= 1) return occs ? [...occs] : [];
+    const arr = [...occs];
+    if (mode === 'relevance') {
+      arr.sort((a, b) => {
+        const termsDiff = (b.distinct_terms_count || 0) - (a.distinct_terms_count || 0);
+        if (termsDiff !== 0) return termsDiff;
+        const fontDiff = (b.font_size || 0) - (a.font_size || 0);
+        if (fontDiff !== 0) return fontDiff;
+        const bm25Diff = (a.bm25_score || 0) - (b.bm25_score || 0);
+        if (bm25Diff !== 0) return bm25Diff;
+        return (a.page_number || 0) - (b.page_number || 0);
+      });
+    } else {
+      arr.sort((a, b) => {
+        const pageDiff = (a.page_number || 0) - (b.page_number || 0);
+        if (pageDiff !== 0) return pageDiff;
+        return String(a.occ_id || '').localeCompare(String(b.occ_id || ''));
+      });
+    }
+    return arr;
+  }
+
+  function setDocOccurrencesSortMode(mode) {
+    currentDocOccurrencesSortMode = mode;
+    document.querySelectorAll('#sortOccByPageBtn, #drawerSortOccByPageBtn').forEach(btn => btn.classList.toggle('active', mode === 'page'));
+    document.querySelectorAll('#sortOccByRelevanceBtn, #drawerSortOccByRelevanceBtn').forEach(btn => btn.classList.toggle('active', mode === 'relevance'));
+
+    if (currentActiveOccurrences && currentActiveOccurrences.length > 0) {
+      currentActiveOccurrences = sortDocOccurrences(currentActiveOccurrences, mode);
+      _lastVerticalRenderHash = '';
+      const curPage = getCurrentViewerPage();
+      renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentActiveOccurrences, curPage);
+      renderDrawerOccurrences(currentActiveDocId, currentActiveDocTitle, currentActiveOccurrences, curPage);
+    }
+  }
+
+  const sortOccByPageBtn = document.getElementById("sortOccByPageBtn");
+  const sortOccByRelevanceBtn = document.getElementById("sortOccByRelevanceBtn");
+  const drawerSortOccByPageBtn = document.getElementById("drawerSortOccByPageBtn");
+  const drawerSortOccByRelevanceBtn = document.getElementById("drawerSortOccByRelevanceBtn");
+
+  if (sortOccByPageBtn) sortOccByPageBtn.addEventListener("click", () => setDocOccurrencesSortMode('page'));
+  if (sortOccByRelevanceBtn) sortOccByRelevanceBtn.addEventListener("click", () => setDocOccurrencesSortMode('relevance'));
+  if (drawerSortOccByPageBtn) drawerSortOccByPageBtn.addEventListener("click", () => setDocOccurrencesSortMode('page'));
+  if (drawerSortOccByRelevanceBtn) drawerSortOccByRelevanceBtn.addEventListener("click", () => setDocOccurrencesSortMode('relevance'));
+
   async function performDocSearch(query, updateInputs = true) {
     if (updateInputs) {
       syncDocSearchInputs(query);
@@ -1931,9 +1980,9 @@ document.addEventListener("DOMContentLoaded", () => {
         docDetailView.style.display = "block";
       }
 
-      currentActiveOccurrences = currentDocOriginalOccurrences || [];
-      renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentDocOriginalOccurrences);
-      renderDrawerOccurrences(currentActiveDocId, currentActiveDocTitle, currentDocOriginalOccurrences);
+      currentActiveOccurrences = sortDocOccurrences(currentDocOriginalOccurrences || [], currentDocOccurrencesSortMode);
+      renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentActiveOccurrences);
+      renderDrawerOccurrences(currentActiveDocId, currentActiveDocTitle, currentActiveOccurrences);
       updateViewerSearchHighlight(currentSearchQuery);
 
       if (currentActiveOccurrences.length > 0) {
@@ -1983,9 +2032,9 @@ document.addEventListener("DOMContentLoaded", () => {
       if (mobileOccurrencesCountText) mobileOccurrencesCountText.textContent = pillLabel;
       if (drawerDocCount) drawerDocCount.textContent = pillLabel;
 
-      currentActiveOccurrences = occs;
-      renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, occs);
-      renderDrawerOccurrences(currentActiveDocId, currentActiveDocTitle, occs);
+      currentActiveOccurrences = sortDocOccurrences(occs, currentDocOccurrencesSortMode);
+      renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentActiveOccurrences);
+      renderDrawerOccurrences(currentActiveDocId, currentActiveDocTitle, currentActiveOccurrences);
       updateViewerSearchHighlight(query);
 
       if (occs.length > 0) {
@@ -2056,11 +2105,16 @@ document.addEventListener("DOMContentLoaded", () => {
       item.setAttribute("data-folder-id", crumb.id === null ? "root" : crumb.id);
       
       if (index === 0) {
+        item.title = "Racine de la bibliothèque";
+        item.setAttribute("aria-label", "Racine de la bibliothèque");
         item.innerHTML = `
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+            <polyline points="10 9 9 9 8 9"></polyline>
           </svg>
-          ${crumb.name}
         `;
       } else {
         item.textContent = crumb.name;
@@ -4051,7 +4105,10 @@ document.addEventListener("DOMContentLoaded", () => {
     docDetailTitle.textContent = docTitle;
     docDetailCount.textContent = `${occurrences.length} occurrence${occurrences.length > 1 ? 's' : ''} dans ce document`;
 
-    renderVerticalOccurrences(numericDocId, docTitle, occurrences, targetPage, targetOccId);
+    currentDocOriginalOccurrences = occurrences || [];
+    currentActiveOccurrences = sortDocOccurrences(occurrences || [], currentDocOccurrencesSortMode);
+
+    renderVerticalOccurrences(numericDocId, docTitle, currentActiveOccurrences, targetPage, targetOccId);
 
     // Synchronisation du tiroir mobile d'extraits
     if (mobileOccurrencesCountText) {
@@ -4121,8 +4178,10 @@ document.addEventListener("DOMContentLoaded", () => {
             if (viewerDocSearchResultCount) viewerDocSearchResultCount.textContent = `${fullOccs.length} résultat${fullOccs.length > 1 ? 's' : ''}`;
             if (mobileOccurrencesCountText) mobileOccurrencesCountText.textContent = pillLabel;
             if (drawerDocCount) drawerDocCount.textContent = pillLabel;
-            renderVerticalOccurrences(numericDocId, docTitle, fullOccs, curPage, targetOccId);
-            renderDrawerOccurrences(numericDocId, docTitle, fullOccs, curPage, targetOccId);
+            currentDocOriginalOccurrences = fullOccs;
+            currentActiveOccurrences = sortDocOccurrences(fullOccs, currentDocOccurrencesSortMode);
+            renderVerticalOccurrences(numericDocId, docTitle, currentActiveOccurrences, curPage, targetOccId);
+            renderDrawerOccurrences(numericDocId, docTitle, currentActiveOccurrences, curPage, targetOccId);
           }
         })
         .catch(err => console.warn("Erreur chargement occurrences complètes document:", err));
@@ -4204,7 +4263,7 @@ document.addEventListener("DOMContentLoaded", () => {
             await window.pdfCacheManager.invalidate(currentActiveDocId);
           }
           updateCacheUI("none", 0);
-          pdfFrame.src = `/pdfjs/web/viewer.html?v=5.9&file=/api/pdf/${currentActiveDocId}#page=${getCurrentViewerPage() || 1}&_nocache=${Date.now()}`;
+          pdfFrame.src = `/pdfjs/web/viewer.html?v=5.9&verbosity=0&file=/api/pdf/${currentActiveDocId}#page=${getCurrentViewerPage() || 1}&_nocache=${Date.now()}`;
         }
       });
     }
@@ -4293,7 +4352,7 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         }
 
-        let viewerUrl = `/pdfjs/web/viewer.html?v=5.9&file=${encodeURIComponent(pdfTargetUrl)}#page=${targetPage}`;
+        let viewerUrl = `/pdfjs/web/viewer.html?v=5.9&verbosity=0&file=${encodeURIComponent(pdfTargetUrl)}#page=${targetPage}`;
         if (currentSearchQuery) {
           viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
         }

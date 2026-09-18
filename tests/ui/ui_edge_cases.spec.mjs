@@ -530,9 +530,9 @@ test.describe('Matrice H - Gestion des Dossiers', () => {
     const count = await breadcrumbItems.count();
     console.log(`[H6] Nombre de miettes dans le fil d'ariane : ${count}`);
 
-    // Il doit y avoir exactement 2 éléments : "Documents" et "[folderName]"
+    // Il doit y avoir exactement 2 éléments : la racine (chevron) et "[folderName]"
     expect(count).toBe(2);
-    await expect(breadcrumbItems.nth(0)).toContainText('Documents');
+    await expect(breadcrumbItems.nth(0)).toHaveAttribute('data-folder-id', 'root');
     await expect(breadcrumbItems.nth(1)).toContainText(folderName);
 
     // Vérifier également qu'un seul élément a le nom du dossier
@@ -925,4 +925,89 @@ test.describe('Matrice I - Import / Upload de PDF', () => {
       }
     }
   });
+
+  test('I9 - Non-Régression "Aménorrhée" (Doc 023) + Non-Superposition Croix Recherche Interne', async ({ page }) => {
+    // 1. Entrer dans le dossier Martingale (id=130) où se trouve le document 023
+    const folderMartingale = page.locator('.folder-card[data-folder-id="130"]');
+    await expect(folderMartingale).toBeVisible({ timeout: 10000 });
+    await folderMartingale.click();
+
+    // 2. Mettre doc 023 en cache local hors-ligne
+    const docCard = page.locator('.doc-card').filter({ hasText: 'Grossesse normale' }).first();
+    await expect(docCard).toBeVisible({ timeout: 10000 });
+    const cacheBtn = docCard.locator('.doc-cache-btn');
+    await cacheBtn.click();
+    await expect(cacheBtn).toHaveClass(/cached/, { timeout: 15000 });
+
+    // 3. Ouvrir le document 023 en Split View
+    await docCard.locator('.doc-title-main').click();
+    await expect(page.locator('#workspace')).toHaveClass(/split-active/, { timeout: 10000 });
+    await expect(page.locator('#docDetailView')).toBeVisible({ timeout: 8000 });
+
+    // 4. Recherche intra-document de "Aménorrhée" (cas d'usage exact de l'utilisateur Screen 1 & 2)
+    const docSearchInput = page.locator('#docSearchInput');
+    await docSearchInput.fill('Aménorrhée');
+    await docSearchInput.press('Enter');
+
+    // Vérifier que le compteur de détail affiche bien 1 résultat (et non 0 résultat)
+    const detailCount = page.locator('#docDetailCount');
+    await expect(detailCount).toContainText('1 résultat', { timeout: 8000 });
+    const countText = await detailCount.textContent();
+    console.log(`[I9] Compteur split view : "${countText}"`);
+
+    // Vérifier la présence de la carte d'occurrence dans la liste verticale
+    const vertOccs = page.locator('#docOccurrencesList .vertical-occ-card');
+    await expect(vertOccs.first()).toBeVisible({ timeout: 5000 });
+    await expect(vertOccs.first()).toContainText('Aménorrhée');
+    console.log('✅ [I9] Occurrence "Aménorrhée" correctement détectée et affichée dans le Split View.');
+
+    // 5. Test de la barre de recherche interne du visualiseur et non-superposition des boutons de fermeture
+    const searchToggleBtn = page.locator('#viewerDocSearchToggleBtn');
+    await searchToggleBtn.click();
+    const searchWrapper = page.locator('#viewerDocSearchWrapper');
+    await expect(searchWrapper).toBeVisible({ timeout: 3000 });
+
+    const viewerSearchInput = page.locator('#viewerDocSearchInput');
+    await viewerSearchInput.fill('Aménorrhée');
+
+    const clearBtn = page.locator('#viewerDocSearchClearBtn');
+    const closeBtn = page.locator('#viewerDocSearchCloseBtn');
+
+    await expect(clearBtn).toBeVisible({ timeout: 3000 });
+    await expect(closeBtn).toBeVisible({ timeout: 3000 });
+
+    // Calcul géométrique des boîtes englobantes
+    const clearBox = await clearBtn.boundingBox();
+    const closeBox = await closeBtn.boundingBox();
+    expect(clearBox).not.toBeNull();
+    expect(closeBox).not.toBeNull();
+
+    console.log(`[I9] ClearBtn x=${clearBox.x}, w=${clearBox.width} | CloseBtn x=${closeBox.x}, w=${closeBox.width}`);
+    // Le bouton clear doit être strictement à gauche du bouton close (dans son propre conteneur)
+    expect(clearBox.x + clearBox.width).toBeLessThan(closeBox.x);
+    console.log('✅ [I9] Aucune superposition des croix de fermeture dans la recherche interne.');
+
+    // 6. Fermer la recherche interne et le visualiseur
+    await closeBtn.click();
+    await page.locator('#closeViewerBtn').click();
+    await expect(page.locator('#workspace')).not.toHaveClass(/split-active/, { timeout: 5000 });
+
+    // 7. Test avec le filtre "Hors-ligne" coché (comme sur le screen 3)
+    const filterOfflineOnly = page.locator('#filterOfflineOnly');
+    await filterOfflineOnly.check();
+    await h.injectSearchQuery('aménorrhée', { expectResultsIn: 10000 });
+
+    const offlineDocCard = page.locator('.doc-card').filter({ hasText: 'Grossesse normale' }).first();
+    await expect(offlineDocCard).toBeVisible({ timeout: 8000 });
+    await expect(offlineDocCard.locator('.doc-badge-pill.highlight')).toContainText('1 occ.');
+    await expect(offlineDocCard.locator('.vignette-item').first()).toBeVisible({ timeout: 8000 });
+    await expect(offlineDocCard.locator('text=Aucun extrait visuel')).not.toBeVisible();
+    console.log('✅ [I9] Recherche hors-ligne validée : document 023 avec vignette active (0 "Aucun extrait visuel").');
+
+    // Décocher et réinitialiser
+    await filterOfflineOnly.uncheck();
+    await h.clearSearch();
+    h.assertZeroErrors();
+  });
 });
+
