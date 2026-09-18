@@ -139,11 +139,17 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     async renderAndCache(docId, pageNumber, highlightRects, rect, cropUrl, isOffline = false, onReqIdAssigned = null) {
+      // Normaliser l'URL : supprimer les query params pour garantir la cohérence
+      // entre stockage (app.js) et lecture offline (sw.js avec ignoreSearch fallback)
+      const normalizedCropKey = cropUrl ? cropUrl.split('?')[0] : null;
+
       // 1. Vérification immédiate dans CacheStorage (0ms, évite tout calcul PDF redondant)
-      if (cropUrl && typeof caches !== 'undefined') {
+      if (normalizedCropKey && typeof caches !== 'undefined') {
         try {
           const cache = await caches.open('docseeker_offline_crops');
-          const cached = await cache.match(cropUrl);
+          // Chercher par URL normalisée d'abord (clé canonique), puis URL originale
+          let cached = await cache.match(normalizedCropKey);
+          if (!cached && cropUrl && cropUrl !== normalizedCropKey) cached = await cache.match(cropUrl);
           if (cached) {
             const blob = await cached.blob();
             if (blob && blob.size > 0) return blob;
@@ -175,7 +181,8 @@ document.addEventListener("DOMContentLoaded", () => {
               'Cache-Control': 'public, max-age=604800, immutable'
             }
           });
-          await cache.put(cropUrl, response);
+          // Stocker avec l'URL normalisée pour maximiser la réutilisabilité
+          await cache.put(normalizedCropKey || cropUrl, response);
         } catch (e) {}
       }
       return blob;
@@ -457,7 +464,10 @@ document.addEventListener("DOMContentLoaded", () => {
         this.observer.unobserve(img);
       } catch (e) {}
 
-      const isOfflineMode = !navigator.onLine || (document.getElementById("filterOfflineOnly") && document.getElementById("filterOfflineOnly").checked);
+      // Détection offline robuste : navigator.onLine peut rester 'true' sur iOS PWA standalone
+      // même en vraie coupure réseau. On considère aussi le filtre offline actif dans l'UI.
+      const isOfflineFilter = document.getElementById("filterOfflineOnly")?.checked || false;
+      const isOfflineMode = !navigator.onLine || isOfflineFilter;
 
       const renderOfflineCrop = () => {
         if (srcUrl.startsWith('/api/crop/') && window.offlineCropRenderer) {
@@ -4120,7 +4130,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (drawerDocCount) {
       drawerDocCount.textContent = `${occurrences.length} extrait${occurrences.length > 1 ? 's' : ''}`;
     }
-    renderDrawerOccurrences(numericDocId, docTitle, occurrences, targetPage, targetOccId);
+    renderDrawerOccurrences(numericDocId, docTitle, currentActiveOccurrences, targetPage, targetOccId);
 
     // Si ouvert depuis une recherche globale, charger en tâche de fond l'intégralité des occurrences du document
     // pour un parcours séquentiel complet (stepper et tiroir) sans bloquer l'affichage immédiat

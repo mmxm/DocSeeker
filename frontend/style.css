@@ -2818,7 +2818,10 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
   .search-input-wrapper input {
     width: 100%;
     height: 40px;
-    font-size: 13.5px;
+    /* iOS zoome sur tout input dont font-size < 16px — seuil anti-zoom obligatoire */
+    font-size: 16px;
+    /* Compenser visuellement la taille plus grande */
+    letter-spacing: -0.01em;
     padding: 0 36px 0 38px;
     border-radius: var(--radius-md);
     background-color: var(--bg-subtle);
@@ -3497,6 +3500,54 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
   border-radius: 3px;
   transition: width 0.2s ease;
 }
+
+/* ==========================================================================
+   PWA Standalone Mode — Correctifs iOS (display-mode: standalone)
+   ========================================================================== */
+
+/*
+ * En mode PWA standalone sur iOS, la barre de statut système (temps/batterie)
+ * est une couche GPU distincte qui se superpose au rendu WebKit de l'app.
+ * Si .app-layout ou .app-header crée un stacking context GPU composite
+ * (via backdrop-filter, will-change, transform), la composition entre la couche
+ * système iOS et la couche WebKit produit un artefact de rendu visible (flou).
+ * Ce problème n'existe PAS dans Safari normal car la barre est gérée par le
+ * chrome du navigateur, sans contact avec l'app.
+ *
+ * Correctifs appliqués en mode standalone uniquement :
+ * 1. isolation: isolate sur .app-layout → stacking context autonome
+ * 2. transform: translateZ(0) sur .app-header → couche GPU propre et isolée
+ * 3. will-change: auto → désactive la promotion GPU préventive sur le header
+ * 4. backdrop-filter: none → suppression explicite de tout effet blur potentiel
+ *
+ * Note : apple-mobile-web-app-status-bar-style: black-translucent est défini
+ * dans index.html. En black-translucent, le contenu s'étend sous la barre
+ * transparente et env(safe-area-inset-top) gère l'espace exactement.
+ */
+@media (display-mode: standalone) {
+  .app-layout {
+    isolation: isolate;
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  .app-header {
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
+    will-change: auto;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background-color: var(--bg-surface);
+  }
+
+  /* Supprimer le backdrop-filter du drawer overlay en standalone :
+     évite que sa couche GPU ne propage des artefacts de composition vers le header */
+  .mobile-drawer-overlay {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: rgba(15, 23, 42, 0.55);
+  }
+}
+
 
 
 

@@ -7,7 +7,7 @@
  * 3. Routage résilient avec fallback automatique sur incident réseau.
  */
 
-const APP_VERSION = '9.1';
+const APP_VERSION = '9.3';
 const CACHE_NAME = `docseeker-app-shell-v${APP_VERSION}`;
 const CROP_CACHE_NAME = 'docseeker_offline_crops';
 const COVER_CACHE_NAME = 'docseeker_covers';
@@ -39,6 +39,9 @@ const APP_SHELL_ASSETS = [
   '/pdfjs/web/viewer.html',
   '/pdfjs/web/viewer.mjs',
   '/pdfjs/web/viewer.css',
+  '/pdfjs/web/locale/locale.json',
+  '/pdfjs/web/locale/en-US/viewer.ftl',
+  '/pdfjs/web/locale/fr/viewer.ftl',
   '/pdfjs/web/standard_fonts/FoxitDingbats.pfb',
   '/pdfjs/web/standard_fonts/FoxitFixed.pfb',
   '/pdfjs/web/standard_fonts/FoxitFixedBold.pfb',
@@ -169,11 +172,19 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/api/crop/')) {
     event.respondWith(
       caches.open(CROP_CACHE_NAME).then(async (cache) => {
-        const cached = await cache.match(event.request);
+        // Match strict d'abord (URL exacte avec query params)
+        let cached = await cache.match(event.request);
+        // Fallback 1 : ignoreSearch (tolère les différences de query string, ex: ?v= de version)
+        if (!cached) cached = await cache.match(event.request, { ignoreSearch: true });
+        // Fallback 2 : match sur le pathname seul (clé normalisée stockée par app.js)
+        if (!cached) cached = await cache.match(url.pathname);
         if (cached) return cached;
+
         return fetch(event.request).then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
-            cache.put(event.request, networkResponse.clone());
+            // Stocker avec l'URL normalisée (sans query params) pour maximiser la réutilisabilité
+            const normalizedKey = new Request(url.pathname);
+            cache.put(normalizedKey, networkResponse.clone());
             return networkResponse;
           }
           return new Response('Offline crop not available', { status: 503, statusText: 'Offline Crop Missing' });
@@ -189,7 +200,10 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/api/pdf/')) {
     const id = url.pathname.replace('/api/pdf/', '').split('/')[0];
 
-    // En mode déconnecté : servir immédiatement depuis IndexedDB (Range Requests HTTP 206 ou Stream)
+    // En mode déconnecté : servir immédiatement depuis IndexedDB
+    // Note : sur iOS en PWA standalone, navigator.onLine peut rester 'true' même
+    // hors connexion réelle. On essaie donc IndexedDB en priorité si le PDF est
+    // en cache, et on bascule vers le réseau seulement si IndexedDB ne répond pas.
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       event.respondWith(
         (async () => {
@@ -207,8 +221,40 @@ self.addEventListener('fetch', (event) => {
       return;
     }
 
-    // En ligne : ne pas intercepter. Le navigateur gère le flux réseau nativement avec le serveur backend.
-    // Cela évite tout conflit d'annulation AbortError dans le Service Worker et préserve le débit maximal.
+    // En ligne (ou iOS où onLine peut être unreliable) :
+    // Tenter IndexedDB d'abord si le PDF pourrait être en cache local,
+    // puis fallback vers le réseau. Cela couvre le cas iOS PWA standalone
+    // où la connexion est coupée mais navigator.onLine est toujours true.
+    event.respondWith(
+      (async () => {
+        // Essai IndexedDB avec timeout court (ne bloque pas si en ligne)
+        let idbRes = null;
+        try {
+          const idbPromise = createIndexedDbPdfResponse(id, event.request);
+          const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 50));
+          idbRes = await Promise.race([idbPromise, timeoutPromise]);
+        } catch (e) {}
+
+        // Si IndexedDB répond, on sert depuis le cache local
+        if (idbRes) return idbRes;
+
+        // Sinon, tenter le réseau normalement
+        try {
+          return await fetch(event.request);
+        } catch (networkErr) {
+          // Réseau vraiment indisponible → re-tenter IndexedDB sans timeout
+          try {
+            const cachedRes = await createIndexedDbPdfResponse(id, event.request);
+            if (cachedRes) return cachedRes;
+          } catch (e) {}
+          return new Response('PDF non disponible hors-ligne', {
+            status: 503,
+            statusText: 'PDF Offline Unavailable',
+            headers: { 'Content-Type': 'text/plain' },
+          });
+        }
+      })()
+    );
     return;
   }
 
@@ -307,10 +353,16 @@ self.addEventListener('fetch', (event) => {
               headers: { 'Content-Type': 'image/png' }
             });
           }
-          if (url.pathname.endsWith('.css')) {
+          if (url.pathname.endsWith('.json')) {
+            return new Response('{}', {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' }
+            });
+          }
+          if (url.pathname.endsWith('.ftl')) {
             return new Response('', {
               status: 200,
-              headers: { 'Content-Type': 'text/css' }
+              headers: { 'Content-Type': 'text/plain' }
             });
           }
           return new Response('Asset indisponible hors-ligne', {
