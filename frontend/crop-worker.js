@@ -52,6 +52,77 @@ const renderQueue = [];
 const pageCache = new Map(); // `${docId}_${pageNumber}` -> { page, docId, lastUsed }
 const PAGE_CACHE_MAX = 3;
 
+// Cache LRU de bitmaps de pages complètes rastérisées (max 3 pages) pour extraction instantanée par GPU
+const pageBitmapCache = new Map(); // `${docId}_${pageNumber}` -> { bitmap, docId, lastUsed }
+const PAGE_BITMAP_CACHE_MAX = 3;
+const renderingBitmapPromises = new Map(); // `${docId}_${pageNumber}` -> Promise<ImageBitmap|OffscreenCanvas>
+
+async function getOrRenderPageBitmap(page, docId, pageNumber) {
+  const key = `${docId}_${pageNumber}`;
+  if (pageBitmapCache.has(key)) {
+    const item = pageBitmapCache.get(key);
+    item.lastUsed = Date.now();
+    return item.bitmap;
+  }
+
+  if (renderingBitmapPromises.has(key)) {
+    return await renderingBitmapPromises.get(key);
+  }
+
+  const renderPromise = (async () => {
+    try {
+      const viewport = page.getViewport({ scale: CROP_RENDER_SCALE });
+      const fullCanvas = new OffscreenCanvas(
+        Math.max(1, Math.round(viewport.width)),
+        Math.max(1, Math.round(viewport.height))
+      );
+      const fullCtx = fullCanvas.getContext('2d');
+
+      await page.render({
+        canvasContext: fullCtx,
+        viewport: viewport,
+      }).promise;
+
+      let bitmap;
+      if (typeof createImageBitmap === 'function') {
+        try {
+          bitmap = await createImageBitmap(fullCanvas);
+        } catch (_) {
+          bitmap = fullCanvas;
+        }
+      } else {
+        bitmap = fullCanvas;
+      }
+
+      while (pageBitmapCache.size >= PAGE_BITMAP_CACHE_MAX) {
+        let oldestKey = null;
+        let oldestTime = Infinity;
+        for (const [k, v] of pageBitmapCache.entries()) {
+          if (v.lastUsed < oldestTime) {
+            oldestTime = v.lastUsed;
+            oldestKey = k;
+          }
+        }
+        if (oldestKey) {
+          const item = pageBitmapCache.get(oldestKey);
+          if (item?.bitmap && typeof item.bitmap.close === 'function') {
+            try { item.bitmap.close(); } catch (_) {}
+          }
+          pageBitmapCache.delete(oldestKey);
+        } else break;
+      }
+
+      pageBitmapCache.set(key, { bitmap, docId, lastUsed: Date.now() });
+      return bitmap;
+    } finally {
+      renderingBitmapPromises.delete(key);
+    }
+  })();
+
+  renderingBitmapPromises.set(key, renderPromise);
+  return await renderPromise;
+}
+
 async function getOrLoadPage(doc, docId, pageNumber) {
   const key = `${docId}_${pageNumber}`;
   if (pageCache.has(key)) {
@@ -85,6 +156,14 @@ function clearPageCache(docId = null) {
     if (!docId || v.docId === docId) {
       try { v.page.cleanup(); } catch (_) {}
       pageCache.delete(k);
+    }
+  }
+  for (const [k, v] of pageBitmapCache.entries()) {
+    if (!docId || v.docId === docId) {
+      if (v?.bitmap && typeof v.bitmap.close === 'function') {
+        try { v.bitmap.close(); } catch (_) {}
+      }
+      pageBitmapCache.delete(k);
     }
   }
 }
@@ -311,17 +390,21 @@ async function executeCropRender(task) {
     const cropW = bounds.width * CROP_RENDER_SCALE;
     const cropH = bounds.height * CROP_RENDER_SCALE;
 
+    // Rendu pleine page ou réutilisation immédiate du bitmap déjà décodé (< 1 ms)
+    const bitmap = await getOrRenderPageBitmap(page, docId, pageNumber);
+
     const canvas = new OffscreenCanvas(Math.max(1, Math.round(cropW)), Math.max(1, Math.round(cropH)));
     const ctx = canvas.getContext('2d');
 
-    const viewport = page.getViewport({ scale: CROP_RENDER_SCALE });
+    // Découpage instantané de la sous-région depuis l'ImageBitmap en GPU
+    const bmpW = bitmap.width || cropW;
+    const bmpH = bitmap.height || cropH;
+    const sx = Math.max(0, Math.min(cropX0 * CROP_RENDER_SCALE, bmpW - 1));
+    const sy = Math.max(0, Math.min(cropY0 * CROP_RENDER_SCALE, bmpH - 1));
+    const sw = Math.min(cropW, bmpW - sx);
+    const sh = Math.min(cropH, bmpH - sy);
 
-    // Rendu avec translation négative pour ne dessiner que la sous-région
-    await page.render({
-      canvasContext: ctx,
-      viewport: viewport,
-      transform: [1, 0, 0, 1, -cropX0 * CROP_RENDER_SCALE, -cropY0 * CROP_RENDER_SCALE],
-    }).promise;
+    ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, sw, sh);
 
     // Application du surlignage jaune Goodnotes translucide unifié
     ctx.fillStyle = GOODNOTES_YELLOW_CSS;
