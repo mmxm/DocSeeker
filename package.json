@@ -1,6 +1,6 @@
 {
   "name": "docseeker-tests",
-  "version": "9.0",
+  "version": "9.1",
   "description": "DocSeeker - Tests Automatiques UI & Moteur Hors-Ligne",
   "private": true,
   "type": "module",

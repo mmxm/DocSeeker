@@ -944,8 +944,19 @@ test.describe('Matrice I - Import / Upload de PDF', () => {
     await expect(page.locator('#workspace')).toHaveClass(/split-active/, { timeout: 10000 });
     await expect(page.locator('#docDetailView')).toBeVisible({ timeout: 8000 });
 
-    // 4. Recherche intra-document de "Aménorrhée" (cas d'usage exact de l'utilisateur Screen 1 & 2)
+    // Vérifier l'absence du titre redondant dans le panneau latéral
+    await expect(page.locator('#docDetailTitle')).not.toBeVisible();
+
+    // Vérifier la position du bouton retour (flèche à gauche du champ de recherche)
+    const backBtn = page.locator('#backToResultsBtn');
+    await expect(backBtn).toBeVisible();
     const docSearchInput = page.locator('#docSearchInput');
+    await expect(docSearchInput).toHaveAttribute('placeholder', '');
+    const backBox = await backBtn.boundingBox();
+    const searchBox = await docSearchInput.boundingBox();
+    expect(backBox.x + backBox.width).toBeLessThanOrEqual(searchBox.x + 20);
+
+    // 4. Recherche intra-document de "Aménorrhée" (cas d'usage exact de l'utilisateur Screen 1 & 2)
     await docSearchInput.fill('Aménorrhée');
     await docSearchInput.press('Enter');
 

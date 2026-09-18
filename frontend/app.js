@@ -1967,7 +1967,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (!query) {
       const origCount = currentDocOriginalOccurrences ? currentDocOriginalOccurrences.length : 0;
-      const countText = `${origCount} occurrence${origCount > 1 ? 's' : ''} dans ce document`;
+      const countText = `${origCount} résultat${origCount > 1 ? 's' : ''}`;
       const pillText = `${origCount} extrait${origCount > 1 ? 's' : ''}`;
 
       if (docDetailCount) docDetailCount.textContent = countText;
@@ -2027,7 +2027,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const resultLabel = `${occs.length} résultat${occs.length > 1 ? 's' : ''}`;
       const pillLabel = `${occs.length} extrait${occs.length > 1 ? 's' : ''}`;
 
-      if (docDetailCount) docDetailCount.textContent = `${resultLabel} pour "${query}"`;
+      if (docDetailCount) docDetailCount.textContent = resultLabel;
       if (viewerDocSearchResultCount) viewerDocSearchResultCount.textContent = resultLabel;
       if (mobileOccurrencesCountText) mobileOccurrencesCountText.textContent = pillLabel;
       if (drawerDocCount) drawerDocCount.textContent = pillLabel;
@@ -4103,7 +4103,7 @@ document.addEventListener("DOMContentLoaded", () => {
       resultsPane.scrollTop = 0;
     }
     docDetailTitle.textContent = docTitle;
-    docDetailCount.textContent = `${occurrences.length} occurrence${occurrences.length > 1 ? 's' : ''} dans ce document`;
+    docDetailCount.textContent = `${occurrences.length} résultat${occurrences.length > 1 ? 's' : ''}`;
 
     currentDocOriginalOccurrences = occurrences || [];
     currentActiveOccurrences = sortDocOccurrences(occurrences || [], currentDocOccurrencesSortMode);
@@ -4172,7 +4172,7 @@ document.addEventListener("DOMContentLoaded", () => {
             updateOccurrenceStepperUI();
             const activeOcc = fullOccs[currentActiveOccurrenceIndex];
             const curPage = activeOcc ? activeOcc.page_number : targetPage;
-            const countLabel = `${fullOccs.length} occurrence${fullOccs.length > 1 ? 's' : ''} dans ce document`;
+            const countLabel = `${fullOccs.length} résultat${fullOccs.length > 1 ? 's' : ''}`;
             const pillLabel = `${fullOccs.length} extrait${fullOccs.length > 1 ? 's' : ''}`;
             if (docDetailCount) docDetailCount.textContent = countLabel;
             if (viewerDocSearchResultCount) viewerDocSearchResultCount.textContent = `${fullOccs.length} résultat${fullOccs.length > 1 ? 's' : ''}`;

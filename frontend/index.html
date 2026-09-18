@@ -6,8 +6,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <title>DocSeeker - Recherche Visuelle dans vos PDF</title>
-  <meta name="app-version" content="9.0">
-  <link rel="stylesheet" href="/style.css?v=9.0">
+  <meta name="app-version" content="9.1">
+  <link rel="stylesheet" href="/style.css?v=9.1">
   <link rel="icon" href="/favicon.ico">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.json">
@@ -40,7 +40,7 @@
           <input 
             type="text" 
             id="searchInput" 
-            placeholder="Rechercher des mots-clés..." 
+            placeholder="" 
             autocomplete="off"
             spellcheck="false"
           />
@@ -262,28 +262,29 @@
         <!-- VUE 2 : Occurrences verticales du document sélectionné (affiché en Split View) -->
         <div id="docDetailView" style="display: none;">
           <div class="doc-detail-header">
-            <button id="backToResultsBtn" class="btn btn-back">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="19" y1="12" x2="5" y2="12"></line>
-                <polyline points="12 19 5 12 12 5"></polyline>
-              </svg>
-              <span>Retour aux résultats</span>
-            </button>
-            
-            <!-- Recherche au sein de ce document -->
-            <div class="doc-search-wrapper">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-                <circle cx="11" cy="11" r="8"></circle>
-                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-              </svg>
-              <input type="text" id="docSearchInput" placeholder="Rechercher dans ce document..." autocomplete="off" />
-              <button id="clearDocSearchBtn" class="clear-btn" style="display: none;">&times;</button>
+            <div class="doc-detail-top-row">
+              <button id="backToResultsBtn" class="btn btn-back btn-back-icon" title="Retour aux résultats" aria-label="Retour aux résultats">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="19" y1="12" x2="5" y2="12"></line>
+                  <polyline points="12 19 5 12 12 5"></polyline>
+                </svg>
+              </button>
+              
+              <!-- Recherche au sein de ce document -->
+              <div class="doc-search-wrapper">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="docSearchInput" placeholder="" autocomplete="off" />
+                <button id="clearDocSearchBtn" class="clear-btn" style="display: none;">&times;</button>
+              </div>
             </div>
 
             <div class="doc-detail-meta">
-              <h3 id="docDetailTitle" class="doc-detail-title">Titre du document</h3>
+              <h3 id="docDetailTitle" class="doc-detail-title" style="display: none;">Titre du document</h3>
               <div class="doc-detail-meta-actions">
-                <span id="docDetailCount" class="doc-detail-count">0 occurrence trouvée</span>
+                <span id="docDetailCount" class="doc-detail-count">0 résultat</span>
                 <div class="occ-sort-toggle" id="docOccSortToggle" title="Changer l'ordre d'affichage des extraits">
                   <button type="button" class="occ-sort-btn active" data-sort="page" id="sortOccByPageBtn">Pages</button>
                   <button type="button" class="occ-sort-btn" data-sort="relevance" id="sortOccByRelevanceBtn">Pertinence</button>
@@ -386,7 +387,7 @@
               <circle cx="11" cy="11" r="8"></circle>
               <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
             </svg>
-            <input type="text" id="viewerDocSearchInput" placeholder="Rechercher dans ce document..." autocomplete="off" />
+            <input type="text" id="viewerDocSearchInput" placeholder="" autocomplete="off" />
             <button id="viewerDocSearchClearBtn" class="clear-btn" style="display: none;">&times;</button>
           </div>
           <span id="viewerDocSearchResultCount" class="viewer-search-count"></span>
@@ -578,7 +579,7 @@
             <circle cx="11" cy="11" r="8"></circle>
             <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
           </svg>
-          <input type="text" id="drawerDocSearchInput" placeholder="Rechercher dans ce document..." autocomplete="off" />
+          <input type="text" id="drawerDocSearchInput" placeholder="" autocomplete="off" />
           <button id="drawerDocSearchClearBtn" class="clear-btn" style="display: none;" aria-label="Effacer la recherche">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
               <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -717,8 +718,8 @@
 
   </div>
 
-  <script src="/pdf-cache.js?v=9.0"></script>
-  <script src="/download-queue-manager.js?v=9.0"></script>
-  <script src="/app.js?v=9.0"></script>
+  <script src="/pdf-cache.js?v=9.1"></script>
+  <script src="/download-queue-manager.js?v=9.1"></script>
+  <script src="/app.js?v=9.1"></script>
 </body>
 </html>
