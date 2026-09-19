@@ -22,24 +22,9 @@ public struct GoodnotesPDFReaderView: View {
         tabManager.activeTab
     }
     
-    private var effectivePdfURL: URL? {
-        guard let tab = activeTab else { return nil }
-        if let localURL = localDb.getLocalPDFURL(docId: tab.docId) {
-            return localURL
-        }
-        // Consultation immédiate sans avoir à attendre le téléchargement complet si connecté au serveur !
-        if NetworkMonitor.shared.isConnected {
-            return URL(string: "\(APIClient.shared.serverURL)/api/pdf/\(tab.docId)")
-        }
-        return nil
-    }
-    
     private var localPdfURL: URL? {
         guard let tab = activeTab else { return nil }
-        if localDb.isDocumentCached(docId: tab.docId) {
-            return localDb.localPdfURL(for: tab.docId)
-        }
-        return nil
+        return localDb.getLocalPDFURL(docId: tab.docId)
     }
     
     private var isDownloading: Bool {
@@ -67,7 +52,7 @@ public struct GoodnotesPDFReaderView: View {
                 Color(.systemGroupedBackground)
                     .edgesIgnoringSafeArea(.all)
                 
-                if let url = effectivePdfURL, let tab = activeTab {
+                if let url = localPdfURL, let tab = activeTab {
                     let activeOcc = (tab.occurrences.indices.contains(tab.activeOccurrenceIndex)) ? tab.occurrences[tab.activeOccurrenceIndex] : nil
                     
                     PDFKitView(
@@ -109,6 +94,22 @@ public struct GoodnotesPDFReaderView: View {
                         Spacer()
                     }
                     .padding()
+                } else if NetworkMonitor.shared.isConnected && !APIClient.shared.serverURL.contains(":9999") {
+                    // En ligne et document pas encore en cache : déclencher le téléchargement automatique et afficher la jauge
+                    VStack(spacing: 16) {
+                        Spacer()
+                        ProgressView()
+                            .scaleEffect(1.5)
+                        Text("Chargement du document...")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+                    .onAppear {
+                        if let tab = activeTab {
+                            downloadQueue.enqueue(docId: tab.docId)
+                        }
+                    }
                 } else {
                     // Hors-ligne et document non présent en cache
                     VStack(spacing: 16) {
@@ -124,7 +125,6 @@ public struct GoodnotesPDFReaderView: View {
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 32)
-                        
                         Button("Retour aux documents") {
                             tabManager.returnToHome()
                         }
@@ -294,7 +294,7 @@ public struct GoodnotesPDFReaderView: View {
             
             // Bouton Partage
             Button(action: {
-                if let url = effectivePdfURL {
+                if let url = localPdfURL {
                     self.shareURL = url
                     self.showShareSheet = true
                 }

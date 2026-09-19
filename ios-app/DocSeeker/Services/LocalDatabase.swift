@@ -69,12 +69,13 @@ public final class LocalDatabase: ObservableObject {
     }
 
     public func isDocumentCached(docId: Int64) -> Bool {
+        if cachedDocIds.contains(docId) { return true }
         let target = pdfDirectoryURL.appendingPathComponent("\(docId).pdf")
-        guard FileManager.default.fileExists(atPath: target.path) else { return false }
-        guard let size = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? Int64), size > 0 else {
-            return false
+        if FileManager.default.fileExists(atPath: target.path),
+           let size = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? Int64), size > 0 {
+            return true
         }
-        return true
+        return isDocumentIndexedLocally(docId: docId)
     }
 
     public func localPdfURL(for docId: Int64) -> URL {
@@ -243,6 +244,50 @@ public final class LocalDatabase: ObservableObject {
                     sqlite3_bind_null(stmt, 1)
                 }
                 sqlite3_bind_int64(stmt, 2, item.docId)
+                sqlite3_step(stmt)
+                sqlite3_reset(stmt)
+            }
+            sqlite3_finalize(stmt)
+        }
+        sqlite3_exec(db, "COMMIT;", nil, nil, nil)
+    }
+
+    /// Synchronise l'intégralité du catalogue des métadonnées de documents dans SQLite local
+    public func syncAllDocumentsMetadata(docs: [DocumentItem]) {
+        guard !docs.isEmpty else { return }
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(dbURL.path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else { return }
+        defer { sqlite3_close(db) }
+
+        sqlite3_exec(db, "PRAGMA foreign_keys = OFF;", nil, nil, nil)
+        sqlite3_exec(db, "BEGIN TRANSACTION;", nil, nil, nil)
+        var stmt: OpaquePointer?
+        let sql = """
+        INSERT INTO documents (id, filename, title, folder_id, total_pages, file_size, status)
+        VALUES (?, ?, ?, ?, ?, ?, 'pending')
+        ON CONFLICT(id) DO UPDATE SET
+            filename = excluded.filename,
+            title = excluded.title,
+            folder_id = excluded.folder_id,
+            total_pages = excluded.total_pages,
+            file_size = excluded.file_size;
+        """
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            for doc in docs {
+                sqlite3_bind_int64(stmt, 1, doc.id)
+                sqlite3_bind_text(stmt, 2, (doc.filename as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 3, (doc.title as NSString).utf8String, -1, nil)
+                if let fId = doc.folder_id {
+                    sqlite3_bind_int64(stmt, 4, fId)
+                } else {
+                    sqlite3_bind_null(stmt, 4)
+                }
+                sqlite3_bind_int64(stmt, 5, doc.total_pages)
+                if let size = doc.file_size {
+                    sqlite3_bind_int64(stmt, 6, size)
+                } else {
+                    sqlite3_bind_null(stmt, 6)
+                }
                 sqlite3_step(stmt)
                 sqlite3_reset(stmt)
             }

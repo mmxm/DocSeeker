@@ -36,6 +36,8 @@ public struct DocumentListView: View {
     @State private var isSearching: Bool = false
     @State private var titlesOnly: Bool = false
     @State private var searchTask: Task<Void, Never>? = nil
+    @State private var showOfflineAlert: Bool = false
+    @State private var offlineAlertDocTitle: String = ""
     
     public init() {}
     
@@ -82,6 +84,11 @@ public struct DocumentListView: View {
                     fileExplorerListView
                 }
             }
+        }
+        .alert("Document non disponible hors-ligne", isPresented: $showOfflineAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("\"\(offlineAlertDocTitle)\" n'a pas encore été téléchargé sur cet appareil. Connectez-vous à Internet pour le consulter.")
         }
         .task {
             await refreshAll()
@@ -441,28 +448,42 @@ public struct DocumentListView: View {
                     .font(.system(size: 18))
                     .accessibilityLabel("Document en cache")
             } else {
-                Button(action: {
-                    downloadQueue.enqueue(docId: doc.id)
-                }) {
-                    Image(systemName: "arrow.down.circle")
-                        .foregroundColor(.accentColor)
+                if isOfflineMode {
+                    Image(systemName: "icloud.slash")
+                        .foregroundColor(.secondary)
                         .font(.system(size: 18))
+                        .accessibilityLabel("Non disponible hors-ligne")
+                } else {
+                    Button(action: {
+                        downloadQueue.enqueue(docId: doc.id)
+                    }) {
+                        Image(systemName: "arrow.down.circle")
+                            .foregroundColor(.accentColor)
+                            .font(.system(size: 18))
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Télécharger")
                 }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("Télécharger")
             }
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
         .onTapGesture {
-            openDocument(doc)
+            if isOfflineMode && !isCached {
+                offlineAlertDocTitle = doc.title.isEmpty ? doc.filename : doc.title
+                showOfflineAlert = true
+            } else {
+                openDocument(doc)
+            }
         }
         .accessibilityIdentifier("document_row_\(doc.id)")
         .contextMenu {
-            Button {
-                openDocument(doc)
-            } label: {
-                Label("Ouvrir dans le lecteur", systemImage: "book")
+            if !isOfflineMode || isCached {
+                Button {
+                    openDocument(doc)
+                } label: {
+                    Label("Ouvrir dans le lecteur", systemImage: "book")
+                }
             }
             
             if isDownloading {
@@ -598,9 +619,11 @@ public struct DocumentListView: View {
                 await MainActor.run {
                     self.isSearching = false
                     if let res = response {
-                        self.searchResults = res.results
-                        self.totalDocuments = res.total_documents
-                        self.totalOccurrences = res.total_occurrences
+                        // RÈGLE CRITIQUE : Hors-ligne, seuls les documents en cache local apparaissent dans la recherche
+                        let cachedDocs = res.results.filter { self.localDb.isDocumentCached(docId: $0.id) }
+                        self.searchResults = cachedDocs
+                        self.totalDocuments = cachedDocs.count
+                        self.totalOccurrences = cachedDocs.reduce(0) { $0 + $1.total_occurrences }
                     } else {
                         self.errorMessage = "Erreur de recherche locale"
                     }
@@ -628,9 +651,10 @@ public struct DocumentListView: View {
                     await MainActor.run {
                         self.isSearching = false
                         if let res = localResponse {
-                            self.searchResults = res.results
-                            self.totalDocuments = res.total_documents
-                            self.totalOccurrences = res.total_occurrences
+                            let cachedDocs = res.results.filter { self.localDb.isDocumentCached(docId: $0.id) }
+                            self.searchResults = cachedDocs
+                            self.totalDocuments = cachedDocs.count
+                            self.totalOccurrences = cachedDocs.reduce(0) { $0 + $1.total_occurrences }
                         } else {
                             self.errorMessage = error.localizedDescription
                         }
@@ -672,6 +696,7 @@ public struct DocumentListView: View {
                 }
             }
             localDb.updateDocumentFolderMappings(mappings: mappings)
+            localDb.syncAllDocumentsMetadata(docs: allDocs)
             
             await MainActor.run {
                 self.allFolders = fetchedFolders

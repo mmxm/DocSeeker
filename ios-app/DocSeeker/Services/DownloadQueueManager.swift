@@ -31,9 +31,9 @@ public final class DownloadQueueManager: NSObject, ObservableObject, URLSessionD
 
     private override init() {
         super.init()
-        let config = URLSessionConfiguration.background(withIdentifier: "com.docseeker.downloads")
-        config.isDiscretionary = false
-        config.sessionSendsLaunchEvents = true
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 60.0
+        config.httpCookieStorage = HTTPCookieStorage.shared
         self.session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
 
         // Surveillance automatique de la restauration réseau pour reprise transparente
@@ -204,13 +204,21 @@ public final class DownloadQueueManager: NSObject, ObservableObject, URLSessionD
                 return
             }
 
+            var req = URLRequest(url: pdfURL)
+            if let cookies = HTTPCookieStorage.shared.cookies(for: pdfURL) {
+                let headers = HTTPCookie.requestHeaderFields(with: cookies)
+                for (k, v) in headers {
+                    req.setValue(v, forHTTPHeaderField: k)
+                }
+            }
+
             let task: URLSessionDownloadTask
             if let resumeData = self.resumeDataMap.removeValue(forKey: docId),
                (try? PropertyListSerialization.propertyList(from: resumeData, options: [], format: nil)) is [String: Any] {
                 print("[DownloadManager] Reprise du téléchargement pour doc \(docId) avec resumeData (\(resumeData.count) octets)")
                 task = self.session.downloadTask(withResumeData: resumeData)
             } else {
-                task = self.session.downloadTask(with: pdfURL)
+                task = self.session.downloadTask(with: req)
             }
 
             self.taskMap[task.taskIdentifier] = docId

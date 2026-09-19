@@ -481,5 +481,36 @@ final class DocSeekerTests: XCTestCase {
         XCTAssertFalse(doc.vignettes!.isEmpty, "Les vignettes d'extraits doivent être générées à partir du tableau spatial 'words'")
         XCTAssertEqual(doc.vignettes!.first?.page_number, 1)
     }
+
+    // =========================================================================
+    // 10. Synchronisation catalogue complet & exclusion des non-cachés en recherche
+    // =========================================================================
+    
+    func testSyncAllDocumentsMetadata_PreservesFolderTree_AndExcludesUncachedFromOfflineSearch() {
+        _ = RustBridge.shared.initDatabase(at: tempDBURL)
+        
+        let docs = [
+            DocumentItem(id: 101, filename: "doc1.pdf", title: "Document 1 en cache", folder_id: 10, total_pages: 5, file_size: 1024, created_at: nil, updated_at: nil),
+            DocumentItem(id: 102, filename: "doc2.pdf", title: "Document 2 distant", folder_id: 10, total_pages: 8, file_size: 2048, created_at: nil, updated_at: nil),
+            DocumentItem(id: 103, filename: "doc3.pdf", title: "Document 3 racine distant", folder_id: nil, total_pages: 12, file_size: 4096, created_at: nil, updated_at: nil)
+        ]
+        
+        // Synchronisation du catalogue complet dans SQLite
+        LocalDatabase.shared.syncAllDocumentsMetadata(docs: docs)
+        
+        // 1. Vérification que l'arborescence contient bien tous les fichiers (même non cachés)
+        let folderDocs = LocalDatabase.shared.getLocalDocuments(folderId: 10)
+        XCTAssertEqual(folderDocs.count, 2, "Les 2 documents du dossier 10 doivent être visibles dans la base locale")
+        XCTAssertTrue(folderDocs.contains(where: { $0.id == 101 }))
+        XCTAssertTrue(folderDocs.contains(where: { $0.id == 102 }))
+        
+        let rootDocs = LocalDatabase.shared.getLocalDocuments(folderId: nil)
+        XCTAssertTrue(rootDocs.contains(where: { $0.id == 103 }), "Le document racine doit être présent")
+        
+        // 2. Vérification que les documents non cachés (qui n'ont pas de pages indexées) n'apparaissent pas dans les résultats FTS5
+        let searchRes = RustBridge.shared.searchLocal(query: "distant", folderId: nil, titlesOnly: false, at: LocalDatabase.shared.dbURL)
+        let foundUncached = searchRes?.results.contains(where: { $0.id == 102 || $0.id == 103 }) ?? false
+        XCTAssertFalse(foundUncached, "Les documents distants non en cache ne doivent pas apparaître dans la recherche textuelle")
+    }
 }
 

@@ -10,8 +10,11 @@ public struct DocumentCardView: View {
     
     @ObservedObject private var localDb = LocalDatabase.shared
     @ObservedObject private var downloadQueue = DownloadQueueManager.shared
+    @ObservedObject private var network = NetworkMonitor.shared
+    @ObservedObject private var api = APIClient.shared
     
     @State private var showDeleteConfirm: Bool = false
+    @State private var showOfflineAlert: Bool = false
     
     public init(
         document: DocumentSearchResult,
@@ -23,6 +26,10 @@ public struct DocumentCardView: View {
     
     private var isCached: Bool {
         localDb.cachedDocIds.contains(document.id)
+    }
+    
+    private var isOffline: Bool {
+        !network.isConnected || !api.isServerReachable || api.serverURL.contains(":9999")
     }
     
     private var downloadProgress: Double? {
@@ -39,7 +46,11 @@ public struct DocumentCardView: View {
             HStack(alignment: .top, spacing: 10) {
                 // Clic sur le titre et infos ouvre le document
                 Button(action: {
-                    onOpenDocument(document, document.vignettes?.first)
+                    if isOffline && !isCached {
+                        showOfflineAlert = true
+                    } else {
+                        onOpenDocument(document, document.vignettes?.first)
+                    }
                 }) {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "doc.text.fill")
@@ -87,10 +98,18 @@ public struct DocumentCardView: View {
                 OccurrenceRibbonView(
                     document: document,
                     onSelectOccurrence: { occ in
-                        onOpenDocument(document, occ)
+                        if isOffline && !isCached {
+                            showOfflineAlert = true
+                        } else {
+                            onOpenDocument(document, occ)
+                        }
                     },
                     onOpenDrawer: {
-                        onOpenDocument(document, vignettes.first)
+                        if isOffline && !isCached {
+                            showOfflineAlert = true
+                        } else {
+                            onOpenDocument(document, vignettes.first)
+                        }
                     }
                 )
             }
@@ -99,6 +118,11 @@ public struct DocumentCardView: View {
         .background(Color(.secondarySystemGroupedBackground))
         .cornerRadius(12)
         .shadow(color: Color.black.opacity(0.03), radius: 3, x: 0, y: 1)
+        .alert("Document non disponible hors-ligne", isPresented: $showOfflineAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("\"\(document.title)\" n'a pas encore été téléchargé sur cet appareil. Connectez-vous à Internet pour le consulter.")
+        }
         .confirmationDialog(
             "Retirer \"\(document.title)\" du cache local hors-ligne ?",
             isPresented: $showDeleteConfirm,

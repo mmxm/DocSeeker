@@ -187,6 +187,7 @@ public final class DocumentTabManager: ObservableObject {
     private func ensureLocalCache(docId: Int64) {
         let db = LocalDatabase.shared
         guard !db.isDocumentCached(docId: docId) else { return }
+        guard NetworkMonitor.shared.isConnected && !APIClient.shared.serverURL.contains(":9999") else { return }
         
         DownloadQueueManager.shared.enqueue(docId: docId)
     }
