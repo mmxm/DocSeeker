@@ -1,0 +1,16 @@
+[package]
+name = "search-ios"
+version = "0.1.0"
+edition = "2021"
+description = "Pont C-ABI natif pour le client iOS et iPadOS de DocSeeker"
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+search-core = { path = "../search-core" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+urlencoding = "2.1"

@@ -232,12 +232,29 @@ test.describe('Matrice M - Mobile & PWA', () => {
 
       // Audit corruption
       await page.waitForTimeout(2000);
-      const audit = await page.evaluate((docId) => {
+      const audit = await page.evaluate(async (docId) => {
         const imgs = Array.from(document.querySelectorAll(`.doc-card[data-doc-id="${docId}"] .vignette-crop-img`));
         const corrupt = imgs.filter(img => img.complete && img.naturalWidth === 0);
-        return { total: imgs.length, corruptCount: corrupt.length };
+        const details = [];
+        for (const i of corrupt) {
+          let blobSize = -1, blobType = 'unknown';
+          try {
+            const r = await fetch(i.src);
+            const b = await r.blob();
+            blobSize = b.size;
+            blobType = b.type;
+          } catch (e) {
+            blobType = 'fetch_error: ' + String(e);
+          }
+          details.push({ src: i.src, naturalWidth: i.naturalWidth, naturalHeight: i.naturalHeight, complete: i.complete, blobSize, blobType, dataset: { ...i.dataset } });
+        }
+        return { 
+          total: imgs.length, 
+          corruptCount: corrupt.length,
+          corruptDetails: details
+        };
       }, tc.docId);
-      console.log(`[${tc.name}] Audit : ${audit.total} imgs, ${audit.corruptCount} corrompues`);
+      console.log(`[${tc.name}] Audit : ${audit.total} imgs, ${audit.corruptCount} corrompues`, JSON.stringify(audit.corruptDetails));
       expect(audit.corruptCount).toBe(0);
 
       await context.setOffline(false);

@@ -1,0 +1,4 @@
+module DocSeekerCore {
+    header "DocSeekerCore.h"
+    export *
+}

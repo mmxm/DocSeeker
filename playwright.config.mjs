@@ -42,8 +42,7 @@ export default defineConfig({
       },
     },
     {
-      // Tests Mobile & PWA : viewport iPhone 15 Pro sur Chromium (WebKit non installé)
-      // Viewport, deviceScaleFactor et isMobile identiques au profil iPhone 15 Pro
+      // Tests Mobile & PWA : viewport iPhone 15 Pro sur Chromium (compatibilité rapide)
       name: 'mobile',
       testMatch: ['**/ui_mobile_pwa.spec.*'],
       retries: 1,
@@ -57,6 +56,15 @@ export default defineConfig({
         launchOptions: {
           args: ['--disable-web-security', '--enable-features=SharedArrayBuffer'],
         },
+      },
+    },
+    {
+      // Tests Mobile & PWA : VRAI MOTEUR WEBKIT (Safari iOS réel)
+      name: 'mobile-webkit',
+      testMatch: ['**/ui_mobile_pwa.spec.*'],
+      retries: 1,
+      use: {
+        ...devices['iPhone 15 Pro'],
       },
     },
   ],

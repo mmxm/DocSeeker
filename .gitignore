@@ -36,3 +36,16 @@ backend-rust/lib/
 node_modules/
 test-results/
 playwright-report/
+
+# Spotlight exclusions
+.metadata_never_index
+*.noindex
+
+# Xcode & iOS
+ios-app/build/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcresult
+*.log
+cookies.txt
+test_cc.swift
