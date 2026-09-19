@@ -373,6 +373,7 @@ struct DocumentInfoFloatingCard: View {
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("popover_close_button")
             }
             
             Divider()

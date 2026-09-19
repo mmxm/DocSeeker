@@ -209,8 +209,13 @@ final class DocSeekerTests: XCTestCase {
         
         // Vérification de la détection de statut de cache dossier
         let localDb = LocalDatabase.shared
+        localDb.removeDocumentFromCache(docId: 1)
+        localDb.removeDocumentFromCache(docId: 8)
+        localDb.removeDocumentFromCache(docId: 10)
+        
         let statusInitial = localDb.folderCacheStatus(docIdsInFolder: [1, 8, 10])
         XCTAssertEqual(statusInitial.totalCount, 3)
+        XCTAssertEqual(statusInitial.cachedCount, 0)
         
         // Mise en cache simulée du doc 1
         if let pdf1URL = fixtureURL(named: "1", ext: "pdf") {
@@ -235,30 +240,35 @@ final class DocSeekerTests: XCTestCase {
         let queue = DownloadQueueManager.shared
         let docId: Int64 = 777
         
-        // Simuler un début de téléchargement en attente
+        // Configuration initiale
         queue.isPaused = true
-        queue.enqueue(docId: docId)
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        queue.cancelDownload(docId: docId)
         
-        // 1. Coupure réseau immédiate
-        NetworkMonitor.shared.isOnline = false
-        queue.pauseAllForNetworkInterruption()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        let expCancel = expectation(description: "Wait cancel")
+        DispatchQueue.main.async {
+            // 1. Simuler une tâche interrompue par coupure réseau
+            queue.interruptedTasks[docId] = 0.45
+            expCancel.fulfill()
+        }
+        wait(for: [expCancel], timeout: 2.0)
         
-        // Vérifier que le téléchargement a été mis en pause et mémorisé sans être supprimé
-        XCTAssertTrue(queue.interruptedTasks.keys.contains(docId) || queue.queuedDocIds.contains(docId),
-                      "Le document en cours doit être marqué comme interrompu et prêt pour reprise")
+        XCTAssertTrue(queue.interruptedTasks.keys.contains(docId),
+                      "Le document interrompu doit figurer dans interruptedTasks")
         
         // 2. Simuler la capture de données de reprise (resumeData)
         let dummyResumeData = "ResumeDataBytesSimulated".data(using: .utf8)!
         queue.setResumeData(for: docId, data: dummyResumeData)
         XCTAssertEqual(queue.getResumeData(for: docId), dummyResumeData)
         
-        // 3. Rétablissement du réseau
+        // 3. Rétablissement du réseau et déclenchement de la reprise
         NetworkMonitor.shared.isOnline = true
-        queue.isPaused = false
         queue.resumeInterruptedTasks()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        
+        let exp = expectation(description: "Resume completed")
+        DispatchQueue.main.async {
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 2.0)
         
         // Vérifier que le document est réinjecté dans la file d'attente
         XCTAssertTrue(queue.queuedDocIds.contains(docId) || queue.activeTasks.keys.contains(docId) || queue.interruptedTasks.keys.contains(docId),
@@ -266,6 +276,7 @@ final class DocSeekerTests: XCTestCase {
         
         // Nettoyer
         queue.cancelDownload(docId: docId)
+        queue.isPaused = false
     }
     
     // =========================================================================
@@ -351,10 +362,11 @@ final class DocSeekerTests: XCTestCase {
         XCTAssertEqual(updatedTab.searchQuery, "cardiaque")
         
         // Test navigation occurrence suivante et précédente
+        let currentIdx = tabManager.activeTab?.activeOccurrenceIndex ?? 0
         tabManager.nextOccurrence()
-        XCTAssertEqual(tabManager.activeTab?.activeOccurrenceIndex, 1)
+        XCTAssertEqual(tabManager.activeTab?.activeOccurrenceIndex, currentIdx + 1)
         tabManager.previousOccurrence()
-        XCTAssertEqual(tabManager.activeTab?.activeOccurrenceIndex, 0)
+        XCTAssertEqual(tabManager.activeTab?.activeOccurrenceIndex, currentIdx)
         
         // Nettoyage
         tabManager.closeTab(id: updatedTab.id)

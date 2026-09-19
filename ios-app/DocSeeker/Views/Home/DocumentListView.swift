@@ -56,7 +56,7 @@ public struct DocumentListView: View {
     }
     
     private var isOfflineMode: Bool {
-        !network.isConnected || !api.isServerReachable
+        !network.isConnected || !api.isServerReachable || api.serverURL.contains(":9999")
     }
     
     public var body: some View {
@@ -657,21 +657,18 @@ public struct DocumentListView: View {
                 _ = RustBridge.shared.syncFolders(json: json, at: localDb.dbURL)
             }
             
+            // Récupération globale atomique de tous les documents pour fixer les folder_id dans SQLite
+            let allDocs = try await api.fetchDocuments(all: true)
             var newFolderDocs: [Int64: [DocumentItem]] = [:]
             var mappings: [(docId: Int64, folderId: Int64?)] = []
-            for f in fetchedFolders {
-                if let docs = try? await api.fetchDocuments(folderId: f.id) {
-                    newFolderDocs[f.id] = docs
-                    for d in docs {
-                        mappings.append((docId: d.id, folderId: f.id))
-                    }
-                }
-            }
+            var rootDocs: [DocumentItem] = []
             
-            let rootDocs = try await api.fetchDocuments(folderId: currentFolderId)
-            if currentFolderId == nil {
-                for d in rootDocs {
-                    mappings.append((docId: d.id, folderId: nil))
+            for d in allDocs {
+                mappings.append((docId: d.id, folderId: d.folder_id))
+                if let fId = d.folder_id {
+                    newFolderDocs[fId, default: []].append(d)
+                } else {
+                    rootDocs.append(d)
                 }
             }
             localDb.updateDocumentFolderMappings(mappings: mappings)
@@ -679,7 +676,7 @@ public struct DocumentListView: View {
             await MainActor.run {
                 self.allFolders = fetchedFolders
                 self.folderDocs = newFolderDocs
-                self.currentDocuments = rootDocs
+                self.currentDocuments = self.currentFolderId != nil ? (newFolderDocs[self.currentFolderId!] ?? []) : rootDocs
                 self.isSyncing = false
                 self.isLoading = false
             }

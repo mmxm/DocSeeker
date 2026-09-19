@@ -23,6 +23,7 @@ public final class LocalDatabase: ObservableObject {
         // Initialiser la base avec le schéma Rust officiel
         _ = RustBridge.shared.initDatabase(at: dbURL)
         refreshCachedDocs()
+        repairCorruptedCachedDocuments()
     }
 
     public func refreshCachedDocs() {
@@ -33,7 +34,10 @@ public final class LocalDatabase: ObservableObject {
             for file in contents where file.pathExtension.lowercased() == "pdf" {
                 let name = file.deletingPathExtension().lastPathComponent
                 if let id = Int64(name) {
-                    result.insert(id)
+                    let target = self.localPdfURL(for: id)
+                    if let size = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? Int64), size > 0 {
+                        result.insert(id)
+                    }
                 }
             }
         }
@@ -42,9 +46,35 @@ public final class LocalDatabase: ObservableObject {
         }
     }
 
+    /// Vérifie si le document est indexé avec du texte et des mots dans SQLite local
+    public func isDocumentIndexedLocally(docId: Int64) -> Bool {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(dbURL.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            return false
+        }
+        defer { sqlite3_close(db) }
+
+        var stmt: OpaquePointer?
+        let sql = "SELECT count(*) FROM pages WHERE doc_id = ? AND words_json IS NOT NULL AND words_json != '[]'"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            return false
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        sqlite3_bind_int64(stmt, 1, docId)
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            return sqlite3_column_int64(stmt, 0) > 0
+        }
+        return false
+    }
+
     public func isDocumentCached(docId: Int64) -> Bool {
         let target = pdfDirectoryURL.appendingPathComponent("\(docId).pdf")
-        return FileManager.default.fileExists(atPath: target.path)
+        guard FileManager.default.fileExists(atPath: target.path) else { return false }
+        guard let size = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? Int64), size > 0 else {
+            return false
+        }
+        return true
     }
 
     public func localPdfURL(for docId: Int64) -> URL {
@@ -52,7 +82,12 @@ public final class LocalDatabase: ObservableObject {
     }
 
     public func getLocalPDFURL(docId: Int64) -> URL? {
-        return isDocumentCached(docId: docId) ? localPdfURL(for: docId) : nil
+        let target = localPdfURL(for: docId)
+        if FileManager.default.fileExists(atPath: target.path),
+           let size = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? Int64), size > 0 {
+            return target
+        }
+        return nil
     }
 
     public func removeDocumentFromCache(docId: Int64) {
@@ -82,6 +117,35 @@ public final class LocalDatabase: ObservableObject {
             _ = RustBridge.shared.insertBundle(json: bundle, at: dbURL)
         }
         refreshCachedDocs()
+    }
+
+    /// Analyse et répare en tâche de fond tout document PDF présent sur disque mais manquant d'index FTS/mots
+    public func repairCorruptedCachedDocuments() {
+        let fileManager = FileManager.default
+        guard let contents = try? fileManager.contentsOfDirectory(at: pdfDirectoryURL, includingPropertiesForKeys: nil) else { return }
+        
+        var unindexedIds: [Int64] = []
+        for file in contents where file.pathExtension.lowercased() == "pdf" {
+            let name = file.deletingPathExtension().lastPathComponent
+            if let id = Int64(name), !isDocumentIndexedLocally(docId: id) {
+                unindexedIds.append(id)
+            }
+        }
+        
+        guard !unindexedIds.isEmpty, NetworkMonitor.shared.isConnected else { return }
+        
+        Task(priority: .utility) {
+            for docId in unindexedIds {
+                do {
+                    let bundleJson = try await APIClient.shared.fetchSyncBundle(docId: docId)
+                    _ = RustBridge.shared.insertBundle(json: bundleJson, at: self.dbURL)
+                    print("[LocalDatabase] Auto-réparation réussie pour l'index du document \(docId)")
+                } catch {
+                    print("[LocalDatabase] Impossible de réparer le bundle pour \(docId): \(error)")
+                }
+            }
+            self.refreshCachedDocs()
+        }
     }
 
     // MARK: - Requêtes SQLite Locales (Offline)

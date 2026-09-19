@@ -72,8 +72,10 @@ public struct DocumentCardView: View {
                         
                         Spacer()
                     }
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("doc_card_button_\(document.id)")
                 
                 // Contrôle de synchronisation autonome (strictement séparé de la zone de tap document)
                 cacheControlButton
@@ -97,10 +99,6 @@ public struct DocumentCardView: View {
         .background(Color(.secondarySystemGroupedBackground))
         .cornerRadius(12)
         .shadow(color: Color.black.opacity(0.03), radius: 3, x: 0, y: 1)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onOpenDocument(document, document.vignettes?.first)
-        }
         .confirmationDialog(
             "Retirer \"\(document.title)\" du cache local hors-ligne ?",
             isPresented: $showDeleteConfirm,

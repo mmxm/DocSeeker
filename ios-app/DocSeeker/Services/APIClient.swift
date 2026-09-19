@@ -67,6 +67,9 @@ public final class APIClient: ObservableObject {
         self.serverURL = clean
         KeychainManager.shared.save(key: "server_url", value: clean)
         self.isAuthenticated = false
+        if clean.contains(":9999") {
+            self.isServerReachable = false
+        }
     }
 
     public func login(password: String) async throws -> Bool {

@@ -59,13 +59,14 @@ public final class DocSeekerTestHarness {
         let clearBtn = app.buttons["xmark.circle.fill"]
         if clearBtn.exists {
             clearBtn.tap()
+        }
+        let backBtn = app.buttons["Retour"]
+        if backBtn.exists {
+            backBtn.tap()
         } else {
-            let searchField = app.textFields.firstMatch
-            if searchField.exists {
-                searchField.tap()
-                let stringValue = searchField.value as? String ?? ""
-                let deleteString = String(repeating: XCUIKeyboardKey.delete.rawValue, count: stringValue.count)
-                searchField.typeText(deleteString)
+            let searchToggle = app.buttons["Rechercher dans le dossier"]
+            if searchToggle.exists && app.textFields.firstMatch.exists {
+                searchToggle.tap()
             }
         }
         return self
@@ -84,6 +85,11 @@ public final class DocSeekerTestHarness {
     
     @discardableResult
     public func openFirstDocumentReader() -> Self {
+        let docBtn = app.buttons["doc_card_button_1"]
+        if docBtn.waitForExistence(timeout: 3.0) {
+            docBtn.tap()
+            return self
+        }
         let readButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Lire'")).firstMatch
         if readButton.exists {
             readButton.tap()
@@ -103,15 +109,15 @@ public final class DocSeekerTestHarness {
     
     @discardableResult
     public func verifyPDFReaderActive() -> Self {
-        let homeBtn = app.buttons["house"]
+        let homeBtn = app.buttons["Retour à l'accueil"].exists ? app.buttons["Retour à l'accueil"] : app.buttons["house"]
         let closeBtn = app.buttons["Fermer"]
-        XCTAssertTrue(homeBtn.waitForExistence(timeout: 3.0) || closeBtn.waitForExistence(timeout: 3.0), "Le lecteur PDF Goodnotes doit être ouvert")
+        XCTAssertTrue(homeBtn.waitForExistence(timeout: 4.0) || closeBtn.waitForExistence(timeout: 4.0), "Le lecteur PDF Goodnotes doit être ouvert")
         return self
     }
     
     @discardableResult
     public func closePDFReader() -> Self {
-        let homeBtn = app.buttons["house"]
+        let homeBtn = app.buttons["Retour à l'accueil"].exists ? app.buttons["Retour à l'accueil"] : app.buttons["house"]
         if homeBtn.exists {
             homeBtn.tap()
         } else {
@@ -223,6 +229,56 @@ public final class DocSeekerTestHarness {
     
     // MARK: - Connectivité Serveur & Mode Hors-ligne Réel
     
+    /// Télécharge et garantit que le document 1 est en cache local avant passage hors-ligne
+    @discardableResult
+    public func ensureDoc1ReadyForOffline() -> Self {
+        switchTab("Documents")
+        let cacheStatus = app.buttons["cache_status_1"]
+        if cacheStatus.exists {
+            return self
+        }
+        search(query: "grossesse")
+        let docCard = app.staticTexts["023 - Grossesse normale"]
+        if docCard.waitForExistence(timeout: 5.0) {
+            let statusBtn = app.buttons["cache_status_1"]
+            if !statusBtn.exists {
+                let downloadBtn = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Télécharger'")).firstMatch
+                if downloadBtn.exists {
+                    downloadBtn.tap()
+                    _ = statusBtn.waitForExistence(timeout: 15.0)
+                }
+            }
+        }
+        clearSearch()
+        return self
+    }
+    
+    @discardableResult
+    public func disconnectServer() -> Self {
+        switchTab("Réglages")
+        let btn = app.buttons["btn_force_offline"]
+        if btn.waitForExistence(timeout: 3.0) {
+            btn.tap()
+        } else {
+            setServerURL("http://127.0.0.1:9999")
+        }
+        switchTab("Documents")
+        return self
+    }
+    
+    @discardableResult
+    public func reconnectServer() -> Self {
+        switchTab("Réglages")
+        let btn = app.buttons["btn_force_online"]
+        if btn.waitForExistence(timeout: 3.0) {
+            btn.tap()
+        } else {
+            setServerURL("http://127.0.0.1:8080")
+        }
+        switchTab("Documents")
+        return self
+    }
+    
     @discardableResult
     public func setServerURL(_ newURL: String) -> Self {
         switchTab("Réglages")
@@ -241,16 +297,6 @@ public final class DocSeekerTestHarness {
             Thread.sleep(forTimeInterval: 1.0)
         }
         return self
-    }
-    
-    @discardableResult
-    public func disconnectServer() -> Self {
-        setServerURL("http://127.0.0.1:9999")
-    }
-    
-    @discardableResult
-    public func reconnectServer() -> Self {
-        setServerURL("http://127.0.0.1:8080")
     }
     
     @discardableResult

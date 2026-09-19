@@ -177,14 +177,24 @@ public final class DownloadQueueManager: NSObject, ObservableObject, URLSessionD
         DispatchQueue.main.async {
             self.activeTasks[docId] = 0.05
         }
-
+        
         Task {
-            // 1. Télécharger d'abord le bundle d'indexation
+            // 1. Télécharger d'abord le bundle d'indexation de façon STRICTE et ATOMIQUE
             do {
                 let bundleJson = try await APIClient.shared.fetchSyncBundle(docId: docId)
-                _ = RustBridge.shared.insertBundle(json: bundleJson, at: LocalDatabase.shared.dbURL)
+                let inserted = RustBridge.shared.insertBundle(json: bundleJson, at: LocalDatabase.shared.dbURL)
+                guard inserted else {
+                    print("[DownloadManager] Échec critique insertion SQLite pour le bundle \(docId)")
+                    self.finishTask(docId: docId, success: false)
+                    return
+                }
             } catch {
-                print("[DownloadManager] Échec récupération bundle pour \(docId): \(error)")
+                print("[DownloadManager] Interruption réseau sur le bundle \(docId): \(error)")
+                DispatchQueue.main.async {
+                    self.interruptedTasks[docId] = self.activeTasks.removeValue(forKey: docId) ?? 0.0
+                    self.runningCount = max(0, self.runningCount - 1)
+                }
+                return
             }
 
             // 2. Télécharger le fichier PDF avec reprise si disponible
