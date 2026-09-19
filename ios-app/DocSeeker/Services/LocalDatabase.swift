@@ -41,8 +41,12 @@ public final class LocalDatabase: ObservableObject {
                 }
             }
         }
-        DispatchQueue.main.async {
+        if Thread.isMainThread {
             self.cachedDocIds = result
+        } else {
+            DispatchQueue.main.async {
+                self.cachedDocIds = result
+            }
         }
     }
 

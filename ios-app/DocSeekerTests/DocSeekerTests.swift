@@ -157,6 +157,39 @@ final class DocSeekerTests: XCTestCase {
     }
     
     // =========================================================================
+    // 3b. Test d'ouverture partielle et négociation HTTP 206 Partial Content (Byte-Range)
+    // =========================================================================
+    
+    func testPartialPDFStreamingAndByteRangeNegotiation() async throws {
+        let api = APIClient.shared
+        let loggedIn = await api.autoLoginIfPossible()
+        XCTAssertTrue(loggedIn, "L'auto-login doit réussir sur le serveur local")
+        
+        guard let streamURL = api.streamingPDFURL(for: 1) else {
+            XCTFail("L'URL de streaming partiel avec token doit être construite")
+            return
+        }
+        
+        // 1. Validation de la négociation HTTP 206 (Byte-Range)
+        var rangeReq = URLRequest(url: streamURL)
+        rangeReq.setValue("bytes=0-1024", forHTTPHeaderField: "Range")
+        let (data, response) = try await URLSession.shared.data(for: rangeReq)
+        guard let http = response as? HTTPURLResponse else {
+            XCTFail("Réponse HTTP attendue")
+            return
+        }
+        
+        XCTAssertEqual(http.statusCode, 206, "Le serveur doit répondre HTTP 206 Partial Content pour les requêtes Range")
+        XCTAssertEqual(http.value(forHTTPHeaderField: "Accept-Ranges"), "bytes")
+        XCTAssertEqual(data.count, 1025, "La taille du flux partiel doit être exactement de 1025 octets")
+        
+        // 2. Validation de l'ouverture native par Apple PDFKit sans blocage 401
+        let remoteDoc = PDFDocument(url: streamURL)
+        XCTAssertNotNil(remoteDoc, "Apple PDFDocument doit pouvoir s'initialiser sur l'URL distante authentifiée")
+        XCTAssertGreaterThan(remoteDoc?.pageCount ?? 0, 0, "Apple PDFKit doit charger le document distant sans écran blanc")
+    }
+    
+    // =========================================================================
     // 4. Découpe matérielle CoreGraphics avec surlignage Goodnotes sur vrais PDF
     // =========================================================================
     

@@ -255,9 +255,13 @@ public final class DocSeekerTestHarness {
     
     @discardableResult
     public func disconnectServer() -> Self {
+        let status = app.descendants(matching: .any)["network_status_indicator"]
+        if status.waitForExistence(timeout: 2.0) && (status.label.contains("Hors-ligne") || status.label.contains("offline")) {
+            return self
+        }
         switchTab("Réglages")
         let btn = app.buttons["btn_force_offline"]
-        if btn.waitForExistence(timeout: 3.0) {
+        if btn.waitForExistence(timeout: 2.0) {
             btn.tap()
         } else {
             setServerURL("http://127.0.0.1:9999")
@@ -268,9 +272,17 @@ public final class DocSeekerTestHarness {
     
     @discardableResult
     public func reconnectServer() -> Self {
+        let statusBtn = app.buttons["network_status_indicator"]
+        if statusBtn.exists {
+            statusBtn.tap()
+            _ = statusBtn.waitForExistence(timeout: 2.0)
+            if statusBtn.label == "Connecté" {
+                return self
+            }
+        }
         switchTab("Réglages")
         let btn = app.buttons["btn_force_online"]
-        if btn.waitForExistence(timeout: 3.0) {
+        if btn.waitForExistence(timeout: 2.0) {
             btn.tap()
         } else {
             setServerURL("http://127.0.0.1:8080")

@@ -229,11 +229,11 @@ public final class DownloadQueueManager: NSObject, ObservableObject, URLSessionD
     private func finishTask(docId: Int64, success: Bool) {
         lastProgressUpdate.removeValue(forKey: docId)
         DispatchQueue.main.async {
-            self.activeTasks.removeValue(forKey: docId)
-            self.runningCount = max(0, self.runningCount - 1)
             if success {
                 LocalDatabase.shared.refreshCachedDocs()
             }
+            self.activeTasks.removeValue(forKey: docId)
+            self.runningCount = max(0, self.runningCount - 1)
             self.processQueue()
         }
     }

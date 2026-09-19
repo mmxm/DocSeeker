@@ -20,9 +20,15 @@ public final class NetworkMonitor: ObservableObject {
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
+            let satisfied = (path.status == .satisfied)
             DispatchQueue.main.async {
-                self?.isOnline = (path.status == .satisfied)
+                self?.isOnline = satisfied
                 self?.isExpensive = path.isExpensive
+            }
+            if satisfied {
+                Task {
+                    await APIClient.shared.probeServerReachability()
+                }
             }
         }
         monitor.start(queue: queue)

@@ -44,9 +44,8 @@ public struct PDFReaderView: View {
         if localDb.isDocumentCached(docId: documentId) {
             return localDb.localPdfURL(for: documentId)
         }
-        // Si non encore sur disque local, pointer vers l'URL du serveur
-        let server = APIClient.shared.serverURL
-        return URL(string: "\(server)/api/pdf/\(documentId)")
+        // Streaming partiel instantané authentifié avec token de session
+        return APIClient.shared.streamingPDFURL(for: documentId)
     }
     
     public var body: some View {

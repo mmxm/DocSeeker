@@ -27,6 +27,23 @@ public struct GoodnotesPDFReaderView: View {
         return localDb.getLocalPDFURL(docId: tab.docId)
     }
     
+    private var resolvedPdfURL: URL? {
+        guard let tab = activeTab else { return nil }
+        // 1. Si présent en cache local sur le disque : priorité absolue
+        if let local = localDb.getLocalPDFURL(docId: tab.docId) {
+            return local
+        }
+        // 2. Si connecté et serveur accessible : streaming Byte-Range partiel instantané
+        if NetworkMonitor.shared.isConnected && APIClient.shared.isServerReachable && !APIClient.shared.serverURL.contains(":9999") {
+            return APIClient.shared.streamingPDFURL(for: tab.docId)
+        }
+        return nil
+    }
+    
+    private var isOffline: Bool {
+        !NetworkMonitor.shared.isConnected || !APIClient.shared.isServerReachable || APIClient.shared.serverURL.contains(":9999")
+    }
+    
     private var isDownloading: Bool {
         guard let tab = activeTab else { return false }
         return downloadQueue.activeTasks[tab.docId] != nil || downloadQueue.queuedDocIds.contains(tab.docId)
@@ -34,7 +51,7 @@ public struct GoodnotesPDFReaderView: View {
     
     private var downloadProgress: Double {
         guard let tab = activeTab else { return 0.0 }
-        return downloadQueue.activeTasks[tab.docId] ?? 0.05
+        return downloadQueue.activeTasks[tab.docId] ?? 0.0
     }
     
     public var body: some View {
@@ -47,12 +64,12 @@ public struct GoodnotesPDFReaderView: View {
             
             Divider()
             
-            // 3. Zone principale PDFKit avec chargement sécurisé anti-écran blanc
+            // 3. Zone principale PDFKit avec streaming partiel instantané
             ZStack {
                 Color(.systemGroupedBackground)
                     .edgesIgnoringSafeArea(.all)
                 
-                if let url = localPdfURL, let tab = activeTab {
+                if let url = resolvedPdfURL, let tab = activeTab {
                     let activeOcc = (tab.occurrences.indices.contains(tab.activeOccurrenceIndex)) ? tab.occurrences[tab.activeOccurrenceIndex] : nil
                     
                     PDFKitView(
@@ -62,56 +79,14 @@ public struct GoodnotesPDFReaderView: View {
                         targetRect: activeOcc?.rect
                     )
                     .edgesIgnoringSafeArea([.leading, .trailing, .bottom])
-                } else if isDownloading {
-                    // Téléchargement dynamique en cours avec jauge et bouton d'arrêt
-                    VStack(spacing: 16) {
-                        Spacer()
-                        ZStack {
-                            Circle()
-                                .stroke(Color.secondary.opacity(0.2), lineWidth: 4)
-                                .frame(width: 50, height: 50)
-                            Circle()
-                                .trim(from: 0, to: CGFloat(downloadProgress))
-                                .stroke(Color.blue, lineWidth: 4)
-                                .frame(width: 50, height: 50)
-                                .rotationEffect(.degrees(-90))
-                            Text("\(Int(downloadProgress * 100))%")
-                                .font(.caption2.bold())
-                                .foregroundColor(.blue)
-                        }
-                        
-                        Text("Téléchargement du document...")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                        
-                        if let tab = activeTab {
-                            Button("Annuler le téléchargement") {
-                                downloadQueue.cancelDownload(docId: tab.docId)
-                            }
-                            .font(.caption.bold())
-                            .foregroundColor(.red)
-                        }
-                        Spacer()
-                    }
-                    .padding()
-                } else if NetworkMonitor.shared.isConnected && !APIClient.shared.serverURL.contains(":9999") {
-                    // En ligne et document pas encore en cache : déclencher le téléchargement automatique et afficher la jauge
-                    VStack(spacing: 16) {
-                        Spacer()
-                        ProgressView()
-                            .scaleEffect(1.5)
-                        Text("Chargement du document...")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                    }
                     .onAppear {
-                        if let tab = activeTab {
+                        // Lancer la mise en cache complète en tâche de fond de manière transparente
+                        if localDb.getLocalPDFURL(docId: tab.docId) == nil && !isOffline {
                             downloadQueue.enqueue(docId: tab.docId)
                         }
                     }
-                } else {
-                    // Hors-ligne et document non présent en cache
+                } else if isOffline {
+                    // Hors-ligne et document non présent en cache local
                     VStack(spacing: 16) {
                         Spacer()
                         Image(systemName: "wifi.slash")
@@ -130,6 +105,18 @@ public struct GoodnotesPDFReaderView: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .padding(.top, 8)
+                        Spacer()
+                    }
+                    .padding()
+                } else {
+                    // En attente de connexion réseau
+                    VStack(spacing: 16) {
+                        Spacer()
+                        ProgressView()
+                            .scaleEffect(1.3)
+                        Text("Chargement du document...")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
                         Spacer()
                     }
                     .padding()
@@ -289,6 +276,27 @@ public struct GoodnotesPDFReaderView: View {
             }
             .accessibilityLabel("Afficher les vignettes et la recherche interne")
             .accessibilityIdentifier("reader_open_drawer")
+            
+            Spacer()
+            
+            // Indicateur de page et statut de cache discret
+            if let tab = activeTab {
+                HStack(spacing: 6) {
+                    if localDb.isDocumentCached(docId: tab.docId) {
+                        Image(systemName: "checkmark.icloud.fill")
+                            .font(.system(size: 13))
+                            .foregroundColor(.green)
+                    } else if isDownloading {
+                        ProgressView(value: downloadProgress)
+                            .progressViewStyle(.circular)
+                            .scaleEffect(0.6)
+                            .frame(width: 16, height: 16)
+                    }
+                    Text("p. \(currentPage)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundColor(.secondary)
+                }
+            }
             
             Spacer()
             

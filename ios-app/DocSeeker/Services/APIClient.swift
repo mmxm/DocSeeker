@@ -31,8 +31,10 @@ public final class APIClient: ObservableObject {
     #endif
     @Published public var isAuthenticated: Bool = false
     @Published public var isServerReachable: Bool = true
+    @Published public var sessionToken: String? = nil
 
     private let session: URLSession
+    private var reachabilityTimer: Timer?
 
     private init() {
         let config = URLSessionConfiguration.default
@@ -44,6 +46,56 @@ public final class APIClient: ObservableObject {
         if let savedURL = KeychainManager.shared.get(key: "server_url") {
             self.serverURL = savedURL
         }
+        if let savedToken = KeychainManager.shared.get(key: "session_token") {
+            self.sessionToken = savedToken
+        }
+        
+        startReachabilityMonitor()
+    }
+
+    public func startReachabilityMonitor() {
+        reachabilityTimer?.invalidate()
+        reachabilityTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            if NetworkMonitor.shared.isConnected && !self.isServerReachable {
+                Task {
+                    await self.probeServerReachability()
+                }
+            }
+        }
+    }
+
+    @discardableResult
+    public func probeServerReachability() async -> Bool {
+        guard let url = URL(string: "\(serverURL)/api/health") else { return false }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 2.5
+        do {
+            let (_, resp) = try await session.data(for: req)
+            if let http = resp as? HTTPURLResponse, http.statusCode == 200 {
+                await MainActor.run {
+                    self.isServerReachable = true
+                }
+                if !self.isAuthenticated {
+                    _ = await self.autoLoginIfPossible()
+                }
+                return true
+            }
+        } catch {
+            // Serveur injoignable
+        }
+        await MainActor.run {
+            self.isServerReachable = false
+        }
+        return false
+    }
+
+    public func streamingPDFURL(for docId: Int64) -> URL? {
+        var urlStr = "\(serverURL)/api/pdf/\(docId)"
+        if let token = sessionToken ?? KeychainManager.shared.get(key: "session_token") {
+            urlStr += "?token=\(token)"
+        }
+        return URL(string: urlStr)
     }
 
     public func recordSuccess() {
@@ -84,15 +136,25 @@ public final class APIClient: ObservableObject {
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
-            let (_, response) = try await session.data(for: req)
+            let (data, response) = try await session.data(for: req)
             guard let http = response as? HTTPURLResponse else {
                 recordFailure()
                 throw APIError.serverError(500)
             }
             if http.statusCode == 200 {
+                var receivedToken: String? = nil
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    receivedToken = json["token"] as? String
+                }
                 DispatchQueue.main.async {
                     self.isAuthenticated = true
                     self.isServerReachable = true
+                    if let t = receivedToken {
+                        self.sessionToken = t
+                    }
+                }
+                if let t = receivedToken {
+                    KeychainManager.shared.save(key: "session_token", value: t)
                 }
                 KeychainManager.shared.save(key: "admin_password", value: password)
                 return true

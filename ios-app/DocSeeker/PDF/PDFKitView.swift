@@ -52,8 +52,13 @@ public struct PDFKitView: UIViewRepresentable {
     
     public func updateUIView(_ uiView: PDFView, context: Context) {
         if uiView.document?.documentURL != documentURL {
+            let currentPageIndex = uiView.currentPage?.pageRef?.pageNumber ?? currentPage
             if let doc = PDFDocument(url: documentURL) {
                 uiView.document = doc
+                let targetIdx = targetPage ?? currentPageIndex
+                if let page = doc.page(at: max(0, targetIdx - 1)) {
+                    uiView.go(to: page)
+                }
             }
         }
         

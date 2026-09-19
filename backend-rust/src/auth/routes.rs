@@ -70,6 +70,21 @@ pub fn get_cookie_name(headers: &HeaderMap) -> &'static str {
 }
 
 pub fn extract_session_token(headers: &HeaderMap) -> Option<String> {
+    extract_session_token_with_query(headers, None)
+}
+
+pub fn extract_session_token_with_query(headers: &HeaderMap, query_str: Option<&str>) -> Option<String> {
+    // 1. En-tête Authorization: Bearer <token>
+    if let Some(auth_header) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+        if let Some(stripped) = auth_header.strip_prefix("Bearer ") {
+            let t = stripped.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
+            }
+        }
+    }
+
+    // 2. Cookie de session
     if let Some(cookie_header) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
         for cookie_str in cookie_header.split(';') {
             let cookie_str = cookie_str.trim();
@@ -85,6 +100,23 @@ pub fn extract_session_token(headers: &HeaderMap) -> Option<String> {
             }
         }
     }
+
+    // 3. Paramètre d'URL (?token=...) pour le streaming natif (PDFKit / Byte-Range)
+    if let Some(qs) = query_str {
+        for pair in qs.split('&') {
+            let mut parts = pair.split('=');
+            if let Some(key) = parts.next() {
+                if key == "token" {
+                    if let Some(val) = parts.next() {
+                        if !val.is_empty() {
+                            return Some(val.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     None
 }
 
@@ -196,7 +228,7 @@ pub async fn login_handler(
     let cookie_name = get_cookie_name(&headers);
     let is_secure = cookie_name.starts_with("__Host-");
 
-    let mut cookie = Cookie::build((cookie_name, token))
+    let mut cookie = Cookie::build((cookie_name, token.clone()))
         .path("/")
         .http_only(true)
         .same_site(SameSite::Lax)
@@ -208,7 +240,8 @@ pub async fn login_handler(
 
     let mut response = Json(serde_json::json!({
         "status": "ok",
-        "message": "Authentification réussie"
+        "message": "Authentification réussie",
+        "token": token
     })).into_response();
 
     response.headers_mut().insert(

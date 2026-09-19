@@ -129,16 +129,23 @@ public struct DocumentListView: View {
                 }
                 .accessibilityLabel("Retour")
             } else {
-                // Petite icône d'état hors-ligne / en ligne discret
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(isOfflineMode ? Color.orange : Color.green)
-                        .frame(width: 8, height: 8)
-                    Text(isOfflineMode ? "Hors-ligne" : "Connecté")
-                        .font(.caption2.bold())
-                        .foregroundColor(.secondary)
-                        .accessibilityIdentifier("network_status_indicator")
+                Button(action: {
+                    Task {
+                        _ = await api.probeServerReachability()
+                        await refreshAll()
+                    }
+                }) {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(isOfflineMode ? Color.orange : Color.green)
+                            .frame(width: 8, height: 8)
+                        Text(isOfflineMode ? "Hors-ligne" : "Connecté")
+                            .font(.caption2.bold())
+                            .foregroundColor(.secondary)
+                    }
                 }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("network_status_indicator")
             }
             
             Spacer()
@@ -668,6 +675,11 @@ public struct DocumentListView: View {
         guard !isSyncing else { return }
         isSyncing = true
         errorMessage = nil
+        
+        // Si marqué hors-ligne mais avec interface réseau active, vérifier si le serveur répond
+        if isOfflineMode && network.isConnected && !api.serverURL.contains(":9999") {
+            _ = await api.probeServerReachability()
+        }
         
         if isOfflineMode {
             loadLocalContents()

@@ -11,7 +11,7 @@ use axum::{
 };
 use std::sync::Arc;
 use crate::AppState;
-use self::routes::extract_session_token;
+use self::routes::extract_session_token_with_query;
 use self::session::SessionManager;
 
 /// Middleware d'authentification vérifiant la validité de la session administrateur.
@@ -20,7 +20,8 @@ pub async fn require_auth_middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    let token = match extract_session_token(request.headers()) {
+    let query_str = request.uri().query();
+    let token = match extract_session_token_with_query(request.headers(), query_str) {
         Some(t) => t,
         None => {
             return (
