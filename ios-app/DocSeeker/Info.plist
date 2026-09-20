@@ -18,9 +18,9 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
-	<key>UIRequiresFullScreen</key>
-	<false/>
 	<key>UISupportsTrueScreenSizeOnMac</key>
+	<true/>
+	<key>UILaunchToFullScreenByDefaultOnMac</key>
 	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>

@@ -119,22 +119,12 @@ public class DocSeekerPDFView: PDFView {
     
     public override func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
-        shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
-    ) -> Bool {
-        if gestureRecognizer === mouseWheelZoomGesture && isCommandPressed {
-            return true
-        }
-        return super.gestureRecognizer(gestureRecognizer, shouldBeRequiredToFailBy: otherGestureRecognizer)
-    }
-    
-    public override func gestureRecognizer(
-        _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
-        if gestureRecognizer === mouseWheelZoomGesture && isCommandPressed {
+        if gestureRecognizer === mouseWheelZoomGesture {
             return false
         }
-        return super.gestureRecognizer(gestureRecognizer, shouldRecognizeSimultaneouslyWith: otherGestureRecognizer)
+        return true
     }
     
     public override func layoutSubviews() {
