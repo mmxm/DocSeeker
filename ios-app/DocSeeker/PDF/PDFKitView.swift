@@ -5,6 +5,7 @@
 import SwiftUI
 import PDFKit
 import GameController
+import Darwin
 
 public class DocSeekerPDFView: PDFView {
     public var isFitToWidth: Bool = false {
@@ -25,6 +26,14 @@ public class DocSeekerPDFView: PDFView {
     private var lastBoundsWidth: CGFloat = 0
     private var mouseWheelZoomGesture: UIPanGestureRecognizer?
     private var isCommandKeyPressed: Bool = false
+    private var didAttachScrollRequirements = false
+    
+    private static let cgEventSourceFlagsStateFn: (@convention(c) (Int32) -> UInt64)? = {
+        if let handle = dlsym(dlopen(nil, RTLD_NOW), "CGEventSourceFlagsState") {
+            return unsafeBitCast(handle, to: (@convention(c) (Int32) -> UInt64).self)
+        }
+        return nil
+    }()
     
     public override init(frame: CGRect) {
         super.init(frame: frame)
@@ -46,11 +55,24 @@ public class DocSeekerPDFView: PDFView {
     }
     
     public var isCommandPressed: Bool {
+        // 1. Accès direct matériel aux drapeaux CoreGraphics (macOS / Designed for iPad - instantané et sans délai)
+        if let fn = Self.cgEventSourceFlagsStateFn {
+            let flagsCombined = fn(0) // kCGEventSourceStateCombinedSessionState
+            let flagsHID = fn(1)      // kCGEventSourceStateHIDSystemState
+            let kCGEventFlagMaskCommand: UInt64 = 0x00100000
+            if (flagsCombined & kCGEventFlagMaskCommand) != 0 || (flagsHID & kCGEventFlagMaskCommand) != 0 {
+                return true
+            }
+        }
+        
+        // 2. Détection GameController (iPad physique avec Magic Keyboard / clavier externe)
         if let kb = GCKeyboard.coalesced?.keyboardInput {
             let leftCmd = kb.button(forKeyCode: .leftGUI)?.isPressed ?? false
             let rightCmd = kb.button(forKeyCode: .rightGUI)?.isPressed ?? false
             if leftCmd || rightCmd { return true }
         }
+        
+        // 3. Fallback UIResponder
         return isCommandKeyPressed
     }
     
@@ -87,7 +109,7 @@ public class DocSeekerPDFView: PDFView {
         let translation = gesture.translation(in: self)
         let delta = -translation.y
         
-        if abs(delta) > 0.1 {
+        if abs(delta) > 0.05 {
             autoScales = false
             if isFitToWidth {
                 isFitToWidth = false
@@ -95,12 +117,12 @@ public class DocSeekerPDFView: PDFView {
             onManualZoom?()
             
             // Zoom progressif fluide à la molette
-            let sensitivity: CGFloat = 0.005
+            let sensitivity: CGFloat = 0.006
             let factor = 1.0 + (delta * sensitivity)
-            let clampedFactor = max(0.85, min(1.15, factor))
+            let clampedFactor = max(0.80, min(1.20, factor))
             
-            let minScale = min(minScaleFactor, 0.25)
-            let maxScale = max(maxScaleFactor, 8.0)
+            let minScale = min(minScaleFactor, 0.20)
+            let maxScale = max(maxScaleFactor, 10.0)
             
             let newScale = max(minScale, min(maxScale, scaleFactor * clampedFactor))
             scaleFactor = newScale
@@ -127,8 +149,43 @@ public class DocSeekerPDFView: PDFView {
         return true
     }
     
+    public override func didMoveToWindow() {
+        super.didMoveToWindow()
+        attachScrollRequirements()
+    }
+    
+    private func attachScrollRequirements() {
+        guard let pan = mouseWheelZoomGesture else { return }
+        let scrollViews = findAllScrollViews(in: self)
+        for sv in scrollViews {
+            sv.panGestureRecognizer.require(toFail: pan)
+            for g in sv.gestureRecognizers ?? [] {
+                if g !== pan {
+                    g.require(toFail: pan)
+                }
+            }
+        }
+        if !scrollViews.isEmpty {
+            didAttachScrollRequirements = true
+        }
+    }
+    
+    private func findAllScrollViews(in view: UIView) -> [UIScrollView] {
+        var result: [UIScrollView] = []
+        for sub in view.subviews {
+            if let sv = sub as? UIScrollView {
+                result.append(sv)
+            }
+            result.append(contentsOf: findAllScrollViews(in: sub))
+        }
+        return result
+    }
+    
     public override func layoutSubviews() {
         super.layoutSubviews()
+        if !didAttachScrollRequirements {
+            attachScrollRequirements()
+        }
         if isFitToWidth && bounds.width > 0 && abs(bounds.width - lastBoundsWidth) > 1 {
             lastBoundsWidth = bounds.width
             applyFitToWidth()
