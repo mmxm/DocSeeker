@@ -608,7 +608,8 @@ final class DocSeekerTests: XCTestCase {
     func testCompletePurgeOnServerChange() {
         let initialURL = APIClient.shared.serverURL
         defer {
-            APIClient.shared.setServerURL(initialURL)
+            APIClient.shared.serverURL = initialURL
+            KeychainManager.shared.save(key: "server_url", value: initialURL)
         }
         
         // 1. Simuler des fichiers PDF sur disque et des données en base locale (serveur test)
