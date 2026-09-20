@@ -540,6 +540,13 @@ final class DocSeekerCoreUITests: XCTestCase {
             doublePageBtn.tap()
             sleep(1)
         }
+        
+        // 4. Vérification du bouton Pleine Largeur (reader_fit_to_width)
+        let fitWidthBtn = harness.app.buttons["reader_fit_to_width"]
+        XCTAssertTrue(fitWidthBtn.waitForExistence(timeout: 3.0), "Le bouton 'Ajuster à la largeur' doit être présent à gauche du bouton Partager")
+        fitWidthBtn.tap()
+        sleep(1)
+        fitWidthBtn.tap()
     }
 }
 

@@ -632,6 +632,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.docseeker.app;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "DocSeeker/DocSeeker-Bridging-Header.h";
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -779,6 +780,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.docseeker.app;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "DocSeeker/DocSeeker-Bridging-Header.h";
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;

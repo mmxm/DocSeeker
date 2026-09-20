@@ -13,6 +13,7 @@ public struct GoodnotesPDFReaderView: View {
     @State private var currentPage: Int = 1
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var isTwoPageView: Bool = false
+    @State private var isFitToWidth: Bool = false
     @State private var showSearchDrawer: Bool = false
     @State private var showShareSheet: Bool = false
     @State private var shareURL: URL? = nil
@@ -117,7 +118,13 @@ public struct GoodnotesPDFReaderView: View {
                             currentPage: $currentPage,
                             targetPage: tab.currentPage,
                             targetRect: activeOcc?.rect,
-                            isTwoPages: isTwoPageView
+                            isTwoPages: isTwoPageView,
+                            isFitToWidth: isFitToWidth,
+                            onManualZoom: {
+                                if isFitToWidth {
+                                    isFitToWidth = false
+                                }
+                            }
                         )
                         .edgesIgnoringSafeArea([.leading, .trailing, .bottom])
                         .onAppear {
@@ -257,6 +264,13 @@ public struct GoodnotesPDFReaderView: View {
                     }
                 }
                 .keyboardShortcut(.escape, modifiers: [])
+                
+                Button("") {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isFitToWidth.toggle()
+                    }
+                }
+                .keyboardShortcut("9", modifiers: .command)
             }
             .opacity(0)
             .allowsHitTesting(false)
@@ -396,6 +410,22 @@ public struct GoodnotesPDFReaderView: View {
             }
             
             Spacer()
+            
+            // Bouton Pleine Largeur (ajuste le zoom à la largeur du viewer, juste à gauche du bouton partager)
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isFitToWidth.toggle()
+                }
+            }) {
+                Image(systemName: isFitToWidth ? "arrow.right.and.line.vertical.and.arrow.left" : "arrow.left.and.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(isFitToWidth ? .white : .blue)
+                    .frame(width: 28, height: 28)
+                    .background(isFitToWidth ? Color.blue : Color(.tertiarySystemFill))
+                    .cornerRadius(6)
+            }
+            .accessibilityLabel(isFitToWidth ? "Désactiver le zoom pleine largeur" : "Ajuster à la largeur du lecteur")
+            .accessibilityIdentifier("reader_fit_to_width")
             
             // Bouton Partage
             Button(action: {

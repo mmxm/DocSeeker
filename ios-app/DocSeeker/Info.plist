@@ -20,6 +20,8 @@
 	<string>1</string>
 	<key>UIRequiresFullScreen</key>
 	<false/>
+	<key>UISupportsTrueScreenSizeOnMac</key>
+	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

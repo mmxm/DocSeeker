@@ -4,6 +4,164 @@
 
 import SwiftUI
 import PDFKit
+import GameController
+
+public class DocSeekerPDFView: PDFView {
+    public var isFitToWidth: Bool = false {
+        didSet {
+            if isFitToWidth != oldValue {
+                applyFitToWidth()
+            }
+        }
+    }
+    public var isTwoPagesMode: Bool = false {
+        didSet {
+            if isTwoPagesMode != oldValue {
+                applyFitToWidth()
+            }
+        }
+    }
+    public var onManualZoom: (() -> Void)?
+    private var lastBoundsWidth: CGFloat = 0
+    private var mouseWheelZoomGesture: UIPanGestureRecognizer?
+    private var isCommandKeyPressed: Bool = false
+    
+    public override init(frame: CGRect) {
+        super.init(frame: frame)
+        setupMouseWheelZoom()
+    }
+    
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupMouseWheelZoom()
+    }
+    
+    private func setupMouseWheelZoom() {
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleMouseWheelZoom(_:)))
+        pan.allowedScrollTypesMask = [.discrete, .continuous]
+        pan.cancelsTouchesInView = false
+        pan.delegate = self
+        addGestureRecognizer(pan)
+        self.mouseWheelZoomGesture = pan
+    }
+    
+    public var isCommandPressed: Bool {
+        if let kb = GCKeyboard.coalesced?.keyboardInput {
+            let leftCmd = kb.button(forKeyCode: .leftGUI)?.isPressed ?? false
+            let rightCmd = kb.button(forKeyCode: .rightGUI)?.isPressed ?? false
+            if leftCmd || rightCmd { return true }
+        }
+        return isCommandKeyPressed
+    }
+    
+    public override var canBecomeFirstResponder: Bool {
+        return true
+    }
+    
+    public override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses {
+            if press.key?.modifierFlags.contains(.command) == true {
+                isCommandKeyPressed = true
+            }
+        }
+        super.pressesBegan(presses, with: event)
+    }
+    
+    public override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses {
+            if press.key?.modifierFlags.contains(.command) == true {
+                isCommandKeyPressed = false
+            }
+        }
+        super.pressesEnded(presses, with: event)
+    }
+    
+    public override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        isCommandKeyPressed = false
+        super.pressesCancelled(presses, with: event)
+    }
+    
+    @objc private func handleMouseWheelZoom(_ gesture: UIPanGestureRecognizer) {
+        guard isCommandPressed else { return }
+        
+        let translation = gesture.translation(in: self)
+        let delta = -translation.y
+        
+        if abs(delta) > 0.1 {
+            autoScales = false
+            if isFitToWidth {
+                isFitToWidth = false
+            }
+            onManualZoom?()
+            
+            // Zoom progressif fluide à la molette
+            let sensitivity: CGFloat = 0.005
+            let factor = 1.0 + (delta * sensitivity)
+            let clampedFactor = max(0.85, min(1.15, factor))
+            
+            let minScale = min(minScaleFactor, 0.25)
+            let maxScale = max(maxScaleFactor, 8.0)
+            
+            let newScale = max(minScale, min(maxScale, scaleFactor * clampedFactor))
+            scaleFactor = newScale
+            
+            gesture.setTranslation(.zero, in: self)
+        }
+    }
+    
+    // MARK: - UIGestureRecognizerDelegate
+    public override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === mouseWheelZoomGesture {
+            return isCommandPressed
+        }
+        return super.gestureRecognizerShouldBegin(gestureRecognizer)
+    }
+    
+    public override func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        if gestureRecognizer === mouseWheelZoomGesture && isCommandPressed {
+            return true
+        }
+        return super.gestureRecognizer(gestureRecognizer, shouldBeRequiredToFailBy: otherGestureRecognizer)
+    }
+    
+    public override func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        if gestureRecognizer === mouseWheelZoomGesture && isCommandPressed {
+            return false
+        }
+        return super.gestureRecognizer(gestureRecognizer, shouldRecognizeSimultaneouslyWith: otherGestureRecognizer)
+    }
+    
+    public override func layoutSubviews() {
+        super.layoutSubviews()
+        if isFitToWidth && bounds.width > 0 && abs(bounds.width - lastBoundsWidth) > 1 {
+            lastBoundsWidth = bounds.width
+            applyFitToWidth()
+        }
+    }
+    
+    public func applyFitToWidth() {
+        if isFitToWidth {
+            guard let page = currentPage ?? document?.page(at: 0) else { return }
+            let pageRect = page.bounds(for: displayBox)
+            guard pageRect.width > 0, bounds.width > 0 else { return }
+            let totalWidth = isTwoPagesMode ? (pageRect.width * 2.0) : pageRect.width
+            let targetScale = bounds.width / totalWidth
+            autoScales = false
+            minScaleFactor = min(minScaleFactor, targetScale * 0.5)
+            maxScaleFactor = max(maxScaleFactor, targetScale * 3.0)
+            scaleFactor = targetScale
+        } else {
+            autoScales = true
+            lastBoundsWidth = bounds.width
+        }
+    }
+}
 
 public struct PDFKitView: UIViewRepresentable {
     public let documentURL: URL
@@ -11,28 +169,37 @@ public struct PDFKitView: UIViewRepresentable {
     public var targetPage: Int?
     public var targetRect: [Double]?
     public var isTwoPages: Bool
+    public var isFitToWidth: Bool
+    public var onManualZoom: (() -> Void)?
     
     public init(
         documentURL: URL,
         currentPage: Binding<Int>,
         targetPage: Int? = nil,
         targetRect: [Double]? = nil,
-        isTwoPages: Bool = false
+        isTwoPages: Bool = false,
+        isFitToWidth: Bool = false,
+        onManualZoom: (() -> Void)? = nil
     ) {
         self.documentURL = documentURL
         self._currentPage = currentPage
         self.targetPage = targetPage
         self.targetRect = targetRect
         self.isTwoPages = isTwoPages
+        self.isFitToWidth = isFitToWidth
+        self.onManualZoom = onManualZoom
     }
     
     public func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
     
-    public func makeUIView(context: Context) -> PDFView {
-        let pdfView = PDFView()
-        pdfView.autoScales = true
+    public func makeUIView(context: Context) -> DocSeekerPDFView {
+        let pdfView = DocSeekerPDFView()
+        pdfView.isFitToWidth = isFitToWidth
+        pdfView.isTwoPagesMode = isTwoPages
+        pdfView.onManualZoom = onManualZoom
+        pdfView.autoScales = !isFitToWidth
         pdfView.displayMode = isTwoPages ? .twoUpContinuous : .singlePageContinuous
         pdfView.displayDirection = .vertical
         pdfView.displaysPageBreaks = true
@@ -72,12 +239,18 @@ public struct PDFKitView: UIViewRepresentable {
         return pdfView
     }
     
-    public func updateUIView(_ uiView: PDFView, context: Context) {
+    public func updateUIView(_ uiView: DocSeekerPDFView, context: Context) {
         context.coordinator.parent = self
         
         let desiredDisplayMode: PDFDisplayMode = isTwoPages ? .twoUpContinuous : .singlePageContinuous
         if uiView.displayMode != desiredDisplayMode {
             uiView.displayMode = desiredDisplayMode
+        }
+        
+        uiView.isTwoPagesMode = isTwoPages
+        uiView.onManualZoom = onManualZoom
+        if uiView.isFitToWidth != isFitToWidth {
+            uiView.isFitToWidth = isFitToWidth
         }
         
         if uiView.document?.documentURL != documentURL {
@@ -131,7 +304,7 @@ public struct PDFKitView: UIViewRepresentable {
     
     public class Coordinator: NSObject {
         var parent: PDFKitView
-        weak var pdfView: PDFView?
+        weak var pdfView: DocSeekerPDFView?
         weak var spinner: UIActivityIndicatorView?
         var activeHighlight: (PDFPage, PDFAnnotation)?
         var lastNavigatedPage: Int?
@@ -167,6 +340,11 @@ public struct PDFKitView: UIViewRepresentable {
                         if let page = doc.page(at: min(targetIdx, doc.pageCount - 1)) {
                             pdfView.go(to: page)
                         }
+                        if pdfView.isFitToWidth {
+                            DispatchQueue.main.async {
+                                pdfView.applyFitToWidth()
+                            }
+                        }
                         return
                     }
                 }
@@ -186,6 +364,9 @@ public struct PDFKitView: UIViewRepresentable {
                                 let targetIdx = max(0, targetPage - 1)
                                 if let page = doc.page(at: min(targetIdx, doc.pageCount - 1)) {
                                     pdfView.go(to: page)
+                                }
+                                if pdfView.isFitToWidth {
+                                    pdfView.applyFitToWidth()
                                 }
                                 return
                             }
@@ -218,6 +399,9 @@ public struct PDFKitView: UIViewRepresentable {
                     if let page = doc.page(at: min(targetIdx, doc.pageCount - 1)) {
                         pdfView.go(to: page)
                     }
+                    if pdfView.isFitToWidth {
+                        pdfView.applyFitToWidth()
+                    }
                 } else if self.checkRetries > 40 {
                     // Au bout de 6 secondes sans page, stopper le spinner
                     self.spinner?.stopAnimating()
@@ -242,6 +426,11 @@ public struct PDFKitView: UIViewRepresentable {
             let targetIdx = max(0, (parent.targetPage ?? parent.currentPage) - 1)
             if let page = doc.page(at: min(targetIdx, doc.pageCount - 1)) {
                 pdfView.go(to: page)
+            }
+            if pdfView.isFitToWidth {
+                DispatchQueue.main.async {
+                    pdfView.applyFitToWidth()
+                }
             }
         }
         
