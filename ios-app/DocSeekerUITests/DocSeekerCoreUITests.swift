@@ -491,5 +491,49 @@ final class DocSeekerCoreUITests: XCTestCase {
         let l1Woken = VisualValidationEngine.assertNonBlankScreen(image: wokenScreen, testCase: self, context: "C8_Bandeau_Woken")
         XCTAssertTrue(l1Woken.passed, "Après tap sur bandeau, l'écran ne doit pas être blanc")
     }
+    
+    // =========================================================================
+    // Scénario 9 : Volet latéral de recherche et menu Double Page
+    // =========================================================================
+    func testInDocumentSearchDrawerAndDoublePageMenu() {
+        // 1. Recherche et ouverture d'un document
+        harness.search(query: "grossesse")
+        sleep(2)
+        
+        let firstResult = harness.app.cells.firstMatch
+        guard firstResult.waitForExistence(timeout: 5.0) else {
+            XCTSkip("Aucun résultat — serveur non disponible")
+            return
+        }
+        firstResult.tap()
+        sleep(2)
+        
+        // 2. Bascule du volet latéral de recherche (sidebar.left)
+        let sidebarBtn = harness.app.buttons["reader_sidebar_toggle"]
+        if sidebarBtn.waitForExistence(timeout: 4.0) {
+            sidebarBtn.tap()
+            sleep(1)
+            
+            // Le volet de recherche doit être affiché
+            let drawerClose = harness.app.buttons["drawer_close"]
+            XCTAssertTrue(drawerClose.waitForExistence(timeout: 3.0), "Le volet de recherche interne doit être visible")
+            
+            // Fermeture du volet
+            drawerClose.tap()
+            sleep(1)
+        }
+        
+        // 3. Vérification de l'option Double Page dans le menu ...
+        let optionsBtn = harness.app.buttons["Options du document"]
+        if optionsBtn.waitForExistence(timeout: 3.0) {
+            optionsBtn.tap()
+            sleep(1)
+            
+            let doublePageBtn = harness.app.buttons["reader_toggle_double_page"]
+            XCTAssertTrue(doublePageBtn.waitForExistence(timeout: 3.0), "L'option Double page doit être présente dans le menu '...'")
+            doublePageBtn.tap()
+            sleep(1)
+        }
+    }
 }
 

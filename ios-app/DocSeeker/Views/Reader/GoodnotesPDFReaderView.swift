@@ -11,14 +11,20 @@ public struct GoodnotesPDFReaderView: View {
     @ObservedObject private var downloadQueue = DownloadQueueManager.shared
     
     @State private var currentPage: Int = 1
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var isTwoPageView: Bool = false
     @State private var showSearchDrawer: Bool = false
-    @State private var shareURL: URL? = nil
     @State private var showShareSheet: Bool = false
+    @State private var shareURL: URL? = nil
     @State private var inspectedTab: OpenDocumentTab? = nil
-    /// Progression animée (interpéolée) pour éviter le glitch du Circle trim
+    /// Progression animée (interpolée) pour éviter le glitch du Circle trim
     @State private var animatedProgress: Double = 0.05
     
     public init() {}
+    
+    private var isRegularScreen: Bool {
+        horizontalSizeClass == .regular
+    }
     
     private var activeTab: OpenDocumentTab? {
         tabManager.activeTab
@@ -66,93 +72,131 @@ public struct GoodnotesPDFReaderView: View {
             
             Divider()
             
-            // 3. Zone principale PDFKit avec streaming partiel instantané
-            ZStack {
-                Color(.systemGroupedBackground)
-                    .edgesIgnoringSafeArea(.all)
-                
-                if let url = resolvedPdfURL, let tab = activeTab {
-                    let activeOcc = (tab.occurrences.indices.contains(tab.activeOccurrenceIndex)) ? tab.occurrences[tab.activeOccurrenceIndex] : nil
-                    
-                    PDFKitView(
-                        documentURL: url,
-                        currentPage: $currentPage,
-                        targetPage: tab.currentPage,
-                        targetRect: activeOcc?.rect
-                    )
-                    .edgesIgnoringSafeArea([.leading, .trailing, .bottom])
-                    .onAppear {
-                        // Lancer la mise en cache complète en tâche de fond après un court délai
-                        // pour préserver 100% de la bande passante pour la première page en streaming
-                        if localDb.getLocalPDFURL(docId: tab.docId) == nil && !isOffline {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                                downloadQueue.enqueue(docId: tab.docId)
-                            }
-                        }
-                    }
-                } else if isOffline {
-                    // Hors-ligne et document non présent en cache local
-                    VStack(spacing: 16) {
-                        Spacer()
-                        Image(systemName: "wifi.slash")
-                            .font(.system(size: 44))
-                            .foregroundColor(.secondary.opacity(0.6))
-                        Text("Document non disponible hors-ligne")
-                            .font(.headline)
-                            .foregroundColor(.primary)
-                        Text("Ce document n'a pas encore été téléchargé sur cet appareil. Connectez-vous à votre serveur pour le consulter ou le synchroniser.")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 32)
-                        Button("Retour aux documents") {
-                            tabManager.returnToHome()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .padding(.top, 8)
-                        Spacer()
-                    }
-                    .padding()
-                } else {
-                    // En attente de connexion réseau
-                    VStack(spacing: 16) {
-                        Spacer()
-                        ProgressView()
-                            .scaleEffect(1.3)
-                        Text("Chargement du document...")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                    }
-                    .padding()
-                }
-                
-                // 4. Bandeau flottant inférieur de navigation des occurrences (Screenshot 2 en bas)
-                if let tab = activeTab, let query = tab.searchQuery, !query.isEmpty, !tab.occurrences.isEmpty {
-                    VStack {
-                        Spacer()
-                        OccurrenceNavigationBottomBar(
-                            searchQuery: query,
-                            currentIndex: tab.activeOccurrenceIndex,
-                            totalCount: tab.occurrences.count,
-                            onPrevious: {
-                                tabManager.previousOccurrence()
+            // 3. Zone principale avec volet latéral à gauche sur grand écran (iPad/macOS)
+            HStack(spacing: 0) {
+                // Volet latéral de recherche dans le document (iPad et macOS)
+                if isRegularScreen && showSearchDrawer {
+                    if let tab = activeTab {
+                        InDocumentSearchDrawer(
+                            documentId: tab.docId,
+                            documentTitle: tab.title,
+                            filename: tab.filename,
+                            currentOccurrences: tab.occurrences,
+                            initialQuery: tab.searchQuery ?? "",
+                            activeOccurrenceIndex: tab.activeOccurrenceIndex,
+                            onSelectOccurrence: { occ, query in
+                                if !query.isEmpty && query != tab.searchQuery && query != "Extrait" {
+                                    tabManager.loadFullInDocOccurrences(docId: tab.docId, query: query)
+                                }
+                                tabManager.selectOccurrence(docId: tab.docId, occurrence: occ)
                             },
-                            onNext: {
-                                tabManager.nextOccurrence()
-                            },
-                            onClose: {
-                                if let idx = tabManager.openTabs.firstIndex(where: { $0.id == tab.id }) {
-                                    tabManager.openTabs[idx].searchQuery = nil
+                            isSidebarMode: true,
+                            onCloseSidebar: {
+                                withAnimation(.easeInOut(duration: 0.25)) {
+                                    showSearchDrawer = false
                                 }
                             }
                         )
+                        .frame(width: 360)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                        
+                        Divider()
+                    }
+                }
+                
+                // Zone principale PDFKit avec streaming partiel instantané
+                ZStack {
+                    Color(.systemGroupedBackground)
+                        .edgesIgnoringSafeArea(.all)
+                    
+                    if let url = resolvedPdfURL, let tab = activeTab {
+                        let activeOcc = (tab.occurrences.indices.contains(tab.activeOccurrenceIndex)) ? tab.occurrences[tab.activeOccurrenceIndex] : nil
+                        
+                        PDFKitView(
+                            documentURL: url,
+                            currentPage: $currentPage,
+                            targetPage: tab.currentPage,
+                            targetRect: activeOcc?.rect,
+                            isTwoPages: isTwoPageView
+                        )
+                        .edgesIgnoringSafeArea([.leading, .trailing, .bottom])
+                        .onAppear {
+                            // Lancer la mise en cache complète en tâche de fond après un court délai
+                            // pour préserver 100% de la bande passante pour la première page en streaming
+                            if localDb.getLocalPDFURL(docId: tab.docId) == nil && !isOffline {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                                    downloadQueue.enqueue(docId: tab.docId)
+                                }
+                            }
+                        }
+                    } else if isOffline {
+                        // Hors-ligne et document non présent en cache local
+                        VStack(spacing: 16) {
+                            Spacer()
+                            Image(systemName: "wifi.slash")
+                                .font(.system(size: 44))
+                                .foregroundColor(.secondary.opacity(0.6))
+                            Text("Document non disponible hors-ligne")
+                                .font(.headline)
+                                .foregroundColor(.primary)
+                            Text("Ce document n'a pas encore été téléchargé sur cet appareil. Connectez-vous à votre serveur pour le consulter ou le synchroniser.")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 32)
+                            Button("Retour aux documents") {
+                                tabManager.returnToHome()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .padding(.top, 8)
+                            Spacer()
+                        }
+                        .padding()
+                    } else {
+                        // En attente de connexion réseau
+                        VStack(spacing: 16) {
+                            Spacer()
+                            ProgressView()
+                                .scaleEffect(1.3)
+                            Text("Chargement du document...")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                        }
+                        .padding()
+                    }
+                    
+                    // 4. Bandeau flottant inférieur de navigation des occurrences
+                    if let tab = activeTab, let query = tab.searchQuery, !query.isEmpty, !tab.occurrences.isEmpty {
+                        VStack {
+                            Spacer()
+                            OccurrenceNavigationBottomBar(
+                                searchQuery: query,
+                                currentIndex: tab.activeOccurrenceIndex,
+                                totalCount: tab.occurrences.count,
+                                onPrevious: {
+                                    tabManager.previousOccurrence()
+                                },
+                                onNext: {
+                                    tabManager.nextOccurrence()
+                                },
+                                onClose: {
+                                    if let idx = tabManager.openTabs.firstIndex(where: { $0.id == tab.id }) {
+                                        tabManager.openTabs[idx].searchQuery = nil
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
             }
         }
         .background(Color(.systemBackground))
-        .sheet(isPresented: $showSearchDrawer) {
+        // Modal sheet sur écran compact (iPhone) uniquement
+        .sheet(isPresented: Binding(
+            get: { !isRegularScreen && showSearchDrawer },
+            set: { showSearchDrawer = $0 }
+        )) {
             if let tab = activeTab {
                 InDocumentSearchDrawer(
                     documentId: tab.docId,
@@ -178,6 +222,45 @@ public struct GoodnotesPDFReaderView: View {
         .popover(item: $inspectedTab) { tab in
             DocumentInfoFloatingCard(tab: tab)
         }
+        // Raccourcis clavier (Magic Keyboard iPad & macOS)
+        .background(
+            Group {
+                Button("") {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        showSearchDrawer.toggle()
+                    }
+                }
+                .keyboardShortcut("f", modifiers: .command)
+                
+                Button("") {
+                    if let tab = activeTab {
+                        tabManager.closeTab(id: tab.id)
+                    }
+                }
+                .keyboardShortcut("w", modifiers: .command)
+                
+                Button("") {
+                    tabManager.nextOccurrence()
+                }
+                .keyboardShortcut("]", modifiers: .command)
+                
+                Button("") {
+                    tabManager.previousOccurrence()
+                }
+                .keyboardShortcut("[", modifiers: .command)
+                
+                Button("") {
+                    if showSearchDrawer {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            showSearchDrawer = false
+                        }
+                    }
+                }
+                .keyboardShortcut(.escape, modifiers: [])
+            }
+            .opacity(0)
+            .allowsHitTesting(false)
+        )
     }
     
     // MARK: - Barre d'onglets supérieure Compacte
@@ -330,18 +413,35 @@ public struct GoodnotesPDFReaderView: View {
             
             // Menu d'options
             Menu {
-                if let tab = activeTab {
-                    if localDb.isDocumentCached(docId: tab.docId) {
-                        Button(role: .destructive) {
-                            localDb.removeDocumentFromCache(docId: tab.docId)
-                        } label: {
-                            Label("Supprimer du cache hors-ligne", systemImage: "trash")
+                // Option Double Page (iPad & macOS)
+                Section {
+                    Button {
+                        withAnimation {
+                            isTwoPageView.toggle()
                         }
-                    } else {
-                        Button {
-                            downloadQueue.enqueue(docId: tab.docId)
-                        } label: {
-                            Label("Télécharger hors-ligne", systemImage: "arrow.down.circle")
+                    } label: {
+                        Label(
+                            isTwoPageView ? "Affichage 1 page défilante" : "Affichage 2 pages (Double page)",
+                            systemImage: isTwoPageView ? "doc" : "book"
+                        )
+                    }
+                    .accessibilityIdentifier("reader_toggle_double_page")
+                }
+                
+                Section {
+                    if let tab = activeTab {
+                        if localDb.isDocumentCached(docId: tab.docId) {
+                            Button(role: .destructive) {
+                                localDb.removeDocumentFromCache(docId: tab.docId)
+                            } label: {
+                                Label("Supprimer du cache hors-ligne", systemImage: "trash")
+                            }
+                        } else {
+                            Button {
+                                downloadQueue.enqueue(docId: tab.docId)
+                            } label: {
+                                Label("Télécharger hors-ligne", systemImage: "arrow.down.circle")
+                            }
                         }
                     }
                 }

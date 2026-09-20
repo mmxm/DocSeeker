@@ -35,11 +35,19 @@ public struct DocumentListView: View {
     @State private var totalDocuments: Int = 0
     @State private var isSearching: Bool = false
     @State private var titlesOnly: Bool = false
-    @State private var searchTask: Task<Void, Never>? = nil
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showOfflineAlert: Bool = false
     @State private var offlineAlertDocTitle: String = ""
     
     public init() {}
+    
+    private var gridColumns: [GridItem] {
+        if horizontalSizeClass == .regular {
+            return [GridItem(.adaptive(minimum: 380, maximum: 700), spacing: 14)]
+        } else {
+            return [GridItem(.flexible())]
+        }
+    }
     
     private var currentFolderId: Int64? {
         folderStack.last?.id
@@ -550,27 +558,29 @@ public struct DocumentListView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 40)
                 } else {
-                    ForEach(searchResults) { doc in
-                        DocumentCardView(
-                            document: doc,
-                            onOpenDocument: { targetDoc, targetOcc in
-                                let initialPage = targetOcc != nil ? Int(targetOcc!.page_number) : 1
-                                let docFolder = folderForDoc(targetDoc.id) ?? (currentFolderId != nil ? currentTitle : "Racine")
-                                let targetIdx = (targetDoc.vignettes ?? []).firstIndex(where: { $0.id == targetOcc?.id }) ?? 0
-                                tabManager.openDocument(
-                                    docId: targetDoc.id,
-                                    title: targetDoc.title,
-                                    filename: targetDoc.filename,
-                                    initialPage: initialPage,
-                                    occurrences: targetDoc.vignettes ?? [],
-                                    searchQuery: searchQuery,
-                                    targetOccurrenceIndex: targetIdx,
-                                    folderPath: docFolder
-                                )
-                            }
-                        )
-                        .padding(.horizontal)
+                    LazyVGrid(columns: gridColumns, spacing: 14) {
+                        ForEach(searchResults) { doc in
+                            DocumentCardView(
+                                document: doc,
+                                onOpenDocument: { targetDoc, targetOcc in
+                                    let initialPage = targetOcc != nil ? Int(targetOcc!.page_number) : 1
+                                    let docFolder = folderForDoc(targetDoc.id) ?? (currentFolderId != nil ? currentTitle : "Racine")
+                                    let targetIdx = (targetDoc.vignettes ?? []).firstIndex(where: { $0.id == targetOcc?.id }) ?? 0
+                                    tabManager.openDocument(
+                                        docId: targetDoc.id,
+                                        title: targetDoc.title,
+                                        filename: targetDoc.filename,
+                                        initialPage: initialPage,
+                                        occurrences: targetDoc.vignettes ?? [],
+                                        searchQuery: searchQuery,
+                                        targetOccurrenceIndex: targetIdx,
+                                        folderPath: docFolder
+                                    )
+                                }
+                            )
+                        }
                     }
+                    .padding(.horizontal)
                 }
             }
             .padding(.bottom, 24)

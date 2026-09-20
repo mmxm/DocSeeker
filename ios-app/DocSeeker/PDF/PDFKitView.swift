@@ -10,17 +10,20 @@ public struct PDFKitView: UIViewRepresentable {
     @Binding public var currentPage: Int
     public var targetPage: Int?
     public var targetRect: [Double]?
+    public var isTwoPages: Bool
     
     public init(
         documentURL: URL,
         currentPage: Binding<Int>,
         targetPage: Int? = nil,
-        targetRect: [Double]? = nil
+        targetRect: [Double]? = nil,
+        isTwoPages: Bool = false
     ) {
         self.documentURL = documentURL
         self._currentPage = currentPage
         self.targetPage = targetPage
         self.targetRect = targetRect
+        self.isTwoPages = isTwoPages
     }
     
     public func makeCoordinator() -> Coordinator {
@@ -30,7 +33,7 @@ public struct PDFKitView: UIViewRepresentable {
     public func makeUIView(context: Context) -> PDFView {
         let pdfView = PDFView()
         pdfView.autoScales = true
-        pdfView.displayMode = .singlePageContinuous
+        pdfView.displayMode = isTwoPages ? .twoUpContinuous : .singlePageContinuous
         pdfView.displayDirection = .vertical
         pdfView.displaysPageBreaks = true
         pdfView.usePageViewController(false)
@@ -71,6 +74,11 @@ public struct PDFKitView: UIViewRepresentable {
     
     public func updateUIView(_ uiView: PDFView, context: Context) {
         context.coordinator.parent = self
+        
+        let desiredDisplayMode: PDFDisplayMode = isTwoPages ? .twoUpContinuous : .singlePageContinuous
+        if uiView.displayMode != desiredDisplayMode {
+            uiView.displayMode = desiredDisplayMode
+        }
         
         if uiView.document?.documentURL != documentURL {
             context.coordinator.loadDocument(url: documentURL, targetPage: targetPage ?? currentPage)

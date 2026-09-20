@@ -11,6 +11,8 @@ public struct InDocumentSearchDrawer: View {
     public let initialQuery: String
     public let activeOccurrenceIndex: Int
     public let onSelectOccurrence: (OccurrenceResult, String) -> Void
+    public var isSidebarMode: Bool = false
+    public var onCloseSidebar: (() -> Void)? = nil
     
     @Environment(\.dismiss) private var dismiss
     @State private var query: String = ""
@@ -27,7 +29,9 @@ public struct InDocumentSearchDrawer: View {
         currentOccurrences: [OccurrenceResult],
         initialQuery: String = "",
         activeOccurrenceIndex: Int = 0,
-        onSelectOccurrence: @escaping (OccurrenceResult, String) -> Void
+        onSelectOccurrence: @escaping (OccurrenceResult, String) -> Void,
+        isSidebarMode: Bool = false,
+        onCloseSidebar: (() -> Void)? = nil
     ) {
         self.documentId = documentId
         self.documentTitle = documentTitle
@@ -38,6 +42,8 @@ public struct InDocumentSearchDrawer: View {
         self._query = State(initialValue: initialQuery)
         self._occurrences = State(initialValue: currentOccurrences)
         self.onSelectOccurrence = onSelectOccurrence
+        self.isSidebarMode = isSidebarMode
+        self.onCloseSidebar = onCloseSidebar
     }
     
     public var body: some View {
@@ -139,8 +145,20 @@ public struct InDocumentSearchDrawer: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Fermer") {
-                        dismiss()
+                    Button(action: {
+                        if isSidebarMode {
+                            onCloseSidebar?()
+                        } else {
+                            dismiss()
+                        }
+                    }) {
+                        if isSidebarMode {
+                            Image(systemName: "sidebar.left")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundColor(.blue)
+                        } else {
+                            Text("Fermer")
+                        }
                     }
                     .accessibilityIdentifier("drawer_close")
                 }
@@ -193,7 +211,9 @@ public struct InDocumentSearchDrawer: View {
         let isCurrent = (index == activeOccurrenceIndex)
         Button(action: {
             onSelectOccurrence(occ, query.isEmpty ? initialQuery : query)
-            dismiss()
+            if !isSidebarMode {
+                dismiss()
+            }
         }) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
