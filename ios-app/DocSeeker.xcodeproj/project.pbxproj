@@ -16,6 +16,7 @@
 		2E9422D8FBAC1D0F5A011419 /* LocalCropEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A91C93DB1A618F1537DABB9 /* LocalCropEngine.swift */; };
 		3674411D851D76C119E38727 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2781C13C277CDD748462C352 /* Models.swift */; };
 		387EDAB6885C7D8E45391AF4 /* DocSeekerOfflineUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57F86EBB440D1B13ECADFC6F /* DocSeekerOfflineUITests.swift */; };
+		A1A10001885C7D8E45391AF4 /* VisualValidationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A10002440D1B13ECADFC6F /* VisualValidationEngine.swift */; };
 		3E65DA7FA2A64D0C7CA4C3AC /* PDFKitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB83A624768F93FEA39064B7 /* PDFKitView.swift */; };
 		43FD7B1EB54B05E189D0EBE2 /* grossesse_extra_uterine_bundle.json in Resources */ = {isa = PBXBuildFile; fileRef = 5BB8A7693CF46B86A085051D /* grossesse_extra_uterine_bundle.json */; };
 		4495B30BF745EE185A9B5DB5 /* DocSeekerOccurrencesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BB24BBAB3190CBA0BCA6128 /* DocSeekerOccurrencesUITests.swift */; };
@@ -104,6 +105,7 @@
 		4605DC580C295AFA8690A4D6 /* DocumentCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentCardView.swift; sourceTree = "<group>"; };
 		4965BA21FFD2FE6F18047995 /* PDFKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = PDFKit.framework; path = System/Library/Frameworks/PDFKit.framework; sourceTree = SDKROOT; };
 		57F86EBB440D1B13ECADFC6F /* DocSeekerOfflineUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocSeekerOfflineUITests.swift; sourceTree = "<group>"; };
+		A1A10002440D1B13ECADFC6F /* VisualValidationEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualValidationEngine.swift; sourceTree = "<group>"; };
 		5B127B44257E77B8D134D98B /* OccurrenceCropImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OccurrenceCropImageView.swift; sourceTree = "<group>"; };
 		5BB8A7693CF46B86A085051D /* grossesse_extra_uterine_bundle.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = grossesse_extra_uterine_bundle.json; sourceTree = "<group>"; };
 		5BC6941651F305124F953A89 /* DocSeekerTestHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocSeekerTestHarness.swift; sourceTree = "<group>"; };
@@ -208,6 +210,7 @@
 				0249DCC2218C16A638DC9513 /* DocSeekerMatrixUITests.swift */,
 				2BB24BBAB3190CBA0BCA6128 /* DocSeekerOccurrencesUITests.swift */,
 				57F86EBB440D1B13ECADFC6F /* DocSeekerOfflineUITests.swift */,
+				A1A10002440D1B13ECADFC6F /* VisualValidationEngine.swift */,
 				5BC6941651F305124F953A89 /* DocSeekerTestHarness.swift */,
 				D53CCC94FA315F228695D267 /* Info.plist */,
 			);
@@ -568,6 +571,7 @@
 				BE0CA2F3BD4886B9448EF6DF /* DocSeekerMatrixUITests.swift in Sources */,
 				4495B30BF745EE185A9B5DB5 /* DocSeekerOccurrencesUITests.swift in Sources */,
 				387EDAB6885C7D8E45391AF4 /* DocSeekerOfflineUITests.swift in Sources */,
+				A1A10001885C7D8E45391AF4 /* VisualValidationEngine.swift in Sources */,
 				BF3EA83C422AC18362A209C5 /* DocSeekerTestHarness.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

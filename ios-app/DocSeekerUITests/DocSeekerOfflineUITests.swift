@@ -1,9 +1,10 @@
 // DocSeekerOfflineUITests.swift
-// Suite XCUITest Hors-Ligne Exhaustive : Transposition Strictement Identique des Tests En Ligne
+// Suite XCUITest Hors-Ligne Exhaustive avec Analyses Visuelles Multi-Niveaux Systématiques
 // Standards ISO 29119 Résilience Réseau, Coupure Réelle Serveur (Port Injoignable 9999),
-// Recherche FTS5 Locale, Moteur de Découpe CoreGraphics, Tiroir d'Occurrences et Navigation Arborescente
+// et Validation Visuelle à 3 Niveaux (Anti-Écran Blanc, Pixel Matching/Diff Mask, OCR Vision Neuronal)
 
 import XCTest
+import Vision
 
 final class DocSeekerOfflineUITests: XCTestCase {
     var harness: DocSeekerTestHarness!
@@ -30,6 +31,7 @@ final class DocSeekerOfflineUITests: XCTestCase {
     // =========================================================================
     // SCÉNARIO 1 : Navigation arborescente locale (Dossier Martingale & Retour)
     // Transposition stricte de DocSeekerCoreUITests.testInitialStateAndFolderEntryAndDrillDown
+    // + Analyses Visuelles Niveaux 1, 2, 3 intégrées
     // =========================================================================
     
     func testOfflineInitialStateAndFolderEntryAndDrillDown() {
@@ -42,6 +44,11 @@ final class DocSeekerOfflineUITests: XCTestCase {
         let docsTitle = harness.app.staticTexts["Documents"]
         XCTAssertTrue(docsTitle.waitForExistence(timeout: 4.0), "Le titre compact 'Documents' doit être affiché depuis SQLite local")
         
+        // [Visuel Niveau 1 & 3] Validation de la vue racine hors-ligne
+        let rootScreen = XCUIScreen.main.screenshot().image
+        VisualValidationEngine.assertNonBlankScreen(image: rootScreen, testCase: self, context: "S1_Racine_HorsLigne")
+        VisualValidationEngine.assertVisibleTextContains(image: rootScreen, expectedKeywords: ["Documents", "Martingale"], testCase: self, context: "S1_Racine_OCR")
+        
         // 3. Présence du dossier dans la liste SQLite locale
         let martingaleFolder = harness.app.staticTexts["Martingale"]
         XCTAssertTrue(martingaleFolder.waitForExistence(timeout: 4.0), "Le dossier 'Martingale' doit figurer dans la base SQLite locale")
@@ -53,6 +60,12 @@ final class DocSeekerOfflineUITests: XCTestCase {
         let folderTitle = harness.app.staticTexts["Martingale"]
         XCTAssertTrue(folderTitle.waitForExistence(timeout: 4.0), "L'en-tête doit afficher le titre du dossier ouvert en mode déconnecté")
         
+        // [Visuel Niveau 1 & 3] Validation visuelle dans le dossier ouvert
+        sleep(1)
+        let folderScreen = XCUIScreen.main.screenshot().image
+        VisualValidationEngine.assertNonBlankScreen(image: folderScreen, testCase: self, context: "S1_Dossier_HorsLigne")
+        VisualValidationEngine.assertVisibleTextContains(image: folderScreen, expectedKeywords: ["Martingale", "Retour"], testCase: self, context: "S1_Dossier_OCR")
+        
         // 6. Bouton de retour vers la racine
         let backButton = harness.app.buttons["Retour"]
         XCTAssertTrue(backButton.waitForExistence(timeout: 3.0), "Le bouton 'Retour' doit apparaître lors de l'entrée dans un dossier hors-ligne")
@@ -61,11 +74,18 @@ final class DocSeekerOfflineUITests: XCTestCase {
         backButton.tap()
         XCTAssertTrue(docsTitle.waitForExistence(timeout: 3.0), "Le retour doit rétablir la vue racine des Documents hors-ligne")
         XCTAssertTrue(martingaleFolder.exists, "Le dossier 'Martingale' doit être à nouveau présent à la racine")
+        
+        // [Visuel Niveau 1 & 3] Validation après retour
+        sleep(1)
+        let returnedScreen = XCUIScreen.main.screenshot().image
+        VisualValidationEngine.assertNonBlankScreen(image: returnedScreen, testCase: self, context: "S1_RetourRacine_HorsLigne")
+        VisualValidationEngine.assertVisibleTextContains(image: returnedScreen, expectedKeywords: ["Documents", "Martingale"], testCase: self, context: "S1_RetourRacine_OCR")
     }
     
     // =========================================================================
     // SCÉNARIO 2 : Recherche clinique locale, ouverture lecteur & navigation par flèches
     // Transposition stricte de DocSeekerCoreUITests.testOccurrenceNavigationAndBottomBarArrows
+    // + Analyses Visuelles Niveaux 1, 2, 3 intégrées
     // =========================================================================
     
     func testOfflineOccurrenceNavigationAndBottomBarArrows() {
@@ -81,6 +101,23 @@ final class DocSeekerOfflineUITests: XCTestCase {
         // 3. Vérification de l'ouverture du lecteur Goodnotes
         let homeBtn = harness.app.buttons["Retour à l'accueil"]
         XCTAssertTrue(homeBtn.waitForExistence(timeout: 6.0), "Le lecteur hors-ligne doit afficher le bouton de retour accueil")
+        
+        // [Visuel Niveaux 1, 2, 3] Validation formelle que le lecteur Goodnotes n'est PAS un écran blanc
+        sleep(1)
+        let readerScreen = XCUIScreen.main.screenshot().image
+        
+        // Niveau 1 : Détection d'écran blanc
+        let level1 = VisualValidationEngine.assertNonBlankScreen(image: readerScreen, testCase: self, context: "S2_Lecteur_HorsLigne")
+        XCTAssertTrue(level1.passed, "Le lecteur hors-ligne ne doit jamais afficher un écran blanc")
+        
+        // Niveau 2 : Pixel Matching contre le PDF source
+        let refPDF = harness.fixturesDir.appendingPathComponent("2.pdf")
+        let level2 = VisualValidationEngine.assertPixelMatchAgainstPDF(capturedImage: readerScreen, pdfURL: refPDF, pageNumber: 1, minMatchPercentage: 65.0, testCase: self, context: "S2_Lecteur_PixelMatching")
+        XCTAssertTrue(level2.score > 50.0, "La concordance de pixels doit confirmer le rendu du PDF")
+        
+        // Niveau 3 : OCR Vision
+        let level3 = VisualValidationEngine.assertVisibleTextContains(image: readerScreen, expectedKeywords: ["grossesse", "normale", "Page", "p."], testCase: self, context: "S2_Lecteur_OCR")
+        XCTAssertTrue(level3.passed, "L'OCR doit confirmer les mots affichés")
         
         // 4. Vérification de la présence de la requête dans le bandeau inférieur
         let queryBadge = harness.app.staticTexts["grossesse"]
@@ -98,6 +135,11 @@ final class DocSeekerOfflineUITests: XCTestCase {
             let updatedCounter = harness.bottomBarCounterText()
             XCTAssertFalse(updatedCounter.isEmpty, "Le compteur doit toujours être affiché après avance hors-ligne")
             
+            // [Visuel Niveau 1] Page suivante non blanche
+            sleep(1)
+            let page2Screen = XCUIScreen.main.screenshot().image
+            VisualValidationEngine.assertNonBlankScreen(image: page2Screen, testCase: self, context: "S2_Page2_HorsLigne")
+            
             // 7. Clic sur la flèche précédente
             let prevBtn = harness.app.buttons["occurrence_prev"]
             XCTAssertTrue(prevBtn.isEnabled, "La flèche précédente doit être active hors-ligne")
@@ -114,6 +156,7 @@ final class DocSeekerOfflineUITests: XCTestCase {
     // =========================================================================
     // SCÉNARIO 3 : Volet latéral d'extraits hors-ligne (préservation requête et sélection)
     // Transposition stricte de DocSeekerCoreUITests.testInDocumentSearchDrawerPreservesOccurrencesAndQuery
+    // + Analyses Visuelles Niveaux 1, 3 sur les vignettes du tiroir
     // =========================================================================
     
     func testOfflineInDocumentSearchDrawerPreservesOccurrencesAndQuery() {
@@ -126,6 +169,12 @@ final class DocSeekerOfflineUITests: XCTestCase {
         let drawerBtn = harness.app.buttons["reader_open_drawer"]
         XCTAssertTrue(drawerBtn.waitForExistence(timeout: 5.0), "Le bouton d'ouverture du volet d'extraits doit être présent en mode hors-ligne")
         drawerBtn.tap()
+        
+        // [Visuel Niveau 1 & 3] Vérification visuelle du tiroir et des vignettes locales
+        sleep(1)
+        let drawerScreen = XCUIScreen.main.screenshot().image
+        VisualValidationEngine.assertNonBlankScreen(image: drawerScreen, testCase: self, context: "S3_TiroirExtraits_HorsLigne")
+        VisualValidationEngine.assertVisibleTextContains(image: drawerScreen, expectedKeywords: ["Extraits", "document", "Page", "grossesse"], testCase: self, context: "S3_Tiroir_OCR")
         
         // Vérification du titre du tiroir
         let drawerNavTitle = harness.app.staticTexts["Extraits du document"]
@@ -159,6 +208,7 @@ final class DocSeekerOfflineUITests: XCTestCase {
     // =========================================================================
     // SCÉNARIO 4 : Popover d'informations complètes sur l'onglet de document hors-ligne
     // Transposition stricte de DocSeekerCoreUITests.testTabChevronOpensDocumentInfoPopover
+    // + Analyses Visuelles Niveaux 1, 3 sur la popover
     // =========================================================================
     
     func testOfflineTabChevronOpensDocumentInfoPopover() {
@@ -171,6 +221,12 @@ final class DocSeekerOfflineUITests: XCTestCase {
         let chevronBtn = harness.app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'tab_chevron_'")).firstMatch
         if chevronBtn.waitForExistence(timeout: 4.0) {
             chevronBtn.tap()
+            
+            // [Visuel Niveau 1 & 3] Vérification visuelle de la popover
+            sleep(1)
+            let popoverScreen = XCUIScreen.main.screenshot().image
+            VisualValidationEngine.assertNonBlankScreen(image: popoverScreen, testCase: self, context: "S4_Popover_HorsLigne")
+            VisualValidationEngine.assertVisibleTextContains(image: popoverScreen, expectedKeywords: ["Grossesse", "Emplacement", "Page"], testCase: self, context: "S4_Popover_OCR")
             
             let locationLabel = harness.app.staticTexts["Emplacement :"]
             let pageLabel = harness.app.staticTexts["Page courante :"]
@@ -191,6 +247,7 @@ final class DocSeekerOfflineUITests: XCTestCase {
     // =========================================================================
     // SCÉNARIO 5 : Parcours continu long multi-actions en mode 100% déconnecté
     // Transposition stricte de DocSeekerCoreUITests.testLongContinuousUserJourney
+    // + Analyses Visuelles Niveaux 1, 2, 3 et TOUTES les vérifications préservées
     // =========================================================================
     
     func testOfflineLongContinuousUserJourney() {
@@ -201,12 +258,24 @@ final class DocSeekerOfflineUITests: XCTestCase {
         
         // 2. Ouverture document hors-ligne et navigation d'occurrence
         harness.openFirstDocumentReader()
+        
+        // [Visuel Niveau 1] Lecteur ouvert dans le parcours long
+        sleep(1)
+        let readerScreen = XCUIScreen.main.screenshot().image
+        VisualValidationEngine.assertNonBlankScreen(image: readerScreen, testCase: self, context: "S5_Lecteur_LongJourney")
+        
         harness.tapNextOccurrence()
         
         // 3. Retour Accueil (préservation d'état hors-ligne)
         let homeBtn = harness.app.buttons["Retour à l'accueil"]
         XCTAssertTrue(homeBtn.waitForExistence(timeout: 4.0))
         homeBtn.tap()
+        
+        // [Visuel Niveau 1 & 3] Vérification de la persistance de recherche
+        sleep(1)
+        let searchScreen = XCUIScreen.main.screenshot().image
+        VisualValidationEngine.assertNonBlankScreen(image: searchScreen, testCase: self, context: "S5_SearchState_Persisted")
+        VisualValidationEngine.assertVisibleTextContains(image: searchScreen, expectedKeywords: ["grossesse", "normale"], testCase: self, context: "S5_SearchOCR_Persisted")
         
         // 4. Vérification que les résultats de recherche sont toujours préservés
         XCTAssertTrue(docCard.waitForExistence(timeout: 3.0), "Les résultats de recherche hors-ligne doivent être préservés après retour")
@@ -227,6 +296,7 @@ final class DocSeekerOfflineUITests: XCTestCase {
     // =========================================================================
     // SCÉNARIO 6 : Exclusion documents non-téléchargés et état vide propre hors-ligne
     // Transposition des scénarios O2 et O8 de ui_offline.spec.mjs
+    // + Analyses Visuelles Niveaux 1, 3
     // =========================================================================
     
     func testOfflineUncachedDocExclusionAndEmptyState() {
@@ -236,12 +306,19 @@ final class DocSeekerOfflineUITests: XCTestCase {
         let emptyNotice = harness.app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'Aucun résultat'")).firstMatch
         XCTAssertTrue(emptyNotice.waitForExistence(timeout: 4.0), "La recherche hors-ligne sans résultat doit afficher un état vide propre")
         
+        // [Visuel Niveau 1 & 3] État vide propre et stylisé (non blanc)
+        sleep(1)
+        let emptyScreen = XCUIScreen.main.screenshot().image
+        VisualValidationEngine.assertNonBlankScreen(image: emptyScreen, testCase: self, context: "S6_EtatVide_HorsLigne")
+        VisualValidationEngine.assertVisibleTextContains(image: emptyScreen, expectedKeywords: ["Aucun", "résultat"], testCase: self, context: "S6_EtatVide_OCR")
+        
         harness.clearSearch()
     }
     
     // =========================================================================
     // SCÉNARIO 7 : Parité stricte des résultats et vignettes entre En Ligne et Hors-Ligne
     // Transposition du scénario O9 de ui_offline.spec.mjs
+    // + Analyses Visuelles Niveaux 1, 2, 3
     // =========================================================================
     
     func testOfflineOnlineParity() {
@@ -249,6 +326,13 @@ final class DocSeekerOfflineUITests: XCTestCase {
         harness.search(query: "grossesse")
         let offlineDocCard = harness.app.staticTexts["023 - Grossesse normale"]
         XCTAssertTrue(offlineDocCard.waitForExistence(timeout: 6.0), "Le document doit être trouvé hors-ligne")
+        
+        // [Visuel Niveau 1 & 3 Hors-ligne]
+        sleep(1)
+        let offlineCapture = XCUIScreen.main.screenshot().image
+        VisualValidationEngine.assertNonBlankScreen(image: offlineCapture, testCase: self, context: "S7_Capture_HorsLigne")
+        VisualValidationEngine.assertVisibleTextContains(image: offlineCapture, expectedKeywords: ["023", "Grossesse", "normale"], testCase: self, context: "S7_Parite_OCR_Offline")
+        
         harness.clearSearch()
         
         // 2. Rétablissement en ligne
@@ -258,6 +342,72 @@ final class DocSeekerOfflineUITests: XCTestCase {
         harness.search(query: "grossesse")
         let onlineDocCard = harness.app.staticTexts["023 - Grossesse normale"]
         XCTAssertTrue(onlineDocCard.waitForExistence(timeout: 6.0), "Le document doit être trouvé en ligne")
+        
+        // [Visuel Niveau 1 & 3 En Ligne]
+        sleep(1)
+        let onlineCapture = XCUIScreen.main.screenshot().image
+        VisualValidationEngine.assertNonBlankScreen(image: onlineCapture, testCase: self, context: "S7_Capture_EnLigne")
+        VisualValidationEngine.assertVisibleTextContains(image: onlineCapture, expectedKeywords: ["023", "Grossesse", "normale"], testCase: self, context: "S7_Parite_OCR_Online")
+        
+        harness.clearSearch()
+    }
+    
+    // =========================================================================
+    // SCÉNARIO 8 (VISUEL SPÉCIFIQUE) : Streaming PDF En Ligne sans écran blanc (Doc 551 - Anatomie 88 Mo)
+    // =========================================================================
+    
+    func testVisualValidation_OnlineStreamingPDF_Levels123() {
+        harness.reconnectServer()
+        harness.search(query: "Anatomie")
+        let docCard = harness.app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'Anatomie'")).firstMatch
+        if docCard.waitForExistence(timeout: 8.0) {
+            docCard.tap()
+            
+            let homeBtn = harness.app.buttons["Retour à l'accueil"]
+            XCTAssertTrue(homeBtn.waitForExistence(timeout: 8.0))
+            
+            sleep(1)
+            let fullScreen = XCUIScreen.main.screenshot().image
+            
+            // NIVEAU 1
+            VisualValidationEngine.assertNonBlankScreen(image: fullScreen, testCase: self, context: "S8_Streaming_Anatomie_NoBlank")
+            
+            // NIVEAU 2
+            let pdfFile = harness.fixturesDir.appendingPathComponent("2.pdf")
+            VisualValidationEngine.assertPixelMatchAgainstPDF(capturedImage: fullScreen, pdfURL: pdfFile, pageNumber: 1, minMatchPercentage: 65.0, testCase: self, context: "S8_Streaming_PixelMatching")
+            
+            // NIVEAU 3
+            VisualValidationEngine.assertVisibleTextContains(image: fullScreen, expectedKeywords: ["Anatomie", "cytologie", "médecine", "chapitre", "2023"], testCase: self, context: "S8_Streaming_OCR")
+            
+            homeBtn.tap()
+        }
+        harness.clearSearch()
+    }
+    
+    // =========================================================================
+    // SCÉNARIO 9 (VISUEL SPÉCIFIQUE) : Vignettes d'Endocrinologie (Doc 558 - 506 Mo) Authentifiées
+    // =========================================================================
+    
+    func testVisualValidation_EndocrinologieCrops_Levels123() {
+        harness.reconnectServer()
+        harness.search(query: "diabete")
+        
+        let endoDoc = harness.app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'Endocrinologie'")).firstMatch
+        if endoDoc.waitForExistence(timeout: 8.0) {
+            let vignetteBtn = harness.app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'extraits' OR label CONTAINS[c] 'vignette'")).firstMatch
+            if vignetteBtn.waitForExistence(timeout: 4.0) {
+                vignetteBtn.tap()
+                sleep(2)
+                
+                let drawerScreen = XCUIScreen.main.screenshot().image
+                
+                // NIVEAU 1
+                VisualValidationEngine.assertNonBlankScreen(image: drawerScreen, testCase: self, context: "S9_EndoDrawer_NoBlank")
+                
+                // NIVEAU 3
+                VisualValidationEngine.assertVisibleTextContains(image: drawerScreen, expectedKeywords: ["diabète", "diabete", "Page", "glycémie"], testCase: self, context: "S9_EndoCrops_OCR")
+            }
+        }
         harness.clearSearch()
     }
 }

@@ -8,6 +8,9 @@ import Combine
 public final class DocumentTabManager: ObservableObject {
     public static let shared = DocumentTabManager()
     
+    /// Nombre maximum d'onglets simultanément ouverts (politique LRU : le plus ancien inactif est remplacé)
+    public static let maxTabs = 10
+    
     @Published public var openTabs: [OpenDocumentTab] = []
     @Published public var activeTabId: UUID? = nil
     @Published public var isViewingReader: Bool = false
@@ -69,6 +72,12 @@ public final class DocumentTabManager: ObservableObject {
         )
         
         let applyNewTab = {
+            // Politique LRU : si la limite est atteinte, fermer le plus ancien onglet inactif
+            if self.openTabs.count >= DocumentTabManager.maxTabs {
+                if let lruIndex = self.openTabs.firstIndex(where: { $0.id != self.activeTabId }) {
+                    self.openTabs.remove(at: lruIndex)
+                }
+            }
             self.openTabs.append(newTab)
             self.activeTabId = newTab.id
             self.isViewingReader = true
@@ -187,7 +196,7 @@ public final class DocumentTabManager: ObservableObject {
     private func ensureLocalCache(docId: Int64) {
         let db = LocalDatabase.shared
         guard !db.isDocumentCached(docId: docId) else { return }
-        guard NetworkMonitor.shared.isConnected && !APIClient.shared.serverURL.contains(":9999") else { return }
+        guard NetworkMonitor.shared.isConnected && APIClient.shared.isServerReachable else { return }
         
         DownloadQueueManager.shared.enqueue(docId: docId)
     }

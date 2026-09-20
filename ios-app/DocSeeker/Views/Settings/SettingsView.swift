@@ -21,51 +21,6 @@ public struct SettingsView: View {
     public var body: some View {
         NavigationStack {
             Form {
-                Section("Mode Hors-ligne & Simulation") {
-                    HStack {
-                        Button(action: {
-                            api.setServerURL("http://127.0.0.1:9999")
-                            api.recordFailure()
-                            NetworkMonitor.shared.isOnline = false
-                        }) {
-                            Text("Couper Serveur")
-                                .font(.caption.bold())
-                                .foregroundColor(.red)
-                        }
-                        .buttonStyle(.bordered)
-                        .accessibilityIdentifier("btn_force_offline")
-                        
-                        Spacer()
-                        
-                        Button(action: {
-                            api.setServerURL("http://127.0.0.1:8080")
-                            NetworkMonitor.shared.isOnline = true
-                            Task { _ = await api.autoLoginIfPossible() }
-                        }) {
-                            Text("Rétablir Serveur")
-                                .font(.caption.bold())
-                                .foregroundColor(.green)
-                        }
-                        .buttonStyle(.bordered)
-                        .accessibilityIdentifier("btn_force_online")
-                    }
-                    
-                    Toggle("Simuler coupure serveur (Hors-ligne)", isOn: Binding(
-                        get: { !api.isServerReachable || api.serverURL.contains(":9999") },
-                        set: { isOffline in
-                            if isOffline {
-                                api.setServerURL("http://127.0.0.1:9999")
-                                api.recordFailure()
-                                NetworkMonitor.shared.isOnline = false
-                            } else {
-                                api.setServerURL("http://127.0.0.1:8080")
-                                NetworkMonitor.shared.isOnline = true
-                                Task { _ = await api.autoLoginIfPossible() }
-                            }
-                        }
-                    ))
-                    .accessibilityIdentifier("toggle_offline_mode")
-                }
                 
                 Section("Serveur NAS") {
                     HStack {
@@ -105,10 +60,10 @@ public struct SettingsView: View {
                 
                 Section("Réseau & Synchronisation") {
                     HStack {
-                        Label("Statut réseau", systemImage: (network.isConnected && api.isServerReachable && !api.serverURL.contains(":9999")) ? "wifi" : "wifi.slash")
+                        Label("Statut réseau", systemImage: (network.isConnected && api.isServerReachable) ? "wifi" : "wifi.slash")
                         Spacer()
-                        Text((network.isConnected && api.isServerReachable && !api.serverURL.contains(":9999")) ? "En ligne" : "Hors-ligne")
-                            .foregroundColor((network.isConnected && api.isServerReachable && !api.serverURL.contains(":9999")) ? .green : .orange)
+                        Text((network.isConnected && api.isServerReachable) ? "En ligne" : "Hors-ligne")
+                            .foregroundColor((network.isConnected && api.isServerReachable) ? .green : .orange)
                     }
                 }
                 

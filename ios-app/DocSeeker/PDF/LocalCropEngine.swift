@@ -1,5 +1,6 @@
 // LocalCropEngine.swift
 // Découpe matérielle native d'extraits PDF via CoreGraphics et coordonnées Rust
+// Prise en charge robuste des cropBox et décalages d'impression des éditeurs médicaux
 
 import UIKit
 import PDFKit
@@ -31,9 +32,12 @@ public final class LocalCropEngine {
             return nil
         }
 
-        let pageBox = page.getBoxRect(.mediaBox)
-        let pw = Double(pageBox.width)
-        let ph = Double(pageBox.height)
+        let cropBox = page.getBoxRect(.cropBox)
+        let mediaBox = page.getBoxRect(.mediaBox)
+        let effectiveBox = (cropBox.width > 0 && cropBox.height > 0) ? cropBox : mediaBox
+        
+        let pw = Double(effectiveBox.width)
+        let ph = Double(effectiveBox.height)
 
         let bounds = RustBridge.shared.calculateCropBounds(rect: rect, pageWidth: pw, pageHeight: ph)
 
@@ -41,48 +45,46 @@ public final class LocalCropEngine {
         let targetHeight = CGFloat(bounds.height) * cropScale
         let size = CGSize(width: max(1, targetWidth), height: max(1, targetHeight))
 
-        UIGraphicsBeginImageContextWithOptions(size, true, 1.0)
-        guard let ctx = UIGraphicsGetCurrentContext() else {
-            UIGraphicsEndImageContext()
-            return nil
+        // IMP-5 : UIGraphicsImageRenderer est thread-safe (contrairement à UIGraphicsBeginImageContextWithOptions)
+        // Essentiel pour le chargement parallèle des vignettes dans le tiroir d'occurrences
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { ctx in
+            let cgContext = ctx.cgContext
+            
+            // Fond blanc
+            cgContext.setFillColor(UIColor.white.cgColor)
+            cgContext.fill(CGRect(origin: .zero, size: size))
+
+            // Transformer pour cadrer la zone découpée
+            cgContext.saveGState()
+            cgContext.translateBy(x: -CGFloat(bounds.x0) * cropScale, y: -CGFloat(bounds.y0) * cropScale)
+            cgContext.scaleBy(x: cropScale, y: cropScale)
+
+            // CoreGraphics a l'origine en bas à gauche pour le rendu de page PDF
+            cgContext.saveGState()
+            cgContext.translateBy(x: -effectiveBox.origin.x, y: CGFloat(ph) + effectiveBox.origin.y)
+            cgContext.scaleBy(x: 1.0, y: -1.0)
+            cgContext.drawPDFPage(page)
+            cgContext.restoreGState()
+
+            // Surlignage jaune Goodnotes translucide
+            let yellowColor = UIColor(red: 1.0, green: 0.92, blue: 0.23, alpha: 0.40).cgColor
+            cgContext.setFillColor(yellowColor)
+
+            let rectsToHighlight = (highlightRects != nil && !highlightRects!.isEmpty) ? highlightRects! : [rect]
+            for hl in rectsToHighlight where hl.count == 4 {
+                let hx = CGFloat(hl[0])
+                let hy = CGFloat(hl[1])
+                let hw = CGFloat(hl[2] - hl[0])
+                let hh = CGFloat(hl[3] - hl[1])
+                cgContext.fill(CGRect(x: hx, y: hy, width: hw, height: hh))
+            }
+
+            cgContext.restoreGState()
         }
 
-        // Fond blanc
-        ctx.setFillColor(UIColor.white.cgColor)
-        ctx.fill(CGRect(origin: .zero, size: size))
-
-        // Transformer pour cadrer la zone découpée
-        ctx.saveGState()
-        ctx.translateBy(x: -CGFloat(bounds.x0) * cropScale, y: -CGFloat(bounds.y0) * cropScale)
-        ctx.scaleBy(x: cropScale, y: cropScale)
-
-        // CoreGraphics a l'origine en bas à gauche pour le rendu de page PDF
-        ctx.saveGState()
-        ctx.translateBy(x: 0, y: CGFloat(ph))
-        ctx.scaleBy(x: 1.0, y: -1.0)
-        ctx.drawPDFPage(page)
-        ctx.restoreGState()
-
-        // Surlignage jaune Goodnotes translucide
-        let yellowColor = UIColor(red: 1.0, green: 0.92, blue: 0.23, alpha: 0.40).cgColor
-        ctx.setFillColor(yellowColor)
-
-        let rectsToHighlight = (highlightRects != nil && !highlightRects!.isEmpty) ? highlightRects! : [rect]
-        for hl in rectsToHighlight where hl.count == 4 {
-            let hx = CGFloat(hl[0])
-            let hy = CGFloat(hl[1])
-            let hw = CGFloat(hl[2] - hl[0])
-            let hh = CGFloat(hl[3] - hl[1])
-            ctx.fill(CGRect(x: hx, y: hy, width: hw, height: hh))
-        }
-
-        ctx.restoreGState()
-
-        let image = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
-
-        if let img = image {
-            cache.setObject(img, forKey: cacheKey as NSString)
+        if image.size.width > 0 {
+            cache.setObject(image, forKey: cacheKey as NSString)
         }
         return image
     }

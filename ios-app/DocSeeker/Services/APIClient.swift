@@ -38,7 +38,7 @@ public final class APIClient: ObservableObject {
 
     private init() {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 20.0
+        config.timeoutIntervalForRequest = 10.0  // AM-1 : réduit de 20s à 10s pour détection offline plus rapide
         config.httpCookieStorage = HTTPCookieStorage.shared
         config.httpShouldSetCookies = true
         self.session = URLSession(configuration: config)
@@ -55,11 +55,20 @@ public final class APIClient: ObservableObject {
 
     public func startReachabilityMonitor() {
         reachabilityTimer?.invalidate()
+        // AM-6 : sonde périodique toutes les 4s si hors-ligne, toutes les 30s si en ligne
+        // pour détecter un crash serveur sans perte réseau
         reachabilityTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
-            if NetworkMonitor.shared.isConnected && !self.isServerReachable {
-                Task {
-                    await self.probeServerReachability()
+            if NetworkMonitor.shared.isConnected {
+                if !self.isServerReachable {
+                    // Relancer rapidement si hors-ligne
+                    Task { await self.probeServerReachability() }
+                } else {
+                    // Sonde lente périodique (toutes les ~30s environ, en comptant les ticks de 4s)
+                    let shouldProbe = Int(Date().timeIntervalSince1970) % 30 < 4
+                    if shouldProbe {
+                        Task { await self.probeServerReachability() }
+                    }
                 }
             }
         }
@@ -91,10 +100,9 @@ public final class APIClient: ObservableObject {
     }
 
     public func streamingPDFURL(for docId: Int64) -> URL? {
-        var urlStr = "\(serverURL)/api/pdf/\(docId)"
-        if let token = sessionToken ?? KeychainManager.shared.get(key: "session_token") {
-            urlStr += "?token=\(token)"
-        }
+        // AM-7 : le token est transmis via le header Authorization dans les requêtes URLSession
+        // Cette URL n'inclut plus le token en query string pour éviter son exposition dans les logs
+        let urlStr = "\(serverURL)/api/pdf/\(docId)"
         return URL(string: urlStr)
     }
 
@@ -113,15 +121,39 @@ public final class APIClient: ObservableObject {
         }
     }
 
+    /// AM-7 : Construit une URLRequest avec le token de session dans le header Authorization
+    /// pour éviter d'exposer le token dans les query strings (logs réseau, proxy, cache)
+    public func authorizedRequest(for url: URL) -> URLRequest {
+        var req = URLRequest(url: url)
+        if let token = sessionToken ?? KeychainManager.shared.get(key: "session_token") {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        return req
+    }
+
+    /// Retourne une URLRequest prête à l'emploi pour le streaming PDF (token dans Authorization header)
+    public func streamingPDFRequest(for docId: Int64) -> URLRequest? {
+        guard let url = URL(string: "\(serverURL)/api/pdf/\(docId)") else { return nil }
+        return authorizedRequest(for: url)
+    }
+
     public func setServerURL(_ urlString: String) {
         var clean = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         if clean.hasSuffix("/") { clean.removeLast() }
+        
+        // AM-5 : valider le format URL avant sauvegarde dans le Keychain
+        guard let validURL = URL(string: clean),
+              let scheme = validURL.scheme,
+              scheme.hasPrefix("http") else {
+            print("[APIClient] URL invalide ignorée: \(clean)")
+            return
+        }
+        
         self.serverURL = clean
         KeychainManager.shared.save(key: "server_url", value: clean)
         self.isAuthenticated = false
-        if clean.contains(":9999") {
-            self.isServerReachable = false
-        }
+        // CR-1 : la sentinel :9999 est supprimée — le statut hors-ligne est déterminé uniquement
+        // par NWPathMonitor + probeServerReachability(), pas par une correspondance de chaîne
     }
 
     public func login(password: String) async throws -> Bool {

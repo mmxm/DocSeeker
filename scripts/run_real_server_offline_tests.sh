@@ -83,17 +83,20 @@ echo ""
 echo "=== ÉTAPE 1 : Serveur actif -> Exécution des tests unitaires et streaming ==="
 start_server_process
 
-# Exécution des tests unitaires (incluant le nouveau test de streaming partiel Byte-Range)
-echo "[Tests] Lancement des tests unitaires DocSeekerTests..."
+# Exécution des tests unitaires et visuels en ligne (streaming partiel Byte-Range et validation visuelle Niveaux 1, 2, 3)
+echo "[Tests] Lancement des tests unitaires et visuels DocSeeker..."
 xcodebuild test \
     -project "$IOS_PROJECT_DIR/DocSeeker.xcodeproj" \
     -scheme "DocSeeker" \
     -destination "platform=iOS Simulator,name=$SIMULATOR_NAME" \
+    -only-testing:DocSeekerTests/DocSeekerTests/testStrictCacheCheck_IndexedInDBWithoutPhysicalFile_ReturnsFalse \
+    -only-testing:DocSeekerTests/DocSeekerTests/testAuthenticatedCropDownload_WithSessionToken_Succeeds \
     -only-testing:DocSeekerTests/DocSeekerTests/testPartialPDFStreamingAndByteRangeNegotiation \
-    -only-testing:DocSeekerTests/DocSeekerTests/testRealMedicalPDFs_PDFKitInspection \
+    -only-testing:DocSeekerUITests/DocSeekerOfflineUITests/testVisualValidation_OnlineStreamingPDF_Levels123 \
+    -only-testing:DocSeekerUITests/DocSeekerOfflineUITests/testVisualValidation_EndocrinologieCrops_Levels123 \
     -quiet
 
-echo "-> Succès : Streaming partiel et négociation HTTP 206 validés avec le serveur actif !"
+echo "-> Succès : Streaming partiel, crops authentifiés et validation visuelle (Niveaux 1, 2, 3) validés !"
 
 # --------------------------------------------------------------------------
 # ÉTAPE 2 : COUPURE PHYSIQUE RÉELLE DU SERVEUR LOCAL (SERVEUR DOWN)
@@ -113,17 +116,20 @@ echo "[Succès] Le serveur local est PHYSIQUEMENT ÉTEINT (Connection refused su
 # ÉTAPE 3 : Exécution des tests UI en mode VRAIMENT HORS-LIGNE
 # --------------------------------------------------------------------------
 echo ""
-echo "=== ÉTAPE 3 : Lancement des tests UI XCUITest contre le serveur coupé ==="
+echo "=== ÉTAPE 3 : Lancement des tests UI XCUITest contre le serveur coupé (Validation visuelle Niveaux 1, 2, 3) ==="
 xcodebuild test \
     -project "$IOS_PROJECT_DIR/DocSeeker.xcodeproj" \
     -scheme "DocSeeker" \
     -destination "platform=iOS Simulator,name=$SIMULATOR_NAME" \
     -only-testing:DocSeekerUITests/DocSeekerOfflineUITests/testOfflineInitialStateAndFolderEntryAndDrillDown \
     -only-testing:DocSeekerUITests/DocSeekerOfflineUITests/testOfflineOccurrenceNavigationAndBottomBarArrows \
+    -only-testing:DocSeekerUITests/DocSeekerOfflineUITests/testOfflineInDocumentSearchDrawerPreservesOccurrencesAndQuery \
+    -only-testing:DocSeekerUITests/DocSeekerOfflineUITests/testOfflineLongContinuousUserJourney \
     -only-testing:DocSeekerUITests/DocSeekerOfflineUITests/testOfflineUncachedDocExclusionAndEmptyState \
+    -only-testing:DocSeekerUITests/DocSeekerOfflineUITests/testVisualValidation_OfflineLocalPDF_Levels123 \
     -quiet
 
-echo "-> Succès : L'application fonctionne de manière autonome en cache local avec le serveur coupé !"
+echo "-> Succès : L'ensemble des scénarios hors-ligne avec validation visuelle à 3 niveaux ont réussi !"
 
 # --------------------------------------------------------------------------
 # ÉTAPE 4 : RALLUMAGE DU SERVEUR À CHAUD ET TEST DE RECONNEXION AUTOMATIQUE

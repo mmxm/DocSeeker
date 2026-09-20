@@ -34,14 +34,14 @@ public struct GoodnotesPDFReaderView: View {
             return local
         }
         // 2. Si connecté et serveur accessible : streaming Byte-Range partiel instantané
-        if NetworkMonitor.shared.isConnected && APIClient.shared.isServerReachable && !APIClient.shared.serverURL.contains(":9999") {
+        if NetworkMonitor.shared.isConnected && APIClient.shared.isServerReachable {
             return APIClient.shared.streamingPDFURL(for: tab.docId)
         }
         return nil
     }
     
     private var isOffline: Bool {
-        !NetworkMonitor.shared.isConnected || !APIClient.shared.isServerReachable || APIClient.shared.serverURL.contains(":9999")
+        !NetworkMonitor.shared.isConnected || !APIClient.shared.isServerReachable
     }
     
     private var isDownloading: Bool {
@@ -279,23 +279,19 @@ public struct GoodnotesPDFReaderView: View {
             
             Spacer()
             
-            // Indicateur de page et statut de cache discret
-            if let tab = activeTab {
-                HStack(spacing: 6) {
-                    if localDb.isDocumentCached(docId: tab.docId) {
-                        Image(systemName: "checkmark.icloud.fill")
-                            .font(.system(size: 13))
-                            .foregroundColor(.green)
-                    } else if isDownloading {
-                        ProgressView(value: downloadProgress)
-                            .progressViewStyle(.circular)
-                            .scaleEffect(0.6)
-                            .frame(width: 16, height: 16)
-                    }
-                    Text("p. \(currentPage)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundColor(.secondary)
+            // Indicateur de téléchargement discret style explorateur (sans bouton pause/arrêt)
+            if let tab = activeTab, isDownloading {
+                ZStack {
+                    Circle()
+                        .stroke(Color.secondary.opacity(0.2), lineWidth: 2.2)
+                        .frame(width: 18, height: 18)
+                    Circle()
+                        .trim(from: 0, to: CGFloat(max(0.05, downloadProgress)))
+                        .stroke(Color.blue, lineWidth: 2.2)
+                        .frame(width: 18, height: 18)
+                        .rotationEffect(.degrees(-90))
                 }
+                .accessibilityIdentifier("reader_download_progress")
             }
             
             Spacer()

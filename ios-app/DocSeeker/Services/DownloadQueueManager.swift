@@ -24,6 +24,7 @@ public final class DownloadQueueManager: NSObject, ObservableObject, URLSessionD
     private var session: URLSession!
     private var taskMap: [Int: Int64] = [:] // taskIdentifier -> docId
     private var resumeDataMap: [Int64: Data] = [:]
+    private let mapLock = NSLock() // CR-2 : protection des accès concurrents à taskMap et resumeDataMap
     private var lastProgressUpdate: [Int64: (time: CFAbsoluteTime, pct: Double)] = [:]
     private let maxConcurrent = 2
     private var runningCount = 0
@@ -179,6 +180,16 @@ public final class DownloadQueueManager: NSObject, ObservableObject, URLSessionD
         }
         
         Task {
+            // AM-4 : Vérification de l'espace disque disponible avant de lancer le téléchargement
+            if let fileSize = await self.estimatedFileSize(docId: docId) {
+                let freeSpace = self.availableDiskSpace()
+                if freeSpace > 0 && freeSpace < fileSize * 2 {
+                    print("[DownloadManager] Espace disque insuffisant pour doc \(docId): \(freeSpace) octets disponibles, \(fileSize * 2) requis")
+                    self.finishTask(docId: docId, success: false)
+                    return
+                }
+            }
+            
             // 1. Télécharger d'abord le bundle d'indexation de façon STRICTE et ATOMIQUE
             do {
                 let bundleJson = try await APIClient.shared.fetchSyncBundle(docId: docId)
@@ -198,13 +209,15 @@ public final class DownloadQueueManager: NSObject, ObservableObject, URLSessionD
             }
 
             // 2. Télécharger le fichier PDF avec reprise si disponible
+            // AM-7 : Utiliser le header Authorization au lieu de l'URL query string
             let serverURL = APIClient.shared.serverURL
             guard let pdfURL = URL(string: "\(serverURL)/api/pdf/\(docId)") else {
                 self.finishTask(docId: docId, success: false)
                 return
             }
 
-            var req = URLRequest(url: pdfURL)
+            var req = APIClient.shared.authorizedRequest(for: pdfURL)
+            // Ajouter également les cookies de session (compatibilité avec les deux méthodes d'auth)
             if let cookies = HTTPCookieStorage.shared.cookies(for: pdfURL) {
                 let headers = HTTPCookie.requestHeaderFields(with: cookies)
                 for (k, v) in headers {
@@ -213,7 +226,12 @@ public final class DownloadQueueManager: NSObject, ObservableObject, URLSessionD
             }
 
             let task: URLSessionDownloadTask
-            if let resumeData = self.resumeDataMap.removeValue(forKey: docId),
+            self.mapLock.lock()
+            let hasResumeData = self.resumeDataMap[docId] != nil
+            let resumeData = hasResumeData ? self.resumeDataMap.removeValue(forKey: docId) : nil
+            self.mapLock.unlock()
+            
+            if let resumeData = resumeData,
                (try? PropertyListSerialization.propertyList(from: resumeData, options: [], format: nil)) is [String: Any] {
                 print("[DownloadManager] Reprise du téléchargement pour doc \(docId) avec resumeData (\(resumeData.count) octets)")
                 task = self.session.downloadTask(withResumeData: resumeData)
@@ -221,7 +239,9 @@ public final class DownloadQueueManager: NSObject, ObservableObject, URLSessionD
                 task = self.session.downloadTask(with: req)
             }
 
+            self.mapLock.lock()
             self.taskMap[task.taskIdentifier] = docId
+            self.mapLock.unlock()
             task.resume()
         }
     }
@@ -241,7 +261,10 @@ public final class DownloadQueueManager: NSObject, ObservableObject, URLSessionD
     // MARK: - URLSessionDownloadDelegate
 
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        guard let docId = taskMap.removeValue(forKey: downloadTask.taskIdentifier) else { return }
+        mapLock.lock()
+        let docId = taskMap.removeValue(forKey: downloadTask.taskIdentifier)
+        mapLock.unlock()
+        guard let docId = docId else { return }
         let target = LocalDatabase.shared.localPdfURL(for: docId)
 
         // Validation d'intégrité PDF avant enregistrement
@@ -263,7 +286,10 @@ public final class DownloadQueueManager: NSObject, ObservableObject, URLSessionD
     }
 
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        guard let docId = taskMap[downloadTask.taskIdentifier], totalBytesExpectedToWrite > 0 else { return }
+        mapLock.lock()
+        let docId = taskMap[downloadTask.taskIdentifier]
+        mapLock.unlock()
+        guard let docId = docId, totalBytesExpectedToWrite > 0 else { return }
         let pct = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
 
         let now = CFAbsoluteTimeGetCurrent()
@@ -281,18 +307,44 @@ public final class DownloadQueueManager: NSObject, ObservableObject, URLSessionD
     }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let docId = taskMap.removeValue(forKey: task.taskIdentifier) else { return }
+        mapLock.lock()
+        let docId = taskMap.removeValue(forKey: task.taskIdentifier)
+        mapLock.unlock()
+        guard let docId = docId else { return }
         
         if let error = error as NSError? {
             // Capture automatique de resumeData lors d'une interruption réseau ou timeout
             if let resumeData = error.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
                 print("[DownloadManager] Interruption réseau pour doc \(docId) - resumeData capturé (\(resumeData.count) octets)")
+                mapLock.lock()
                 self.resumeDataMap[docId] = resumeData
+                mapLock.unlock()
             }
             DispatchQueue.main.async {
                 self.interruptedTasks[docId] = self.activeTasks.removeValue(forKey: docId) ?? 0.0
                 self.runningCount = max(0, self.runningCount - 1)
             }
         }
+    }
+
+    // MARK: - Helpers AM-4 (vérification espace disque)
+
+    /// Estime la taille du fichier PDF à télécharger via les métadonnées SQLite locales
+    private func estimatedFileSize(docId: Int64) async -> Int64? {
+        let docs = LocalDatabase.shared.getLocalDocuments(folderId: nil)
+        if let doc = docs.first(where: { $0.id == docId }), let size = doc.file_size {
+            return size
+        }
+        return nil
+    }
+
+    /// Retourne l'espace disque disponible en octets (0 si non déterminable)
+    private func availableDiskSpace() -> Int64 {
+        let fm = FileManager.default
+        if let attrs = try? fm.attributesOfFileSystem(forPath: NSHomeDirectory()),
+           let freeSize = attrs[.systemFreeSize] as? Int64 {
+            return freeSize
+        }
+        return 0
     }
 }

@@ -255,38 +255,25 @@ public final class DocSeekerTestHarness {
     
     @discardableResult
     public func disconnectServer() -> Self {
-        let status = app.descendants(matching: .any)["network_status_indicator"]
-        if status.waitForExistence(timeout: 2.0) && (status.label.contains("Hors-ligne") || status.label.contains("offline")) {
-            return self
-        }
-        switchTab("Réglages")
-        let btn = app.buttons["btn_force_offline"]
-        if btn.waitForExistence(timeout: 2.0) {
-            btn.tap()
-        } else {
-            setServerURL("http://127.0.0.1:9999")
-        }
+        // Le serveur est physiquement coupé au niveau OS par kill -TERM par l'orchestrateur de test
         switchTab("Documents")
         return self
     }
     
     @discardableResult
     public func reconnectServer() -> Self {
+        // IMP-3 : IMPORTANT — cette méthode NE rallume PAS le serveur.
+        // Le rallumage physique du serveur doit être effectué par le script shell orchestrateur
+        // (run_real_server_offline_tests.sh) AVANT d'appeler cette méthode.
+        //
+        // Cette méthode provoque uniquement un refresh de l'état réseau côté app :
+        // - tape sur le badge "network_status_indicator" pour forcer un probeServerReachability()
+        // - revient sur l'onglet Documents pour déclencher un rechargement des données
         let statusBtn = app.buttons["network_status_indicator"]
         if statusBtn.exists {
             statusBtn.tap()
-            _ = statusBtn.waitForExistence(timeout: 2.0)
-            if statusBtn.label == "Connecté" {
-                return self
-            }
         }
-        switchTab("Réglages")
-        let btn = app.buttons["btn_force_online"]
-        if btn.waitForExistence(timeout: 2.0) {
-            btn.tap()
-        } else {
-            setServerURL("http://127.0.0.1:8080")
-        }
+        sleep(2) // Laisser le temps au NWPathMonitor de détecter le retour réseau
         switchTab("Documents")
         return self
     }
@@ -319,5 +306,17 @@ public final class DocSeekerTestHarness {
             themeSegment.tap()
         }
         return self
+    }
+    
+    public var fixturesDir: URL {
+        if let bundleURL = Bundle(for: DocSeekerTestHarness.self).url(forResource: "2", withExtension: "pdf") {
+            return bundleURL.deletingLastPathComponent()
+        }
+        return Bundle.main.bundleURL
+    }
+    
+    public func fixturePDFURL(named name: String) -> URL? {
+        Bundle(for: DocSeekerTestHarness.self).url(forResource: name, withExtension: "pdf")
+            ?? Bundle.main.url(forResource: name, withExtension: "pdf")
     }
 }

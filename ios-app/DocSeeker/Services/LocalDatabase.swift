@@ -79,7 +79,7 @@ public final class LocalDatabase: ObservableObject {
            let size = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? Int64), size > 0 {
             return true
         }
-        return isDocumentIndexedLocally(docId: docId)
+        return false
     }
 
     public func localPdfURL(for docId: Int64) -> URL {
@@ -124,22 +124,24 @@ public final class LocalDatabase: ObservableObject {
         refreshCachedDocs()
     }
 
-    /// Analyse et répare en tâche de fond tout document PDF présent sur disque mais manquant d'index FTS/mots
+    /// CR-3 : Analyse et répare en tâche de fond tout document PDF présent sur disque mais manquant d'index FTS.
+    /// Entièrement exécuté hors du thread principal pour ne pas bloquer l'UI au démarrage.
     public func repairCorruptedCachedDocuments() {
-        let fileManager = FileManager.default
-        guard let contents = try? fileManager.contentsOfDirectory(at: pdfDirectoryURL, includingPropertiesForKeys: nil) else { return }
-        
-        var unindexedIds: [Int64] = []
-        for file in contents where file.pathExtension.lowercased() == "pdf" {
-            let name = file.deletingPathExtension().lastPathComponent
-            if let id = Int64(name), !isDocumentIndexedLocally(docId: id) {
-                unindexedIds.append(id)
-            }
-        }
-        
-        guard !unindexedIds.isEmpty, NetworkMonitor.shared.isConnected else { return }
-        
         Task(priority: .utility) {
+            let fileManager = FileManager.default
+            guard let contents = try? fileManager.contentsOfDirectory(at: self.pdfDirectoryURL, includingPropertiesForKeys: nil) else { return }
+            
+            var unindexedIds: [Int64] = []
+            for file in contents where file.pathExtension.lowercased() == "pdf" {
+                let name = file.deletingPathExtension().lastPathComponent
+                // isDocumentIndexedLocally est une I/O SQLite — s'exécute maintenant sur le thread utility
+                if let id = Int64(name), !self.isDocumentIndexedLocally(docId: id) {
+                    unindexedIds.append(id)
+                }
+            }
+            
+            guard !unindexedIds.isEmpty, NetworkMonitor.shared.isConnected else { return }
+            
             for docId in unindexedIds {
                 do {
                     let bundleJson = try await APIClient.shared.fetchSyncBundle(docId: docId)

@@ -58,7 +58,7 @@ public struct DocumentListView: View {
     }
     
     private var isOfflineMode: Bool {
-        !network.isConnected || !api.isServerReachable || api.serverURL.contains(":9999")
+        !network.isConnected || !api.isServerReachable
     }
     
     public var body: some View {
@@ -677,7 +677,7 @@ public struct DocumentListView: View {
         errorMessage = nil
         
         // Si marqué hors-ligne mais avec interface réseau active, vérifier si le serveur répond
-        if isOfflineMode && network.isConnected && !api.serverURL.contains(":9999") {
+        if isOfflineMode && network.isConnected {
             _ = await api.probeServerReachability()
         }
         

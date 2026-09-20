@@ -1,5 +1,5 @@
 // OccurrenceCropImageView.swift
-// Affichage hybride d'un extrait de page : CoreGraphics local si PDF hors ligne, ou API distante si en ligne
+// Affichage hybride d'un extrait de page : CoreGraphics local si PDF hors ligne, ou API distante authentifiée si en ligne
 
 import SwiftUI
 
@@ -22,7 +22,7 @@ public struct OccurrenceCropImageView: View {
             if let img = image {
                 Image(uiImage: img)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .aspectRatio(contentMode: .fill)
             } else if isLoading {
                 ZStack {
                     Color(.secondarySystemBackground)
@@ -43,7 +43,7 @@ public struct OccurrenceCropImageView: View {
                 }
             }
         }
-        .frame(minWidth: 160, minHeight: 90)
+        .aspectRatio(2.5, contentMode: .fit)
         .clipped()
         .cornerRadius(6)
         .overlay(
@@ -84,20 +84,29 @@ public struct OccurrenceCropImageView: View {
             }
         }
         
-        // 2. Si non présent localement et qu'on a une URL distante -> téléchargement NAS
-        if let cropURLStr = occurrence.crop_url,
-           let url = URL(string: "\(APIClient.shared.serverURL)\(cropURLStr)") {
-            do {
-                let (data, response) = try await URLSession.shared.data(from: url)
-                if let http = response as? HTTPURLResponse, http.statusCode == 200,
-                   let img = UIImage(data: data) {
-                    await MainActor.run {
-                        self.image = img
+        // 2. Si non présent localement et qu'on a une URL distante -> téléchargement NAS avec token de session
+        if let cropURLStr = occurrence.crop_url {
+            var fullUrlStr = "\(APIClient.shared.serverURL)\(cropURLStr)"
+            if let token = APIClient.shared.sessionToken ?? KeychainManager.shared.get(key: "session_token") {
+                let sep = fullUrlStr.contains("?") ? "&" : "?"
+                fullUrlStr += "\(sep)token=\(token)"
+            }
+            
+            if let url = URL(string: fullUrlStr) {
+                do {
+                    var request = URLRequest(url: url)
+                    request.timeoutInterval = 10.0
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    if let http = response as? HTTPURLResponse, http.statusCode == 200,
+                       let img = UIImage(data: data) {
+                        await MainActor.run {
+                            self.image = img
+                        }
+                        return
                     }
-                    return
+                } catch {
+                    // Erreur réseau ou timeout
                 }
-            } catch {
-                // Erreur de téléchargement réseau
             }
         }
     }

@@ -545,5 +545,53 @@ final class DocSeekerTests: XCTestCase {
         let foundUncached = searchRes?.results.contains(where: { $0.id == 102 || $0.id == 103 }) ?? false
         XCTAssertFalse(foundUncached, "Les documents distants non en cache ne doivent pas apparaître dans la recherche textuelle")
     }
+    
+    // =========================================================================
+    // 10. Non-régression formelle : Cache strict sans faux positif
+    // =========================================================================
+    
+    func testStrictCacheCheck_IndexedInDBWithoutPhysicalFile_ReturnsFalse() {
+        let testDocId: Int64 = 8888
+        
+        // Simuler un document dont les métadonnées existent en base SQLite
+        let doc = DocumentItem(id: testDocId, filename: "gros_doc.pdf", title: "Gros Doc", folder_id: nil, total_pages: 50, file_size: 88000000, created_at: nil, updated_at: nil)
+        LocalDatabase.shared.syncAllDocumentsMetadata(docs: [doc])
+        
+        // S'assurer que le fichier physique n'est PAS présent
+        LocalDatabase.shared.removeDocumentFromCache(docId: testDocId)
+        
+        // Le test clé : même si les métadonnées sont là, isDocumentCached DOIT être false
+        XCTAssertFalse(LocalDatabase.shared.isDocumentCached(docId: testDocId), "Un document sans fichier physique .pdf ne doit JAMAIS être considéré en cache")
+        XCTAssertNil(LocalDatabase.shared.getLocalPDFURL(docId: testDocId), "getLocalPDFURL doit être nil sans fichier physique")
+    }
+    
+    // =========================================================================
+    // 11. Téléchargement de crop authentifié avec token de session
+    // =========================================================================
+    
+    func testAuthenticatedCropDownload_WithSessionToken_Succeeds() async throws {
+        let api = APIClient.shared
+        guard let token = api.sessionToken ?? KeychainManager.shared.get(key: "session_token") else {
+            return // Skip si pas d'environnement réseau avec token actif
+        }
+        
+        let cropURLStr = "/api/crop/558/490/6?h=d8a2a900&terms=diabete&token=\(token)"
+        guard let url = URL(string: "\(api.serverURL)\(cropURLStr)") else {
+            XCTFail("URL de crop invalide")
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 5.0
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            XCTFail("Pas de réponse HTTP")
+            return
+        }
+        
+        XCTAssertEqual(http.statusCode, 200, "La requête de crop authentifiée avec token doit réussir (200 OK)")
+        XCTAssertGreaterThan(data.count, 1000, "L'image WebP doit contenir des octets")
+    }
 }
+
 

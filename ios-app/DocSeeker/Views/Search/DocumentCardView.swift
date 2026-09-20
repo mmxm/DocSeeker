@@ -29,7 +29,7 @@ public struct DocumentCardView: View {
     }
     
     private var isOffline: Bool {
-        !network.isConnected || !api.isServerReachable || api.serverURL.contains(":9999")
+        !network.isConnected || !api.isServerReachable
     }
     
     private var downloadProgress: Double? {

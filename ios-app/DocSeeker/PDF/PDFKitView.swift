@@ -1,5 +1,6 @@
 // PDFKitView.swift
 // Lecteur PDF natif accéléré matériellement (Apple PDFKit / Metal 120Hz)
+// Support robuste du streaming asynchrone sans écran blanc avec indicateur d'activité natif
 
 import SwiftUI
 import PDFKit
@@ -35,9 +36,19 @@ public struct PDFKitView: UIViewRepresentable {
         pdfView.usePageViewController(false)
         pdfView.backgroundColor = .systemGroupedBackground
         
-        if let doc = PDFDocument(url: documentURL) {
-            pdfView.document = doc
-        }
+        let spinner = UIActivityIndicatorView(style: .large)
+        spinner.color = .systemBlue
+        spinner.hidesWhenStopped = true
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        pdfView.addSubview(spinner)
+        
+        NSLayoutConstraint.activate([
+            spinner.centerXAnchor.constraint(equalTo: pdfView.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: pdfView.centerYAnchor)
+        ])
+        
+        context.coordinator.pdfView = pdfView
+        context.coordinator.spinner = spinner
         
         NotificationCenter.default.addObserver(
             context.coordinator,
@@ -46,20 +57,24 @@ public struct PDFKitView: UIViewRepresentable {
             object: pdfView
         )
         
-        context.coordinator.pdfView = pdfView
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.documentChanged(_:)),
+            name: .PDFViewDocumentChanged,
+            object: pdfView
+        )
+        
+        context.coordinator.loadDocument(url: documentURL, targetPage: targetPage ?? currentPage)
+        
         return pdfView
     }
     
     public func updateUIView(_ uiView: PDFView, context: Context) {
+        context.coordinator.parent = self
+        
         if uiView.document?.documentURL != documentURL {
-            let currentPageIndex = uiView.currentPage?.pageRef?.pageNumber ?? currentPage
-            if let doc = PDFDocument(url: documentURL) {
-                uiView.document = doc
-                let targetIdx = targetPage ?? currentPageIndex
-                if let page = doc.page(at: max(0, targetIdx - 1)) {
-                    uiView.go(to: page)
-                }
-            }
+            context.coordinator.loadDocument(url: documentURL, targetPage: targetPage ?? currentPage)
+            return
         }
         
         // Navigation ciblée vers une occurrence
@@ -67,6 +82,7 @@ public struct PDFKitView: UIViewRepresentable {
         if shouldNavigate,
            let targetPage = targetPage,
            let doc = uiView.document,
+           doc.pageCount >= targetPage,
            let page = doc.page(at: max(0, targetPage - 1)) {
             
             context.coordinator.lastNavigatedPage = targetPage
@@ -108,9 +124,12 @@ public struct PDFKitView: UIViewRepresentable {
     public class Coordinator: NSObject {
         var parent: PDFKitView
         weak var pdfView: PDFView?
+        weak var spinner: UIActivityIndicatorView?
         var activeHighlight: (PDFPage, PDFAnnotation)?
         var lastNavigatedPage: Int?
         var lastNavigatedRect: [Double]?
+        var checkTimer: Timer?
+        var checkRetries: Int = 0
         
         init(_ parent: PDFKitView) {
             self.parent = parent
@@ -118,13 +137,69 @@ public struct PDFKitView: UIViewRepresentable {
         
         deinit {
             NotificationCenter.default.removeObserver(self)
+            checkTimer?.invalidate()
             clearHighlights()
+        }
+        
+        func loadDocument(url: URL, targetPage: Int) {
+            guard let pdfView = pdfView else { return }
+            
+            checkTimer?.invalidate()
+            checkRetries = 0
+            spinner?.startAnimating()
+            
+            if let doc = PDFDocument(url: url) {
+                pdfView.document = doc
+                if doc.pageCount > 0 {
+                    spinner?.stopAnimating()
+                    let targetIdx = max(0, targetPage - 1)
+                    if let page = doc.page(at: min(targetIdx, doc.pageCount - 1)) {
+                        pdfView.go(to: page)
+                    }
+                    return
+                }
+            }
+            
+            // Si chargement asynchrone (URL distante ou gros fichier), scruter l'arrivée des pages
+            checkTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] timer in
+                guard let self = self, let pdfView = self.pdfView else {
+                    timer.invalidate()
+                    return
+                }
+                self.checkRetries += 1
+                
+                if let doc = pdfView.document, doc.pageCount > 0 {
+                    self.spinner?.stopAnimating()
+                    timer.invalidate()
+                    self.checkTimer = nil
+                    let targetIdx = max(0, targetPage - 1)
+                    if let page = doc.page(at: min(targetIdx, doc.pageCount - 1)) {
+                        pdfView.go(to: page)
+                    }
+                } else if self.checkRetries > 40 {
+                    // Au bout de 6 secondes sans page, tenter une réinstanciation ou stopper le spinner
+                    self.spinner?.stopAnimating()
+                    timer.invalidate()
+                    self.checkTimer = nil
+                }
+            }
         }
         
         func clearHighlights() {
             if let (page, annotation) = activeHighlight {
                 page.removeAnnotation(annotation)
                 activeHighlight = nil
+            }
+        }
+        
+        @objc func documentChanged(_ notification: Notification) {
+            guard let pdfView = pdfView, let doc = pdfView.document, doc.pageCount > 0 else { return }
+            spinner?.stopAnimating()
+            checkTimer?.invalidate()
+            checkTimer = nil
+            let targetIdx = max(0, (parent.targetPage ?? parent.currentPage) - 1)
+            if let page = doc.page(at: min(targetIdx, doc.pageCount - 1)) {
+                pdfView.go(to: page)
             }
         }
         
