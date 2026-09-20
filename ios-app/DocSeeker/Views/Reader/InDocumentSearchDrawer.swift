@@ -47,120 +47,116 @@ public struct InDocumentSearchDrawer: View {
     }
     
     public var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                // Barre de recherche interne au document
-                HStack(spacing: 8) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundColor(.secondary)
-                        TextField("Rechercher dans ce document...", text: $query)
-                            .textFieldStyle(.plain)
-                            .autocapitalization(.none)
-                            .disableAutocorrection(true)
-                            .onSubmit {
-                                performInDocSearch()
+        if isSidebarMode {
+            contentView
+                .background(Color(.systemBackground))
+        } else {
+            NavigationStack {
+                contentView
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Fermer") {
+                                dismiss()
                             }
-                        if !query.isEmpty {
-                            Button(action: {
-                                query = ""
-                                occurrences = currentOccurrences
-                            }) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundColor(.secondary)
-                            }
+                            .accessibilityIdentifier("drawer_close")
                         }
                     }
-                    .padding(8)
-                    .background(Color(.tertiarySystemFill))
-                    .cornerRadius(10)
-                    
-                    if !query.isEmpty {
-                        Button("Chercher") {
+            }
+        }
+    }
+    
+    private var contentView: some View {
+        VStack(spacing: 0) {
+            // Barre de recherche interne au document
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                    TextField("Rechercher dans ce document...", text: $query)
+                        .textFieldStyle(.plain)
+                        .autocapitalization(.none)
+                        .disableAutocorrection(true)
+                        .onSubmit {
                             performInDocSearch()
                         }
-                        .font(.subheadline.bold())
+                    if !query.isEmpty {
+                        Button(action: {
+                            query = ""
+                            occurrences = currentOccurrences
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(Color(.secondarySystemGroupedBackground))
+                .padding(8)
+                .background(Color(.tertiarySystemFill))
+                .cornerRadius(10)
                 
-                Divider()
-                
-                // Liste des vignettes en pleine largeur avec auto-défilement
-                if isSearching {
-                    VStack(spacing: 12) {
-                        Spacer()
-                        ProgressView()
-                        Text("Recherche dans le document...")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Spacer()
+                if !query.isEmpty {
+                    Button("Chercher") {
+                        performInDocSearch()
                     }
-                } else if occurrences.isEmpty {
-                    VStack(spacing: 12) {
-                        Spacer()
-                        Image(systemName: "doc.text.magnifyingglass")
-                            .font(.system(size: 40))
-                            .foregroundColor(.secondary.opacity(0.4))
-                        Text(query.isEmpty ? "Entrez des mots-clés pour rechercher dans ce document" : "Aucune occurrence trouvée pour \"\(query)\"")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                        Spacer()
-                    }
-                } else {
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            LazyVStack(spacing: 14) {
-                                HStack {
-                                    Text("\(occurrences.count) extraits trouvés")
-                                        .font(.caption.bold())
-                                        .foregroundColor(.secondary)
-                                        .accessibilityIdentifier("occurrences_count_label")
-                                    Spacer()
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.top, 10)
-                                
-                                ForEach(Array(occurrences.enumerated()), id: \.element.id) { index, occ in
-                                    occurrenceItemView(index: index, occ: occ)
-                                        .id(occ.id)
-                                        .padding(.horizontal, 16)
-                                }
-                            }
-                            .padding(.bottom, 24)
-                        }
-                        .onAppear {
-                            if occurrences.indices.contains(activeOccurrenceIndex) {
-                                proxy.scrollTo(occurrences[activeOccurrenceIndex].id, anchor: .center)
-                            }
-                        }
-                    }
+                    .font(.subheadline.bold())
                 }
             }
-            .navigationTitle("Extraits du document")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(action: {
-                        if isSidebarMode {
-                            onCloseSidebar?()
-                        } else {
-                            dismiss()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color(.secondarySystemGroupedBackground))
+            
+            Divider()
+            
+            // Liste des vignettes en pleine largeur avec auto-défilement
+            if isSearching {
+                VStack(spacing: 12) {
+                    Spacer()
+                    ProgressView()
+                    Text("Recherche dans le document...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+            } else if occurrences.isEmpty {
+                VStack(spacing: 12) {
+                    Spacer()
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .font(.system(size: 40))
+                        .foregroundColor(.secondary.opacity(0.4))
+                    Text(query.isEmpty ? "Entrez des mots-clés pour rechercher dans ce document" : "Aucune occurrence trouvée pour \"\(query)\"")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    Spacer()
+                }
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 14) {
+                            HStack {
+                                Text("\(occurrences.count) extraits trouvés")
+                                    .font(.caption.bold())
+                                    .foregroundColor(.secondary)
+                                    .accessibilityIdentifier("occurrences_count_label")
+                                Spacer()
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.top, 10)
+                            
+                            ForEach(Array(occurrences.enumerated()), id: \.element.id) { index, occ in
+                                occurrenceItemView(index: index, occ: occ)
+                                    .id(occ.id)
+                                    .padding(.horizontal, 16)
+                            }
                         }
-                    }) {
-                        if isSidebarMode {
-                            Image(systemName: "sidebar.left")
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundColor(.blue)
-                        } else {
-                            Text("Fermer")
+                        .padding(.bottom, 24)
+                    }
+                    .onAppear {
+                        if occurrences.indices.contains(activeOccurrenceIndex) {
+                            proxy.scrollTo(occurrences[activeOccurrenceIndex].id, anchor: .center)
                         }
                     }
-                    .accessibilityIdentifier("drawer_close")
                 }
             }
         }

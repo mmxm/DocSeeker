@@ -351,18 +351,20 @@ public struct GoodnotesPDFReaderView: View {
     
     private var readerToolbar: some View {
         HStack(spacing: 10) {
-            // Bouton volet latéral pleine largeur
+            // Bouton volet latéral (bascule l'ouverture/fermeture avec animation fluide)
             Button(action: {
-                showSearchDrawer = true
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    showSearchDrawer.toggle()
+                }
             }) {
                 Image(systemName: "sidebar.left")
                     .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(.blue)
+                    .foregroundColor(showSearchDrawer ? .white : .blue)
                     .frame(width: 28, height: 28)
-                    .background(Color(.tertiarySystemFill))
+                    .background(showSearchDrawer ? Color.blue : Color(.tertiarySystemFill))
                     .cornerRadius(6)
             }
-            .accessibilityLabel("Afficher les vignettes et la recherche interne")
+            .accessibilityLabel("Afficher ou masquer les vignettes et la recherche interne")
             .accessibilityIdentifier("reader_open_drawer")
             
             Spacer()

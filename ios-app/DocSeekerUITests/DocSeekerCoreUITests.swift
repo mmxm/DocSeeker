@@ -508,18 +508,24 @@ final class DocSeekerCoreUITests: XCTestCase {
         firstResult.tap()
         sleep(2)
         
-        // 2. Bascule du volet latéral de recherche (sidebar.left)
-        let sidebarBtn = harness.app.buttons["reader_sidebar_toggle"]
+        // 2. Bascule du volet latéral de recherche via l'icône unique du dessus (reader_open_drawer)
+        let sidebarBtn = harness.app.buttons["reader_open_drawer"]
         if sidebarBtn.waitForExistence(timeout: 4.0) {
+            // OUVRIR le volet
             sidebarBtn.tap()
             sleep(1)
             
-            // Le volet de recherche doit être affiché
-            let drawerClose = harness.app.buttons["drawer_close"]
-            XCTAssertTrue(drawerClose.waitForExistence(timeout: 3.0), "Le volet de recherche interne doit être visible")
+            // Le champ de recherche interne du volet doit être présent
+            let searchField = harness.app.textFields["Rechercher dans ce document..."]
+            XCTAssertTrue(searchField.waitForExistence(timeout: 3.0), "La barre de recherche du volet doit être affichée")
             
-            // Fermeture du volet
-            drawerClose.tap()
+            // FERMER le volet en retapant sur le même bouton du dessus (ou drawer_close sur iPhone)
+            let drawerClose = harness.app.buttons["drawer_close"]
+            if drawerClose.exists {
+                drawerClose.tap()
+            } else {
+                sidebarBtn.tap()
+            }
             sleep(1)
         }
         
