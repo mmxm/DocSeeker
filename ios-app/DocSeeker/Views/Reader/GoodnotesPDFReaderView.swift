@@ -82,9 +82,12 @@ public struct GoodnotesPDFReaderView: View {
                     )
                     .edgesIgnoringSafeArea([.leading, .trailing, .bottom])
                     .onAppear {
-                        // Lancer la mise en cache complète en tâche de fond de manière transparente
+                        // Lancer la mise en cache complète en tâche de fond après un court délai
+                        // pour préserver 100% de la bande passante pour la première page en streaming
                         if localDb.getLocalPDFURL(docId: tab.docId) == nil && !isOffline {
-                            downloadQueue.enqueue(docId: tab.docId)
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                                downloadQueue.enqueue(docId: tab.docId)
+                            }
                         }
                     }
                 } else if isOffline {

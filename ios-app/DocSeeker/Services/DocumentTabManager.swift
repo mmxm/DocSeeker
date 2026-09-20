@@ -165,7 +165,7 @@ public final class DocumentTabManager: ObservableObject {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         
-        Task {
+        Task.detached(priority: .userInitiated) {
             var fullOccurrences: [OccurrenceResult] = []
             let isCached = LocalDatabase.shared.isDocumentCached(docId: docId)
             
@@ -192,12 +192,14 @@ public final class DocumentTabManager: ObservableObject {
         }
     }
     
-    /// Télécharge et met en cache local immédiatement le document s'il n'est pas présent
+    /// Télécharge et met en cache local en tâche de fond après avoir laissé priorité au streaming initial
     private func ensureLocalCache(docId: Int64) {
         let db = LocalDatabase.shared
         guard !db.isDocumentCached(docId: docId) else { return }
         guard NetworkMonitor.shared.isConnected && APIClient.shared.isServerReachable else { return }
         
-        DownloadQueueManager.shared.enqueue(docId: docId)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            DownloadQueueManager.shared.enqueue(docId: docId)
+        }
     }
 }

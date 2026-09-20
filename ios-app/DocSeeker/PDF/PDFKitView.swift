@@ -145,22 +145,56 @@ public struct PDFKitView: UIViewRepresentable {
             guard let pdfView = pdfView else { return }
             
             checkTimer?.invalidate()
+            checkTimer = nil
             checkRetries = 0
             spinner?.startAnimating()
             
-            if let doc = PDFDocument(url: url) {
-                pdfView.document = doc
-                if doc.pageCount > 0 {
-                    spinner?.stopAnimating()
-                    let targetIdx = max(0, targetPage - 1)
-                    if let page = doc.page(at: min(targetIdx, doc.pageCount - 1)) {
-                        pdfView.go(to: page)
+            if url.isFileURL {
+                // 1. Document local sur disque : ouverture synchrone immédiate (quasi 0 ms)
+                if let doc = PDFDocument(url: url) {
+                    pdfView.document = doc
+                    if doc.pageCount > 0 {
+                        spinner?.stopAnimating()
+                        let targetIdx = max(0, targetPage - 1)
+                        if let page = doc.page(at: min(targetIdx, doc.pageCount - 1)) {
+                            pdfView.go(to: page)
+                        }
+                        return
                     }
-                    return
                 }
+            } else {
+                // 2. URL HTTP distante (streaming Byte-Range partiel) :
+                // Initialisation ASYNCHRONE sur thread d'arrière-plan pour éviter de bloquer le Main Thread
+                // pendant la négociation réseau des tables xref et headers PDFKit.
+                DispatchQueue.global(qos: .userInitiated).async { [weak self, weak pdfView] in
+                    let doc = PDFDocument(url: url)
+                    
+                    DispatchQueue.main.async {
+                        guard let self = self, let pdfView = pdfView else { return }
+                        if let doc = doc {
+                            pdfView.document = doc
+                            if doc.pageCount > 0 {
+                                self.spinner?.stopAnimating()
+                                let targetIdx = max(0, targetPage - 1)
+                                if let page = doc.page(at: min(targetIdx, doc.pageCount - 1)) {
+                                    pdfView.go(to: page)
+                                }
+                                return
+                            }
+                        }
+                        // Si le flux nécessite d'attendre l'arrivée progressive des pages
+                        self.startIncrementalCheckTimer(targetPage: targetPage)
+                    }
+                }
+                return
             }
             
-            // Si chargement asynchrone (URL distante ou gros fichier), scruter l'arrivée des pages
+            startIncrementalCheckTimer(targetPage: targetPage)
+        }
+        
+        private func startIncrementalCheckTimer(targetPage: Int) {
+            checkTimer?.invalidate()
+            checkRetries = 0
             checkTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] timer in
                 guard let self = self, let pdfView = self.pdfView else {
                     timer.invalidate()
@@ -177,7 +211,7 @@ public struct PDFKitView: UIViewRepresentable {
                         pdfView.go(to: page)
                     }
                 } else if self.checkRetries > 40 {
-                    // Au bout de 6 secondes sans page, tenter une réinstanciation ou stopper le spinner
+                    // Au bout de 6 secondes sans page, stopper le spinner
                     self.spinner?.stopAnimating()
                     timer.invalidate()
                     self.checkTimer = nil
