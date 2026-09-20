@@ -251,6 +251,8 @@ pub unsafe extern "C" fn docseeker_sync_folders(
         let id_strs: Vec<String> = keep_ids.iter().map(|id| id.to_string()).collect();
         let delete_sql = format!("DELETE FROM folders WHERE id NOT IN ({})", id_strs.join(","));
         let _ = tx.execute(&delete_sql, []);
+    } else {
+        let _ = tx.execute("DELETE FROM folders;", []);
     }
 
     if tx.commit().is_err() {

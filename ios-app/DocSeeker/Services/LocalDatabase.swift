@@ -260,13 +260,22 @@ public final class LocalDatabase: ObservableObject {
 
     /// Synchronise l'intégralité du catalogue des métadonnées de documents dans SQLite local
     public func syncAllDocumentsMetadata(docs: [DocumentItem]) {
-        guard !docs.isEmpty else { return }
         var db: OpaquePointer?
         guard sqlite3_open_v2(dbURL.path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else { return }
         defer { sqlite3_close(db) }
 
         sqlite3_exec(db, "PRAGMA foreign_keys = OFF;", nil, nil, nil)
         sqlite3_exec(db, "BEGIN TRANSACTION;", nil, nil, nil)
+        
+        // 1. Purger les documents qui n'existent plus sur le serveur (suppression ou changement de serveur)
+        if !docs.isEmpty {
+            let idList = docs.map { "\($0.id)" }.joined(separator: ",")
+            let purgeSql = "DELETE FROM documents WHERE id NOT IN (\(idList));"
+            sqlite3_exec(db, purgeSql, nil, nil, nil)
+        } else {
+            sqlite3_exec(db, "DELETE FROM documents;", nil, nil, nil)
+        }
+
         var stmt: OpaquePointer?
         let sql = """
         INSERT INTO documents (id, filename, title, folder_id, total_pages, file_size, status)
@@ -300,6 +309,17 @@ public final class LocalDatabase: ObservableObject {
             sqlite3_finalize(stmt)
         }
         sqlite3_exec(db, "COMMIT;", nil, nil, nil)
+        refreshCachedDocs()
+    }
+    
+    /// Réinitialisation complète du cache local (fichiers PDF et base SQLite locale)
+    public func clearAllCache() {
+        let fm = FileManager.default
+        try? fm.removeItem(at: pdfDirectoryURL)
+        try? fm.createDirectory(at: pdfDirectoryURL, withIntermediateDirectories: true)
+        try? fm.removeItem(at: dbURL)
+        _ = RustBridge.shared.initDatabase(at: dbURL)
+        refreshCachedDocs()
     }
 }
 

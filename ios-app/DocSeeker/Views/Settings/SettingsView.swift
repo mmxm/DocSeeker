@@ -31,6 +31,9 @@ public struct SettingsView: View {
                             .autocapitalization(.none)
                             .disableAutocorrection(true)
                             .keyboardType(.URL)
+                            .onSubmit {
+                                api.setServerURL(serverURLInput)
+                            }
                     }
                     
                     SecureField("Mot de passe administrateur", text: $passwordInput)
@@ -175,12 +178,9 @@ public struct SettingsView: View {
     }
     
     private func clearAllCache() {
-        let fm = FileManager.default
-        try? fm.removeItem(at: localDb.pdfDirectoryURL)
-        try? fm.createDirectory(at: localDb.pdfDirectoryURL, withIntermediateDirectories: true)
-        try? fm.removeItem(at: localDb.dbURL)
-        _ = RustBridge.shared.initDatabase(at: localDb.dbURL)
-        localDb.refreshCachedDocs()
+        localDb.clearAllCache()
+        DocumentTabManager.shared.closeAllTabs()
+        DownloadQueueManager.shared.cancelAll()
         calculateStorage()
     }
     

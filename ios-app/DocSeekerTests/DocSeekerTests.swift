@@ -300,7 +300,7 @@ final class DocSeekerTests: XCTestCase {
         queue.resumeInterruptedTasks()
         
         let exp = expectation(description: "Resume completed")
-        DispatchQueue.main.async {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             exp.fulfill()
         }
         wait(for: [exp], timeout: 2.0)
@@ -599,6 +599,61 @@ final class DocSeekerTests: XCTestCase {
         
         XCTAssertEqual(http.statusCode, 200, "La requête de crop authentifiée avec token doit réussir (200 OK)")
         XCTAssertGreaterThan(data.count, 1000, "L'image WebP doit contenir des octets")
+    }
+    
+    // =========================================================================
+    // 12. Purge complète lors d'un changement de serveur (Cache, Fichiers, SQLite, Onglets)
+    // =========================================================================
+    
+    func testCompletePurgeOnServerChange() {
+        let initialURL = APIClient.shared.serverURL
+        defer {
+            APIClient.shared.setServerURL(initialURL)
+        }
+        
+        // 1. Simuler des fichiers PDF sur disque et des données en base locale (serveur test)
+        let dummyDocId: Int64 = 7777
+        let dummyPdfURL = LocalDatabase.shared.localPdfURL(for: dummyDocId)
+        let dummyContent = "Test PDF Content".data(using: .utf8)!
+        try? dummyContent.write(to: dummyPdfURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dummyPdfURL.path))
+        
+        let dummyDoc = DocumentItem(id: dummyDocId, filename: "test.pdf", title: "Test Doc", folder_id: nil, total_pages: 1, file_size: 100, created_at: nil, updated_at: nil)
+        LocalDatabase.shared.syncAllDocumentsMetadata(docs: [dummyDoc])
+        XCTAssertFalse(LocalDatabase.shared.getLocalDocuments(folderId: nil).isEmpty)
+        
+        // 2. Ouvrir un onglet dans DocumentTabManager
+        DocumentTabManager.shared.openDocument(docId: dummyDocId, title: "Test Doc", filename: "test.pdf")
+        XCTAssertEqual(DocumentTabManager.shared.openTabs.count, 1)
+        
+        // 3. Changement complet de serveur (ex: passage au NAS Synology de production)
+        let newURL = "http://synology-nas.local:8080"
+        APIClient.shared.setServerURL(newURL)
+        
+        // 4. Attendre que la purge complète s'exécute
+        let exp = expectation(description: "Purge completed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 2.0)
+        
+        // 5. Validations formelles :
+        // - Le fichier PDF physique sur disque a été supprimé par la purge
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dummyPdfURL.path),
+                       "La purge complète doit supprimer les fichiers PDF en cache")
+        // - Le statut en cache est faux
+        XCTAssertFalse(LocalDatabase.shared.isDocumentCached(docId: dummyDocId))
+        // - La base SQLite a été réinitialisée et vidée des anciens documents
+        XCTAssertTrue(LocalDatabase.shared.getLocalDocuments(folderId: nil).isEmpty,
+                      "La base locale SQLite doit être totalement purgée")
+        // - Tous les onglets ont été fermés
+        XCTAssertTrue(DocumentTabManager.shared.openTabs.isEmpty,
+                      "Tous les onglets ouverts de l'ancien serveur doivent être fermés")
+        XCTAssertNil(DocumentTabManager.shared.activeTabId)
+        XCTAssertFalse(DocumentTabManager.shared.isViewingReader)
+        // - La file de téléchargement est vide
+        XCTAssertTrue(DownloadQueueManager.shared.activeTasks.isEmpty)
+        XCTAssertTrue(DownloadQueueManager.shared.queuedDocIds.isEmpty)
     }
 }
 

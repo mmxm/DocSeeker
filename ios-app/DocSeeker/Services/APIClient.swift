@@ -154,11 +154,17 @@ public final class APIClient: ObservableObject {
             return
         }
         
+        let serverChanged = !self.serverURL.isEmpty && self.serverURL != clean
         self.serverURL = clean
         KeychainManager.shared.save(key: "server_url", value: clean)
         self.isAuthenticated = false
-        // CR-1 : la sentinel :9999 est supprimée — le statut hors-ligne est déterminé uniquement
-        // par NWPathMonitor + probeServerReachability(), pas par une correspondance de chaîne
+        if serverChanged {
+            DispatchQueue.main.async {
+                LocalDatabase.shared.clearAllCache()
+                DocumentTabManager.shared.closeAllTabs()
+                DownloadQueueManager.shared.cancelAll()
+            }
+        }
     }
 
     public func login(password: String) async throws -> Bool {

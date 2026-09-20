@@ -112,6 +112,12 @@ public final class DocumentTabManager: ObservableObject {
         }
     }
     
+    public func closeAllTabs() {
+        openTabs.removeAll()
+        activeTabId = nil
+        isViewingReader = false
+    }
+    
     public func returnToHome() {
         self.isViewingReader = false
     }

@@ -111,6 +111,26 @@ public final class DownloadQueueManager: NSObject, ObservableObject, URLSessionD
         }
     }
 
+    /// Annule l'ensemble des téléchargements et vide toutes les files d'attente (changement de serveur ou purge cache)
+    public func cancelAll() {
+        session.getAllTasks { [weak self] tasks in
+            guard let self = self else { return }
+            for task in tasks {
+                task.cancel()
+            }
+            self.mapLock.lock()
+            self.taskMap.removeAll()
+            self.resumeDataMap.removeAll()
+            self.mapLock.unlock()
+            DispatchQueue.main.async {
+                self.activeTasks.removeAll()
+                self.queuedDocIds.removeAll()
+                self.interruptedTasks.removeAll()
+                self.runningCount = 0
+            }
+        }
+    }
+
     public func isDownloading(docId: Int64) -> Bool {
         activeTasks.keys.contains(docId) || queuedDocIds.contains(docId)
     }

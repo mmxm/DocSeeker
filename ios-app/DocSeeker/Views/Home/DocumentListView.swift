@@ -101,6 +101,20 @@ public struct DocumentListView: View {
         .task {
             await refreshAll()
         }
+        .onAppear {
+            Task {
+                await refreshAll()
+            }
+        }
+        .onChange(of: api.serverURL) { _ in
+            folderStack.removeAll()
+            allFolders.removeAll()
+            currentDocuments.removeAll()
+            folderDocs.removeAll()
+            Task {
+                await refreshAll()
+            }
+        }
     }
     
     // MARK: - En-tête Compact (Style Goodnotes)
