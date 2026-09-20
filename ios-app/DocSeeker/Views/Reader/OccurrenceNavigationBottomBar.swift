@@ -1,5 +1,6 @@
 // OccurrenceNavigationBottomBar.swift
 // Bandeau flottant de navigation des correspondances en bas d'écran (Style Goodnotes - Screenshot 2)
+// Transparent et discret : auto-fade à 45% d'opacité après 2s d'inactivité
 
 import SwiftUI
 
@@ -10,6 +11,12 @@ public struct OccurrenceNavigationBottomBar: View {
     public let onPrevious: () -> Void
     public let onNext: () -> Void
     public let onClose: () -> Void
+    
+    // Auto-fade : 100% visible au début, réduit à 45% après 2s sans interaction
+    @State private var isIdling: Bool = false
+    @State private var idleTimer: Timer? = nil
+    
+    private var barOpacity: Double { isIdling ? 0.45 : 1.0 }
     
     public init(
         searchQuery: String,
@@ -28,9 +35,12 @@ public struct OccurrenceNavigationBottomBar: View {
     }
     
     public var body: some View {
-        HStack(spacing: 12) {
-            // Bouton Fermer à gauche
-            Button(action: onClose) {
+        HStack(spacing: 10) {
+            // Bouton Fermer
+            Button(action: {
+                wakeUp()
+                onClose()
+            }) {
                 Text("Fermer")
                     .font(.subheadline.bold())
                     .foregroundColor(.blue)
@@ -39,60 +49,87 @@ public struct OccurrenceNavigationBottomBar: View {
             
             // Jeton du mot recherché
             Text(searchQuery)
-                .font(.subheadline.monospaced())
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color(.secondarySystemFill))
-                .cornerRadius(6)
+                .font(.caption.monospaced())
                 .lineLimit(1)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Color(.secondarySystemFill).opacity(0.7))
+                .cornerRadius(5)
             
-            // Compteur de correspondances
+            // Compteur compact
             if totalCount > 0 {
-                Text("\(currentIndex + 1) sur \(totalCount) correspondances")
-                    .font(.caption)
+                Text("\(currentIndex + 1)/\(totalCount)")
+                    .font(.caption2.monospacedDigit())
                     .foregroundColor(.secondary)
                     .lineLimit(1)
-            } else {
-                Text("Aucune correspondance")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .accessibilityIdentifier("occurrence_counter")
             }
             
-            Spacer()
+            Spacer(minLength: 6)
             
-            // Boutons de navigation Précédente / Suivante
-            HStack(spacing: 6) {
-                Button(action: onPrevious) {
+            // Boutons précédent / suivant
+            HStack(spacing: 4) {
+                Button(action: {
+                    wakeUp()
+                    onPrevious()
+                }) {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 13, weight: .bold))
                         .foregroundColor(totalCount > 1 ? .blue : .secondary.opacity(0.4))
-                        .frame(width: 32, height: 32)
-                        .background(Color(.tertiarySystemFill))
+                        .frame(width: 30, height: 30)
+                        .background(Color(.tertiarySystemFill).opacity(0.6))
                         .clipShape(Circle())
                 }
                 .disabled(totalCount <= 1)
                 .accessibilityIdentifier("occurrence_prev")
                 
-                Button(action: onNext) {
+                Button(action: {
+                    wakeUp()
+                    onNext()
+                }) {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 13, weight: .bold))
                         .foregroundColor(totalCount > 1 ? .blue : .secondary.opacity(0.4))
-                        .frame(width: 32, height: 32)
-                        .background(Color(.tertiarySystemFill))
+                        .frame(width: 30, height: 30)
+                        .background(Color(.tertiarySystemFill).opacity(0.6))
                         .clipShape(Circle())
                 }
                 .disabled(totalCount <= 1)
                 .accessibilityIdentifier("occurrence_next")
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
         .background(
-            RoundedRectangle(cornerRadius: 16)
+            Capsule()
                 .fill(.ultraThinMaterial)
-                .shadow(color: Color.black.opacity(0.12), radius: 10, x: 0, y: 4)
+                // Fond supplémentaire très léger pour renforcer la lisibilité du texte sans opacifier
+                .overlay(
+                    Capsule().fill(Color(.systemBackground).opacity(0.15))
+                )
+                .shadow(color: Color.black.opacity(0.10), radius: 8, x: 0, y: 2)
         )
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 12)
+        .opacity(barOpacity)
+        .animation(.easeInOut(duration: 0.5), value: isIdling)
+        .onAppear { scheduleIdle() }
+        .onDisappear { idleTimer?.invalidate() }
+        // Tap quelque part sur le bandeau réveille l'opacité
+        .onTapGesture { wakeUp() }
+    }
+    
+    // MARK: - Auto-fade logic
+    
+    private func scheduleIdle() {
+        idleTimer?.invalidate()
+        isIdling = false
+        idleTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { _ in
+            withAnimation { isIdling = true }
+        }
+    }
+    
+    private func wakeUp() {
+        scheduleIdle() // redémarre le compteur et remet opacité à 100%
     }
 }

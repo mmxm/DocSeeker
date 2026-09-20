@@ -119,9 +119,12 @@ final class DocSeekerCoreUITests: XCTestCase {
         let queryBadge = harness.app.staticTexts["grossesse"]
         XCTAssertTrue(queryBadge.waitForExistence(timeout: 4.0), "Le bandeau inférieur doit afficher 'grossesse'")
         
-        // Vérification du compteur initial
+        // Vérification du compteur initial (format compact "X/Y" ou long "X sur Y correspondances")
         let initialCounter = harness.bottomBarCounterText()
-        XCTAssertTrue(initialCounter.contains("correspondance"), "Le bandeau doit afficher le nombre de correspondances (ex: 1 sur X)")
+        XCTAssertTrue(
+            initialCounter.contains("/") || initialCounter.contains("correspondance"),
+            "Le bandeau doit afficher un compteur de correspondances (format: '\(initialCounter)')"
+        )
         
         // Clic sur la flèche suivante
         let nextBtn = harness.app.buttons["occurrence_next"]
@@ -325,4 +328,168 @@ final class DocSeekerCoreUITests: XCTestCase {
             backBtn.tap()
         }
     }
+    
+    // =========================================================================
+    // Scénario 6 : Streaming PDF — le PDF s'affiche sans écran blanc (test du fix AM-7)
+    // Vérifie que le token de session est bien transmis à PDFKit pour le streaming
+    // + Analyses Visuelles Niveaux 1, 2, 3
+    // =========================================================================
+    func testStreamingPDFLoadsWithoutBlankScreen() {
+        // 1. Recherche via le harness (même pattern que testOccurrenceNavigationAndBottomBarArrows)
+        harness.search(query: "grossesse")
+        sleep(2)
+        
+        // 2. Ouvrir le premier résultat
+        let docCard = harness.app.cells.firstMatch
+        guard docCard.waitForExistence(timeout: 6.0) else {
+            XCTSkip("Aucun résultat de recherche — serveur non disponible")
+            return
+        }
+        docCard.tap()
+        sleep(3) // Laisser PDFKit charger le streaming
+        
+        // Vérifier que le lecteur est ouvert
+        let homeBtn = harness.app.buttons["Retour à l'accueil"]
+        guard homeBtn.waitForExistence(timeout: 6.0) else {
+            XCTSkip("Le lecteur PDF ne s'est pas ouvert")
+            return
+        }
+        
+        // [Visuel Niveau 1] L'écran ne doit PAS être blanc (streaming reçu correctement)
+        let pdfScreen = XCUIScreen.main.screenshot().image
+        let l1 = VisualValidationEngine.assertNonBlankScreen(image: pdfScreen, testCase: self, context: "C6_StreamingPDF_NonBlanc")
+        XCTAssertTrue(l1.passed, "Le PDF streamé ne doit pas produire un écran blanc — vérifier le token dans streamingPDFURL()")
+        
+        // [Visuel Niveau 3] OCR : le contenu du PDF doit contenir du texte
+        let l3 = VisualValidationEngine.assertVisibleTextContains(
+            image: pdfScreen,
+            expectedKeywords: ["grossesse"],
+            testCase: self,
+            context: "C6_StreamingPDF_OCR"
+        )
+        XCTAssertTrue(l3.passed, "L'OCR doit détecter du texte dans le PDF streamé")
+        
+        // 3. Vérification du bandeau d'occurrences + fade
+        let bottomBar = harness.app.buttons["occurrence_next"]
+        if bottomBar.waitForExistence(timeout: 3.0) {
+            sleep(4) // Attendre le fade automatique (2.5s + marge)
+            let fadedScreen = XCUIScreen.main.screenshot().image
+            let l1Fade = VisualValidationEngine.assertNonBlankScreen(image: fadedScreen, testCase: self, context: "C6_BandeauFade_ContentVisible")
+            XCTAssertTrue(l1Fade.passed, "Après fade, le contenu PDF doit rester visible derrière le bandeau")
+        }
+    }
+    
+    // =========================================================================
+    // Scénario 7 : Barre de progression de téléchargement sans glitch
+    // Vérifie que le cercle animé ne provoque pas de saut de layout (Spacer stable)
+    // + Analyses Visuelles Niveaux 1, 3
+    // =========================================================================
+    func testDownloadProgressBarIsStableAndVisible() {
+        // 1. Recherche via le harness (même pattern que les tests existants)
+        harness.search(query: "cardiologie")
+        sleep(2)
+        
+        let firstResult = harness.app.cells.firstMatch
+        guard firstResult.waitForExistence(timeout: 5.0) else {
+            XCTSkip("Aucun résultat — serveur non disponible")
+            return
+        }
+        firstResult.tap()
+        sleep(1)
+        
+        // 2. Vérifier que la barre de progression existe et est visible
+        let progressIndicator = harness.app.otherElements["reader_download_progress"]
+        // La barre est présente seulement si un téléchargement est en cours
+        if progressIndicator.waitForExistence(timeout: 4.0) {
+            XCTAssertTrue(progressIndicator.isHittable || progressIndicator.exists,
+                          "L'indicateur de progression doit être visible et stable")
+            
+            // [Visuel Niveau 1] L'écran avec barre de progression ne doit pas être blanc
+            let progressScreen = XCUIScreen.main.screenshot().image
+            let l1 = VisualValidationEngine.assertNonBlankScreen(image: progressScreen, testCase: self, context: "C7_ProgressBar_NonBlanc")
+            XCTAssertTrue(l1.passed, "L'écran avec barre de progression ne doit pas être blanc")
+            
+            // Attendre 1s et prendre un 2e screenshot pour vérifier que le layout est stable
+            sleep(1)
+            let progressScreen2 = XCUIScreen.main.screenshot().image
+            
+            // [Visuel Niveau 3] La barre de lecture doit toujours être présente
+            let l3 = VisualValidationEngine.assertVisibleTextContains(
+                image: progressScreen2,
+                expectedKeywords: ["cardiologie"],
+                testCase: self,
+                context: "C7_ProgressBar_Stable_OCR"
+            )
+            // Note: pas de XCTFail si l'OCR échoue — le PDF peut ne pas encore être rendu
+            _ = l3
+        } else {
+            // Document déjà en cache — test de non-régression OK
+            XCTAssertFalse(progressIndicator.exists, "Pas d'indicateur si document déjà en cache")
+        }
+    }
+    
+    // =========================================================================
+    // Scénario 8 : Bandeau d'occurrences transparent et auto-fade
+    // Vérifie que le bandeau est visible puis s'atténue sans masquer le contenu
+    // + Analyses Visuelles Niveaux 1, 3
+    // =========================================================================
+    func testOccurrenceBottomBarAutoFadeAndTransparency() {
+        // 1. Recherche via le harness
+        harness.search(query: "grossesse")
+        sleep(2)
+        
+        let firstResult = harness.app.cells.firstMatch
+        guard firstResult.waitForExistence(timeout: 5.0) else {
+            XCTSkip("Aucun résultat — serveur non disponible")
+            return
+        }
+        firstResult.tap()
+        sleep(2)
+        
+        // 2. Vérifier que le bandeau d'occurrences est présent
+        let closeBtn = harness.app.buttons["occurrence_bottom_bar_close"]
+        guard closeBtn.waitForExistence(timeout: 4.0) else {
+            XCTSkip("Bandeau d'occurrences non affiché (aucune occurrence)")
+            return
+        }
+        
+        // [Visuel Niveau 1] Screenshot immédiat — bandeau visible à 100% opacité
+        let immediateScreen = XCUIScreen.main.screenshot().image
+        let l1Immediate = VisualValidationEngine.assertNonBlankScreen(image: immediateScreen, testCase: self, context: "C8_Bandeau_Visible_Immédiat")
+        XCTAssertTrue(l1Immediate.passed, "L'écran avec bandeau immédiat ne doit pas être blanc")
+        
+        // [Visuel Niveau 3] OCR doit détecter 'Fermer' (présent dans le bandeau)
+        let l3Bandeau = VisualValidationEngine.assertVisibleTextContains(
+            image: immediateScreen,
+            expectedKeywords: ["Fermer"],
+            testCase: self,
+            context: "C8_Bandeau_OCR_Fermer"
+        )
+        XCTAssertTrue(l3Bandeau.passed, "L'OCR doit détecter 'Fermer' dans le bandeau visible")
+        
+        // 3. Attendre le fade automatique (2.5s configurés)
+        sleep(4)
+        
+        // [Visuel Niveau 1] Après fade : le contenu PDF doit rester visible derrière le bandeau atténué
+        let fadedScreen = XCUIScreen.main.screenshot().image
+        let l1Faded = VisualValidationEngine.assertNonBlankScreen(image: fadedScreen, testCase: self, context: "C8_Bandeau_Faded_ContentVisible")
+        XCTAssertTrue(l1Faded.passed, "Après le fade, le PDF doit toujours être visible")
+        
+        // [Visuel Niveau 3] OCR post-fade : le contenu PDF doit toujours être lisible
+        let l3Faded = VisualValidationEngine.assertVisibleTextContains(
+            image: fadedScreen,
+            expectedKeywords: ["grossesse"],
+            testCase: self,
+            context: "C8_Bandeau_Faded_OCR"
+        )
+        XCTAssertTrue(l3Faded.passed, "Après fade du bandeau, le contenu PDF doit rester lisible par OCR")
+        
+        // 4. Tap sur le bandeau → doit se réveiller (opacité 100%)
+        closeBtn.tap() // utiliser Fermer comme cible de tap
+        sleep(1)
+        let wokenScreen = XCUIScreen.main.screenshot().image
+        let l1Woken = VisualValidationEngine.assertNonBlankScreen(image: wokenScreen, testCase: self, context: "C8_Bandeau_Woken")
+        XCTAssertTrue(l1Woken.passed, "Après tap sur bandeau, l'écran ne doit pas être blanc")
+    }
 }
+

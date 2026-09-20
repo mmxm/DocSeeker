@@ -100,9 +100,14 @@ public final class APIClient: ObservableObject {
     }
 
     public func streamingPDFURL(for docId: Int64) -> URL? {
-        // AM-7 : le token est transmis via le header Authorization dans les requêtes URLSession
-        // Cette URL n'inclut plus le token en query string pour éviter son exposition dans les logs
-        let urlStr = "\(serverURL)/api/pdf/\(docId)"
+        // PDFKit (PDFDocument(url:)) fait ses propres requêtes HTTP sans pouvoir injecter
+        // de headers Authorization — le token doit donc rester dans l'URL en query param
+        // UNIQUEMENT pour ce cas d'usage. Les téléchargements URLSession utilisent le header
+        // Authorization: Bearer (cf. authorizedRequest()).
+        var urlStr = "\(serverURL)/api/pdf/\(docId)"
+        if let token = sessionToken ?? KeychainManager.shared.get(key: "session_token") {
+            urlStr += "?token=\(token)"
+        }
         return URL(string: urlStr)
     }
 

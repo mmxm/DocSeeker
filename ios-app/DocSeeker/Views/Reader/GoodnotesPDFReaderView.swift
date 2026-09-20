@@ -15,6 +15,8 @@ public struct GoodnotesPDFReaderView: View {
     @State private var shareURL: URL? = nil
     @State private var showShareSheet: Bool = false
     @State private var inspectedTab: OpenDocumentTab? = nil
+    /// Progression animée (interpéolée) pour éviter le glitch du Circle trim
+    @State private var animatedProgress: Double = 0.05
     
     public init() {}
     
@@ -279,19 +281,30 @@ public struct GoodnotesPDFReaderView: View {
             
             Spacer()
             
-            // Indicateur de téléchargement discret style explorateur (sans bouton pause/arrêt)
-            if let tab = activeTab, isDownloading {
+            // Indicateur de téléchargement discret (cercle de progression animé sans glitch)
+            if isDownloading {
                 ZStack {
                     Circle()
                         .stroke(Color.secondary.opacity(0.2), lineWidth: 2.2)
-                        .frame(width: 18, height: 18)
                     Circle()
-                        .trim(from: 0, to: CGFloat(max(0.05, downloadProgress)))
+                        .trim(from: 0, to: CGFloat(animatedProgress))
                         .stroke(Color.blue, lineWidth: 2.2)
-                        .frame(width: 18, height: 18)
                         .rotationEffect(.degrees(-90))
                 }
+                .frame(width: 18, height: 18)
                 .accessibilityIdentifier("reader_download_progress")
+                .onChange(of: downloadProgress) { newVal in
+                    // Interpolation animée pour éviter les sauts brusques
+                    withAnimation(.easeInOut(duration: 0.35)) {
+                        animatedProgress = max(0.05, newVal)
+                    }
+                }
+                .onAppear {
+                    animatedProgress = max(0.05, downloadProgress)
+                }
+            } else {
+                // Placeholder de même taille pour stabiliser le layout (no Spacer jump)
+                Color.clear.frame(width: 18, height: 18)
             }
             
             Spacer()

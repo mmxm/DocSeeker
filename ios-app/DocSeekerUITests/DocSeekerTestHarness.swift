@@ -152,10 +152,21 @@ public final class DocSeekerTestHarness {
     // MARK: - Bandeau Inférieur d'Occurrences
     
     public func bottomBarCounterText() -> String {
-        let predicate = NSPredicate(format: "label CONTAINS 'correspondance'")
-        let counterText = app.staticTexts.matching(predicate).firstMatch
-        if counterText.waitForExistence(timeout: 3.0) {
-            return counterText.label
+        // Priorité 1 : accessibilityIdentifier dédié (le plus fiable)
+        let byId = app.staticTexts["occurrence_counter"]
+        if byId.waitForExistence(timeout: 3.0) {
+            return byId.label
+        }
+        // Fallback : chercher dans tous les staticTexts un label contenant "/" ou "correspondance"
+        let allTexts = app.staticTexts.allElementsBoundByIndex
+        for el in allTexts {
+            let lbl = el.label
+            if lbl.contains("/") && lbl.contains(el.label.filter { $0.isNumber || $0 == "/" }) {
+                return lbl
+            }
+            if lbl.contains("correspondance") {
+                return lbl
+            }
         }
         return ""
     }
