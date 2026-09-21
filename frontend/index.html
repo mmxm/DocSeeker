@@ -6,8 +6,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <title>DocSeeker - Bibliothèque & Recherche PDF</title>
-  <meta name="app-version" content="10.0">
-  <link rel="stylesheet" href="/style.css?v=10.0">
+  <meta name="app-version" content="10.1">
+  <link rel="stylesheet" href="/style.css?v=10.1">
   <link rel="icon" href="/favicon.ico">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.json">
@@ -665,34 +665,9 @@
           <button id="viewerDocSearchCloseBtn" class="btn btn-icon btn-sm" title="Fermer la recherche">&times;</button>
         </div>
 
-        <!-- Corps du Lecteur : Volet latéral de recherche interne + Iframe PDF.js -->
-        <div class="viewer-body-container">
-          <!-- Volet Latéral Coulissant de Recherche Interne (Style InDocumentSearchDrawer) -->
-          <div id="inDocSearchDrawer" class="in-doc-search-drawer" style="display: none;">
-            <div class="in-doc-drawer-header">
-              <div class="in-doc-drawer-search-wrapper">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-                  <circle cx="11" cy="11" r="8"></circle>
-                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                </svg>
-                <input type="text" id="inDocDrawerSearchInput" placeholder="Rechercher dans ce document..." autocomplete="off" />
-                <button id="inDocDrawerClearBtn" class="clear-btn" style="display: none;">&times;</button>
-              </div>
-              <div class="in-doc-drawer-meta-row">
-                <span id="inDocDrawerCount" class="in-doc-count">0 résultat</span>
-                <div class="occ-sort-toggle occ-sort-toggle-sm" id="inDocSortToggle">
-                  <button type="button" class="occ-sort-btn active" data-sort="page" id="inDocSortByPageBtn">Pages</button>
-                  <button type="button" class="occ-sort-btn" data-sort="relevance" id="inDocSortByRelevanceBtn">Pertinence</button>
-                </div>
-              </div>
-            </div>
-            <div id="inDocDrawerOccurrencesList" class="in-doc-occurrences-list"></div>
-          </div>
-
-          <!-- Zone du Visualiseur PDF -->
-          <div class="viewer-body">
-            <iframe id="pdfFrame" class="pdf-iframe" src="about:blank" frameborder="0"></iframe>
-          </div>
+        <!-- Corps du Lecteur : Visualiseur PDF.js -->
+        <div class="viewer-body">
+          <iframe id="pdfFrame" class="pdf-iframe" src="about:blank" frameborder="0"></iframe>
         </div>
       </aside>
     </main>
@@ -997,8 +972,8 @@
 
   </div>
 
-  <script src="/pdf-cache.js?v=10.0"></script>
-  <script src="/download-queue-manager.js?v=10.0"></script>
-  <script src="/app.js?v=10.0"></script>
+  <script src="/pdf-cache.js?v=10.1"></script>
+  <script src="/download-queue-manager.js?v=10.1"></script>
+  <script src="/app.js?v=10.1"></script>
 </body>
 </html>

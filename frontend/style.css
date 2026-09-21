@@ -4210,81 +4210,88 @@ body.dark-theme .main-sidebar-drawer {
   padding: 0 4px;
 }
 
-/* Corps du lecteur avec volet latéral d'extraits */
-.viewer-body-container {
-  display: flex;
-  flex: 1;
-  height: calc(100% - 74px);
-  overflow: hidden;
-  position: relative;
+/* 6. En-tête masqué en mode lecture PDF (Desktop & Mobile) */
+body.doc-open .app-header,
+.app-layout.doc-open .app-header,
+.app-layout:has(.main-workspace.split-active) .app-header,
+body:has(.main-workspace.split-active) .app-header {
+  display: none !important;
 }
 
-.in-doc-search-drawer {
-  width: 360px;
-  min-width: 360px;
-  max-width: 360px;
-  height: 100%;
+body.doc-open .main-workspace,
+.app-layout.doc-open .main-workspace,
+.app-layout:has(.main-workspace.split-active) .main-workspace,
+body:has(.main-workspace.split-active) .main-workspace {
+  height: 100vh !important;
+  height: 100dvh !important;
+  max-height: 100vh !important;
+  max-height: 100dvh !important;
+}
+
+/* 7. Documents et dossiers Goodnotes en ligne (compact, horizontal) */
+.goodnotes-item-row.document-row,
+.goodnotes-item-row.folder-row {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 12px;
+  padding: 6px 14px;
+  height: 52px;
+  min-height: 52px;
+  max-height: 52px;
+  box-sizing: border-box;
   background: var(--bg-surface);
-  border-right: 1px solid var(--border-color);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  animation: slideInLeft 0.22s cubic-bezier(0.16, 1, 0.3, 1);
-  z-index: 5;
-}
-
-@keyframes slideInLeft {
-  from { opacity: 0; transform: translateX(-16px); }
-  to { opacity: 1; transform: translateX(0); }
-}
-
-.in-doc-drawer-header {
-  padding: 12px 14px;
+  border: 1px solid rgba(0, 0, 0, 0.04);
   border-bottom: 1px solid var(--border-color);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  background: var(--bg-surface);
+  border-radius: 10px;
+  contain-intrinsic-size: 0 52px;
 }
 
-.in-doc-drawer-search-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.goodnotes-item-row.document-row:hover,
+.goodnotes-item-row.folder-row:hover {
   background: var(--bg-subtle);
-  padding: 6px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--border-color);
+  border-color: var(--border-color);
 }
 
-.in-doc-drawer-search-wrapper input {
-  border: none;
-  background: transparent;
-  outline: none;
-  font-size: 12.5px;
+.goodnotes-item-row.document-row .goodnotes-row-main,
+.goodnotes-item-row.folder-row .goodnotes-row-main {
   flex: 1;
-  color: var(--text-main);
-}
-
-.in-doc-drawer-meta-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.in-doc-count {
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
-.in-doc-occurrences-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 10px 12px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  text-align: left;
+  gap: 2px;
+}
+
+.goodnotes-item-row.document-row .goodnotes-row-title,
+.goodnotes-item-row.folder-row .goodnotes-row-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.goodnotes-item-row.document-row .goodnotes-row-meta,
+.goodnotes-item-row.folder-row .goodnotes-row-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.goodnotes-item-row.document-row .goodnotes-row-actions,
+.goodnotes-item-row.folder-row .goodnotes-row-actions {
+  display: flex;
+  align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 /* 6. Popover Détails Document Tab */
@@ -4385,14 +4392,4 @@ body.dark-theme .tab-doc-info-popover {
   background: #1e293b;
   border-color: var(--border-color);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
-}
-
-body.dark-theme .in-doc-search-drawer {
-  background: var(--bg-surface);
-  border-right-color: var(--border-color);
-}
-
-body.dark-theme .in-doc-drawer-header {
-  background: var(--bg-surface);
-  border-bottom-color: var(--border-color);
 }

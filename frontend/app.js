@@ -4637,11 +4637,11 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  if (readerSidebarToggleBtn && inDocSearchDrawer) {
+  if (readerSidebarToggleBtn) {
     readerSidebarToggleBtn.addEventListener("click", () => {
-      const isHidden = (inDocSearchDrawer.style.display === "none" || !inDocSearchDrawer.style.display);
-      inDocSearchDrawer.style.display = isHidden ? "flex" : "none";
-      readerSidebarToggleBtn.classList.toggle("active", isHidden);
+      workspace.classList.toggle("sidebar-collapsed");
+      const isCollapsed = workspace.classList.contains("sidebar-collapsed");
+      readerSidebarToggleBtn.classList.toggle("active", !isCollapsed);
     });
   }
 
@@ -4713,6 +4713,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     workspace.classList.add("split-active");
+    if (mainSidebarDrawer) mainSidebarDrawer.classList.remove("open");
+    if (mainSidebarOverlay) mainSidebarOverlay.style.display = "none";
+    if (readerSidebarToggleBtn) {
+      const isCollapsed = workspace.classList.contains("sidebar-collapsed");
+      readerSidebarToggleBtn.classList.toggle("active", !isCollapsed);
+    }
     if (viewerPane) {
       viewerPane.classList.remove("header-hidden");
       viewerPane.style.display = "";
