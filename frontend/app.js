@@ -1884,7 +1884,15 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function closeSplitViewer() {
-    if (viewerPane) viewerPane.classList.remove("header-hidden");
+    if (viewerPane) {
+      viewerPane.classList.remove("header-hidden");
+      viewerPane.style.display = "none";
+    }
+    if (typeof tabManager !== 'undefined') {
+      tabManager.openTabs = [];
+      tabManager.activeTabId = null;
+      if (typeof tabManager.renderTabsUI === 'function') tabManager.renderTabsUI();
+    }
     lastViewerScrollTop = 0;
     if (currentActiveDocId && window.pdfCacheManager) {
       window.pdfCacheManager.pauseDownload(currentActiveDocId);
@@ -2856,22 +2864,29 @@ document.addEventListener("DOMContentLoaded", () => {
       const isFolderComplete = totalDocsInFolder > 0 && cachedDocsInFolder >= totalDocsInFolder;
       const isFolderPartial = cachedDocsInFolder > 0 && (!totalDocsInFolder || cachedDocsInFolder < totalDocsInFolder);
 
+      let folderCacheBadgeHtml = "";
+      if (isFolderComplete) {
+        folderCacheBadgeHtml = `<span class="folder-cache-badge complete" title="Tous les documents (${totalDocsInFolder}) sont disponibles hors-ligne" style="display: inline-flex; min-width: 18px; justify-content: center;">✓</span>`;
+      } else if (isFolderPartial) {
+        folderCacheBadgeHtml = `<span class="folder-cache-badge partial" title="${cachedDocsInFolder}/${totalDocsInFolder} document(s) disponible(s) hors-ligne" style="display: inline-flex;">✓ ${cachedDocsInFolder}/${totalDocsInFolder}</span>`;
+      }
+
       let folderSyncHtml = "";
       if (isFolderComplete) {
         folderSyncHtml = `
-          <button class="sync-action-btn complete btn-delete-folder-cache" title="Dossier 100% synchronisé (cliquer pour supprimer du cache)" data-id="${folder.id}">
+          <button class="folder-btn-action sync-action-btn complete btn-delete-folder-cache" title="Supprimer tous les documents de ce dossier du cache local" data-id="${folder.id}">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
           </button>
         `;
       } else if (isFolderPartial) {
         folderSyncHtml = `
-          <button class="sync-action-btn partial btn-download-folder" title="Télécharger les documents manquants (${cachedDocsInFolder}/${totalDocsInFolder})" data-id="${folder.id}">
+          <button class="folder-btn-action sync-action-btn partial btn-download-folder" title="Télécharger les documents manquants (${cachedDocsInFolder}/${totalDocsInFolder})" data-id="${folder.id}">
             <span class="sync-badge-count">${cachedDocsInFolder}/${totalDocsInFolder}</span>
           </button>
         `;
       } else if (totalDocsInFolder > 0) {
         folderSyncHtml = `
-          <button class="sync-action-btn btn-download-folder" title="Télécharger tous les documents de ce dossier" data-id="${folder.id}">
+          <button class="folder-btn-action sync-action-btn btn-download-folder" title="Télécharger tous les documents de ce dossier" data-id="${folder.id}">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><polyline points="8 12 12 16 16 12"></polyline><line x1="12" y1="8" x2="12" y2="16"></line></svg>
           </button>
         `;
@@ -2885,8 +2900,9 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
         <div class="goodnotes-row-main">
           <div class="goodnotes-row-title" title="${escapeHtml(folder.name)}">${escapeHtml(folder.name)}</div>
-          <div class="goodnotes-row-meta">
+          <div class="goodnotes-row-meta folder-meta">
             <span>${totalDocsInFolder > 0 ? `${totalDocsInFolder} document${totalDocsInFolder > 1 ? 's' : ''}` : '0 document'}</span>
+            ${folderCacheBadgeHtml}
           </div>
         </div>
         <div class="goodnotes-row-actions">
@@ -4681,7 +4697,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     workspace.classList.add("split-active");
-    if (viewerPane) viewerPane.classList.remove("header-hidden");
+    if (viewerPane) {
+      viewerPane.classList.remove("header-hidden");
+      viewerPane.style.display = "";
+    }
     lastViewerScrollTop = 0;
     document.documentElement.classList.add("doc-open");
     document.body.classList.add("doc-open");
@@ -5866,18 +5885,22 @@ document.addEventListener("DOMContentLoaded", () => {
     if (isComplete) {
       if (!badge) {
         badge = document.createElement("span");
-        const metaEl = folderEl.querySelector(".folder-meta");
+        const metaEl = folderEl.querySelector(".folder-meta, .goodnotes-row-meta");
         if (metaEl) metaEl.appendChild(badge);
+        else folderEl.appendChild(badge);
       }
       badge.className = "folder-cache-badge complete";
       badge.style.display = "inline-flex";
+      badge.style.minWidth = "18px";
+      badge.style.justifyContent = "center";
       badge.title = `Tous les documents (${totalDocs}) sont disponibles hors-ligne`;
       badge.textContent = "✓";
     } else if (isPartial) {
       if (!badge) {
         badge = document.createElement("span");
-        const metaEl = folderEl.querySelector(".folder-meta");
+        const metaEl = folderEl.querySelector(".folder-meta, .goodnotes-row-meta");
         if (metaEl) metaEl.appendChild(badge);
+        else folderEl.appendChild(badge);
       }
       badge.className = "folder-cache-badge partial";
       badge.style.display = "inline-flex";
@@ -5887,27 +5910,24 @@ document.addEventListener("DOMContentLoaded", () => {
       badge.style.display = "none";
     }
 
-    const actionBtn = folderEl.querySelector(".folder-btn-action.btn-download-folder, .folder-btn-action.btn-delete-folder-cache");
+    const actionBtn = folderEl.querySelector(".folder-btn-action.btn-download-folder, .folder-btn-action.btn-delete-folder-cache, .sync-action-btn");
     if (actionBtn) {
       if (isComplete) {
-        actionBtn.className = "folder-btn-action btn-delete-folder-cache";
+        actionBtn.className = "folder-btn-action sync-action-btn complete btn-delete-folder-cache";
         actionBtn.title = "Supprimer tous les documents de ce dossier du cache local";
         actionBtn.innerHTML = `
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
-            <line x1="2" y1="2" x2="22" y2="22"></line>
-          </svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
         `;
       } else {
-        actionBtn.className = "folder-btn-action btn-download-folder";
-        actionBtn.title = isPartial ? "Télécharger les documents manquants de ce dossier" : "Télécharger tous les documents de ce dossier pour consultation hors-ligne";
-        actionBtn.innerHTML = `
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-            <polyline points="7 10 12 15 17 10"></polyline>
-            <line x1="12" y1="15" x2="12" y2="3"></line>
-          </svg>
-        `;
+        actionBtn.className = `folder-btn-action sync-action-btn ${isPartial ? 'partial' : ''} btn-download-folder`;
+        actionBtn.title = isPartial ? `Télécharger les documents manquants (${cachedCount}/${totalDocs})` : "Télécharger tous les documents de ce dossier";
+        if (isPartial) {
+          actionBtn.innerHTML = `<span class="sync-badge-count">${cachedCount}/${totalDocs}</span>`;
+        } else {
+          actionBtn.innerHTML = `
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><polyline points="8 12 12 16 16 12"></polyline><line x1="12" y1="8" x2="12" y2="16"></line></svg>
+          `;
+        }
       }
     }
   }
