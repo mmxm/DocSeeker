@@ -3537,6 +3537,7 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
 @media (display-mode: standalone) {
   html, body {
     background-color: #ffffff;
+  }
 }
 
 /* ==========================================================================
@@ -3619,7 +3620,7 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
   bottom: 0;
   width: 320px;
   max-width: 85vw;
-  background: rgba(255, 255, 255, 0.94);
+  background: rgba(255, 255, 255, 0.96);
   backdrop-filter: blur(25px) saturate(180%);
   -webkit-backdrop-filter: blur(25px) saturate(180%);
   border-right: 1px solid rgba(0, 0, 0, 0.08);
@@ -3628,11 +3629,21 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
   display: flex;
   flex-direction: column;
   transform: translateX(-100%);
-  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.28s;
+}
+
+body.dark-theme .main-sidebar-drawer {
+  background: rgba(15, 23, 42, 0.96);
+  border-right-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.45);
 }
 
 .main-sidebar-drawer.open {
   transform: translateX(0);
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .main-sidebar-header {
@@ -4324,4 +4335,64 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
 .popover-meta-val {
   font-weight: 600;
   color: var(--text-main);
+}
+
+/* 7. Thème Sombre - Composants Goodnotes */
+body.dark-theme .reader-top-tab-bar {
+  background: var(--bg-surface);
+  border-bottom-color: var(--border-color);
+}
+
+body.dark-theme .reader-home-btn {
+  background: var(--bg-subtle);
+  border-color: var(--border-color);
+  color: var(--accent);
+}
+
+body.dark-theme .reader-home-btn:hover {
+  background: rgba(59, 130, 246, 0.2);
+}
+
+body.dark-theme .reader-tab-item {
+  background: var(--bg-subtle);
+  border-color: var(--border-color);
+  color: var(--text-muted);
+}
+
+body.dark-theme .reader-tab-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-main);
+}
+
+body.dark-theme .reader-tab-item.active {
+  background: #1e293b;
+  border-color: var(--accent);
+  color: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+body.dark-theme .reader-tab-close {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+}
+
+body.dark-theme .reader-tab-close:hover {
+  background: rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+}
+
+body.dark-theme .tab-doc-info-popover {
+  background: #1e293b;
+  border-color: var(--border-color);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+
+body.dark-theme .in-doc-search-drawer {
+  background: var(--bg-surface);
+  border-right-color: var(--border-color);
+}
+
+body.dark-theme .in-doc-drawer-header {
+  background: var(--bg-surface);
+  border-bottom-color: var(--border-color);
 }

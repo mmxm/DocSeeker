@@ -4480,6 +4480,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     selectTab(tabId) {
       if (this.activeTabId === tabId) return;
+      const currentTab = this.openTabs.find(t => t.id === this.activeTabId);
+      if (currentTab) {
+        currentTab.page = getCurrentViewerPage();
+      }
       const targetTab = this.openTabs.find(t => t.id === tabId);
       if (!targetTab) return;
       this.activeTabId = tabId;
@@ -4525,12 +4529,24 @@ document.addEventListener("DOMContentLoaded", () => {
     },
 
     returnToHome() {
+      const currentTab = this.openTabs.find(t => t.id === this.activeTabId);
+      if (currentTab) {
+        currentTab.page = getCurrentViewerPage();
+      }
       workspace.classList.remove("split-active");
+      if (viewerPane) {
+        viewerPane.style.display = "none";
+      }
+      if (docDetailView) docDetailView.style.display = "none";
+      if (generalView) generalView.style.display = "";
       document.documentElement.classList.remove("doc-open");
       document.body.classList.remove("doc-open");
       const appEl = document.getElementById("app");
       if (appEl) appEl.classList.remove("doc-open");
       setDocumentZoomLock(false);
+      if (resultsPane && savedGeneralResultsScrollTop > 0) {
+        resultsPane.scrollTop = savedGeneralResultsScrollTop;
+      }
     },
 
     renderTabsUI() {
