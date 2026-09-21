@@ -1,12 +1,10 @@
 use std::sync::{Arc, Mutex};
-use std::num::NonZeroUsize;
 use axum::{
     body::{to_bytes, Body},
     http::{header, Request, StatusCode},
 };
 use rusqlite::Connection;
 use tower::ServiceExt;
-use lru::LruCache;
 
 use docseeker_backend::{
     auth::password::hash_password,
@@ -152,7 +150,6 @@ fn setup_test_state() -> (Arc<AppState>, String) {
         rate_limiter: Arc::new(LoginRateLimiter::new()),
         crop_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
         crop_in_flight: Arc::new(Mutex::new(std::collections::HashMap::new())),
-        search_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(50).unwrap()))),
     });
 
     (state, session_token.to_string())

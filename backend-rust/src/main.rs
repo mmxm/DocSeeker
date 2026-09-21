@@ -15,8 +15,6 @@ use tower_http::compression::Predicate;
 use tower_http::cors::{Any, CorsLayer};
 
 use tracing::{info, warn};
-use std::num::NonZeroUsize;
-use lru::LruCache;
 
 
 fn setup_panic_hook(data_dir: std::path::PathBuf) {
@@ -242,7 +240,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let crop_permits = num_cpus.clamp(2, 8);
     let crop_semaphore = Arc::new(tokio::sync::Semaphore::new(crop_permits));
     let crop_in_flight = Arc::new(Mutex::new(std::collections::HashMap::new()));
-    let search_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(100).unwrap())));
 
     let state = Arc::new(AppState {
         config: config.clone(),
@@ -252,7 +249,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rate_limiter,
         crop_semaphore,
         crop_in_flight,
-        search_cache,
     });
 
     // Synchronisation initiale des fichiers PDF en tâche de fond (démarrage serveur immédiat sans bloquer le healthcheck)
@@ -260,15 +256,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let bg_db = Arc::clone(&state.db);
         let bg_engine = Arc::clone(&state.pdf_engine);
         let bg_config = state.config.clone();
-        let bg_cache = Arc::clone(&state.search_cache);
         tokio::task::spawn_blocking(move || {
             if let Ok(conn) = bg_db.lock() {
                 let (added, files) = scan_and_sync_documents(&conn, &bg_engine, &bg_config);
                 if added > 0 {
                     info!("[DocSeeker] {} document(s) synchronisé(s) en tâche de fond : {:?}", added, files);
-                    if let Ok(mut cache) = bg_cache.lock() {
-                        cache.clear();
-                    }
                 }
 
                 // Vérification et génération en arrière-plan des couvertures manquantes
