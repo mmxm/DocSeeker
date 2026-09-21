@@ -355,6 +355,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const inDocDrawerOccurrencesList = document.getElementById("inDocDrawerOccurrencesList");
   const inDocSortByPageBtn = document.getElementById("inDocSortByPageBtn");
   const inDocSortByRelevanceBtn = document.getElementById("inDocSortByRelevanceBtn");
+  const inDocDrawerCloseBtn = document.getElementById("inDocDrawerCloseBtn");
   const tabDocInfoPopover = document.getElementById("tabDocInfoPopover");
   const closePopoverDocBtn = document.getElementById("closePopoverDocBtn");
   const networkStatusPill = document.getElementById("networkStatusPill");
@@ -1905,6 +1906,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (appEl) appEl.classList.remove("doc-open");
     setDocumentZoomLock(false);
     if (viewerDocSearchWrapper) viewerDocSearchWrapper.style.display = "none";
+    if (inDocSearchDrawer) inDocSearchDrawer.style.display = "none";
+    if (readerSidebarToggleBtn) readerSidebarToggleBtn.classList.remove("active");
     syncDocSearchInputs("");
     // Libérer les tableaux d'occurrences du document actif (P4/P5)
     currentActiveOccurrences = [];
@@ -2061,6 +2064,13 @@ document.addEventListener("DOMContentLoaded", () => {
     inDocDrawerClearBtn.addEventListener("click", () => {
       syncDocSearchInputs("");
       performDocSearch("", true);
+    });
+  }
+
+  if (inDocDrawerCloseBtn) {
+    inDocDrawerCloseBtn.addEventListener("click", () => {
+      if (inDocSearchDrawer) inDocSearchDrawer.style.display = "none";
+      if (readerSidebarToggleBtn) readerSidebarToggleBtn.classList.remove("active");
     });
   }
 
@@ -4537,6 +4547,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (viewerPane) {
         viewerPane.style.display = "none";
       }
+      if (inDocSearchDrawer) inDocSearchDrawer.style.display = "none";
+      if (readerSidebarToggleBtn) readerSidebarToggleBtn.classList.remove("active");
       if (docDetailView) docDetailView.style.display = "none";
       if (generalView) generalView.style.display = "";
       document.documentElement.classList.remove("doc-open");
@@ -4639,9 +4651,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (readerSidebarToggleBtn) {
     readerSidebarToggleBtn.addEventListener("click", () => {
-      workspace.classList.toggle("sidebar-collapsed");
-      const isCollapsed = workspace.classList.contains("sidebar-collapsed");
-      readerSidebarToggleBtn.classList.toggle("active", !isCollapsed);
+      const drawer = document.getElementById("inDocSearchDrawer");
+      if (!drawer) return;
+      const isHidden = (drawer.style.display === "none" || !drawer.style.display);
+      drawer.style.display = isHidden ? "flex" : "none";
+      readerSidebarToggleBtn.classList.toggle("active", isHidden);
+      if (isHidden) {
+        if (inDocDrawerSearchInput && !inDocDrawerSearchInput.value && currentSearchQuery) {
+          inDocDrawerSearchInput.value = currentSearchQuery;
+        }
+        if (inDocDrawerOccurrencesList) {
+          const activeCard = inDocDrawerOccurrencesList.querySelector(".vertical-occ-card.active");
+          if (activeCard) {
+            scrollActiveCardIntoView(activeCard);
+          }
+        }
+      }
     });
   }
 
@@ -4716,8 +4741,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (mainSidebarDrawer) mainSidebarDrawer.classList.remove("open");
     if (mainSidebarOverlay) mainSidebarOverlay.style.display = "none";
     if (readerSidebarToggleBtn) {
-      const isCollapsed = workspace.classList.contains("sidebar-collapsed");
-      readerSidebarToggleBtn.classList.toggle("active", !isCollapsed);
+      const isDrawerOpen = inDocSearchDrawer && inDocSearchDrawer.style.display === "flex";
+      readerSidebarToggleBtn.classList.toggle("active", isDrawerOpen);
     }
     if (viewerPane) {
       viewerPane.classList.remove("header-hidden");
@@ -4738,6 +4763,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     currentActiveOccurrences = occurrences || [];
+    if (!currentSearchQuery && (!occurrences || occurrences.length === 0)) {
+      if (inDocDrawerCount) inDocDrawerCount.textContent = "0 résultat";
+      if (inDocDrawerOccurrencesList) {
+        inDocDrawerOccurrencesList.innerHTML = `<div style="color:var(--text-muted); font-size:12.5px; padding:20px; text-align:center;">Recherchez un terme ci-dessus pour afficher les extraits correspondants dans ce document.</div>`;
+      }
+    }
     let initialIdx = 0;
     if (targetOccId && targetPage && occurrences && occurrences.length > 0) {
       const foundIdx = occurrences.findIndex(o => String(o.occ_id) === String(targetOccId) && Number(o.page_number) === Number(targetPage));

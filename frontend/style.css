@@ -4210,7 +4210,7 @@ body.dark-theme .main-sidebar-drawer {
   padding: 0 4px;
 }
 
-/* 6. En-tête masqué en mode lecture PDF (Desktop & Mobile) */
+/* 6. En-tête et panneau de gauche (cadre bleu) masqués en mode lecture PDF */
 body.doc-open .app-header,
 .app-layout.doc-open .app-header,
 .app-layout:has(.main-workspace.split-active) .app-header,
@@ -4226,6 +4226,31 @@ body:has(.main-workspace.split-active) .main-workspace {
   height: 100dvh !important;
   max-height: 100vh !important;
   max-height: 100dvh !important;
+}
+
+/* Mode Document Ouvert : Masquage total du panneau bibliothèque/résultats (cadre bleu) */
+body.doc-open .results-pane,
+.app-layout.doc-open .results-pane,
+.main-workspace.split-active .results-pane,
+body:has(.main-workspace.split-active) .results-pane {
+  display: none !important;
+}
+
+body.doc-open .split-resizer,
+.app-layout.doc-open .split-resizer,
+.main-workspace.split-active .split-resizer,
+body:has(.main-workspace.split-active) .split-resizer {
+  display: none !important;
+}
+
+body.doc-open .viewer-pane,
+.app-layout.doc-open .viewer-pane,
+.main-workspace.split-active .viewer-pane,
+body:has(.main-workspace.split-active) .viewer-pane {
+  display: flex !important;
+  flex: 1 1 100% !important;
+  width: 100% !important;
+  max-width: 100% !important;
 }
 
 /* 7. Documents et dossiers Goodnotes en ligne (compact, horizontal) */
@@ -4392,4 +4417,101 @@ body.dark-theme .tab-doc-info-popover {
   background: #1e293b;
   border-color: var(--border-color);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+
+/* Corps du lecteur avec volet latéral d'extraits interne (Cadre Vert) */
+.viewer-body-container {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+}
+
+.in-doc-search-drawer {
+  width: 360px;
+  min-width: 320px;
+  max-width: 420px;
+  height: 100%;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: slideInLeft 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 5;
+  flex-shrink: 0;
+}
+
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.in-doc-drawer-header {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg-surface);
+}
+
+.in-doc-drawer-search-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-subtle);
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.in-doc-drawer-search-wrapper input {
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 12.5px;
+  flex: 1;
+  color: var(--text-main);
+}
+
+.in-doc-drawer-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.in-doc-count {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.in-doc-occurrences-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn-reader-sidebar-toggle.active {
+  background-color: var(--accent-light, rgba(59, 130, 246, 0.12)) !important;
+  color: var(--accent, #2563eb) !important;
+  border-color: var(--accent-border, #bfdbfe) !important;
+}
+
+body.dark-theme .in-doc-search-drawer {
+  background: var(--bg-surface);
+  border-right-color: var(--border-color);
+}
+
+body.dark-theme .in-doc-drawer-header {
+  background: var(--bg-surface);
+  border-bottom-color: var(--border-color);
 }
