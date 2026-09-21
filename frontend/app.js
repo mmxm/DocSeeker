@@ -325,6 +325,50 @@ document.addEventListener("DOMContentLoaded", () => {
   // Toast Container
   const toastContainer = document.getElementById("toastContainer");
 
+  // Volet Latéral Coulissant de Navigation Globale (Accueil)
+  const mainSidebarToggleBtn = document.getElementById("mainSidebarToggleBtn");
+  const mainSidebarDrawer = document.getElementById("mainSidebarDrawer");
+  const mainSidebarOverlay = document.getElementById("mainSidebarOverlay");
+  const closeMainSidebarBtn = document.getElementById("closeMainSidebarBtn");
+  const navBtnDocuments = document.getElementById("navBtnDocuments");
+  const navBtnDownloads = document.getElementById("navBtnDownloads");
+  const navBtnSettings = document.getElementById("navBtnSettings");
+  const navDownloadsBadge = document.getElementById("navDownloadsBadge");
+
+  // Vues Principales
+  const viewDocuments = document.getElementById("resultsPane");
+  const viewDownloads = document.getElementById("viewDownloads");
+  const viewSettings = document.getElementById("viewSettings");
+
+  // Reader Goodnotes
+  const readerTopTabBar = document.getElementById("readerTopTabBar");
+  const readerHomeBtn = document.getElementById("readerHomeBtn");
+  const readerTabsStrip = document.getElementById("readerTabsStrip");
+  const readerSidebarToggleBtn = document.getElementById("readerSidebarToggleBtn");
+  const readerFitToWidthBtn = document.getElementById("readerFitToWidthBtn");
+  const readerShareBtn = document.getElementById("readerShareBtn");
+  const occurrenceQueryBadge = document.getElementById("occurrenceQueryBadge");
+  const inDocSearchDrawer = document.getElementById("inDocSearchDrawer");
+  const inDocDrawerSearchInput = document.getElementById("inDocDrawerSearchInput");
+  const inDocDrawerClearBtn = document.getElementById("inDocDrawerClearBtn");
+  const inDocDrawerCount = document.getElementById("inDocDrawerCount");
+  const inDocDrawerOccurrencesList = document.getElementById("inDocDrawerOccurrencesList");
+  const inDocSortByPageBtn = document.getElementById("inDocSortByPageBtn");
+  const inDocSortByRelevanceBtn = document.getElementById("inDocSortByRelevanceBtn");
+  const tabDocInfoPopover = document.getElementById("tabDocInfoPopover");
+  const closePopoverDocBtn = document.getElementById("closePopoverDocBtn");
+  const networkStatusPill = document.getElementById("networkStatusPill");
+  const networkDot = document.getElementById("networkDot");
+  const networkLabel = document.getElementById("networkLabel");
+
+  function formatBytes(bytes) {
+    if (!bytes || bytes <= 0) return "0 Ko";
+    const k = 1024;
+    const sizes = ["Octets", "Ko", "Mo", "Go"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+  }
+
   // =========================================================================
   // État de l'Application (Variables déclarées au sommet)
   // =========================================================================
@@ -1012,6 +1056,253 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
+  // Volet Latéral Coulissant de Navigation Globale (Accueil) & Vues Dédiées
+  // =========================================================================
+  function toggleMainSidebar(show) {
+    if (!mainSidebarDrawer || !mainSidebarOverlay) return;
+    const willShow = (show !== undefined) ? show : !mainSidebarDrawer.classList.contains("open");
+    mainSidebarDrawer.classList.toggle("open", willShow);
+    mainSidebarOverlay.style.display = willShow ? "block" : "none";
+  }
+
+  if (mainSidebarToggleBtn) {
+    mainSidebarToggleBtn.addEventListener("click", () => toggleMainSidebar());
+  }
+  if (closeMainSidebarBtn) {
+    closeMainSidebarBtn.addEventListener("click", () => toggleMainSidebar(false));
+  }
+  if (mainSidebarOverlay) {
+    mainSidebarOverlay.addEventListener("click", () => toggleMainSidebar(false));
+  }
+
+  function switchMainView(tabName) {
+    [navBtnDocuments, navBtnDownloads, navBtnSettings].forEach(b => {
+      if (b) b.classList.toggle("active", b.getAttribute("data-tab") === tabName);
+    });
+
+    if (viewDocuments) viewDocuments.style.display = (tabName === "documents") ? "flex" : "none";
+    if (viewDownloads) {
+      viewDownloads.style.display = (tabName === "downloads") ? "flex" : "none";
+      if (tabName === "downloads") refreshDownloadsView();
+    }
+    if (viewSettings) {
+      viewSettings.style.display = (tabName === "settings") ? "flex" : "none";
+      if (tabName === "settings") refreshSettingsView();
+    }
+    toggleMainSidebar(false);
+  }
+
+  if (navBtnDocuments) navBtnDocuments.addEventListener("click", () => switchMainView("documents"));
+  if (navBtnDownloads) navBtnDownloads.addEventListener("click", () => switchMainView("downloads"));
+  if (navBtnSettings) navBtnSettings.addEventListener("click", () => switchMainView("settings"));
+
+  // Statut Réseau discret dans le Header
+  function updateNetworkPillUI() {
+    const isOnline = navigator.onLine;
+    if (networkDot) {
+      networkDot.className = `network-dot ${isOnline ? 'green' : 'orange'}`;
+    }
+    if (networkLabel) {
+      networkLabel.textContent = isOnline ? "Connecté" : "Hors-ligne";
+    }
+    const sidebarStatus = document.getElementById("sidebarNetworkStatusText");
+    if (sidebarStatus) {
+      sidebarStatus.textContent = isOnline ? "Connecté" : "Hors-ligne";
+    }
+  }
+  window.addEventListener("online", updateNetworkPillUI);
+  window.addEventListener("offline", updateNetworkPillUI);
+  updateNetworkPillUI();
+
+  if (networkStatusPill) {
+    networkStatusPill.addEventListener("click", async () => {
+      try {
+        const res = await fetch("/api/status", { cache: "no-store" });
+        if (res.ok) {
+          showToast("Connexion au serveur opérationnelle", "success");
+        } else {
+          showToast("Serveur injoignable", "warning");
+        }
+      } catch (e) {
+        showToast("Impossible de joindre le serveur", "warning");
+      }
+      updateNetworkPillUI();
+    });
+  }
+
+  // Mise à jour de la Vue Transferts
+  async function refreshDownloadsView() {
+    if (!window.downloadQueueManager) return;
+    const queueSummary = document.getElementById("downloadsQueueSummaryText");
+    const activePill = document.getElementById("downloadsActivePill");
+    const offlineCountText = document.getElementById("downloadsOfflineCountText");
+    const activeList = document.getElementById("fullDownloadsActiveList");
+    const cachedList = document.getElementById("fullDownloadsCachedList");
+    const pauseBtn = document.getElementById("downloadsGlobalPauseBtn");
+    const pauseText = document.getElementById("downloadsGlobalPauseText");
+
+    const isPaused = window.downloadQueueManager.isPaused;
+    if (pauseText) pauseText.textContent = isPaused ? "Reprendre les téléchargements" : "Mettre en pause";
+
+    const activeCount = window.downloadQueueManager.activeTasks.size;
+    const queueCount = window.downloadQueueManager.queue.length;
+    if (queueSummary) queueSummary.textContent = `${activeCount} actif(s), ${queueCount} en attente`;
+    if (activePill) {
+      activePill.textContent = (activeCount > 0 || queueCount > 0) ? (isPaused ? "Suspendu" : "Actif") : "Inactif";
+      activePill.className = `badge-pill ${(activeCount > 0 || queueCount > 0) ? (isPaused ? 'warning' : 'primary') : ''}`;
+    }
+
+    if (activeList) {
+      activeList.innerHTML = "";
+      if (activeCount === 0 && queueCount === 0) {
+        activeList.innerHTML = `<div class="empty-list-note">Aucun téléchargement en cours</div>`;
+      } else {
+        window.downloadQueueManager.activeTasks.forEach((task) => {
+          const row = document.createElement("div");
+          row.className = "download-task-row";
+          row.innerHTML = `
+            <div style="flex:1; min-width:0;">
+              <div style="font-weight:600; font-size:13px; color:var(--text-main);">Document #${task.docId}</div>
+              <div class="download-progress-bar-bg" style="margin-top:6px;">
+                <div class="download-progress-bar-fill" style="width: ${task.progress || 0}%;"></div>
+              </div>
+            </div>
+            <span style="font-size:12px; font-weight:700; color:var(--accent);">${task.progress || 0}%</span>
+            <button class="btn btn-sm btn-icon btn-cancel-task" title="Annuler" data-id="${task.docId}">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+          `;
+          row.querySelector(".btn-cancel-task").addEventListener("click", () => {
+            window.downloadQueueManager.cancelDownload(task.docId);
+            refreshDownloadsView();
+          });
+          activeList.appendChild(row);
+        });
+      }
+    }
+
+    // Documents en cache
+    const cachedDocs = await window.downloadQueueManager.getAllCachedDocs().catch(() => []);
+    if (offlineCountText) offlineCountText.textContent = `${cachedDocs.length} document${cachedDocs.length > 1 ? 's' : ''} disponible${cachedDocs.length > 1 ? 's' : ''} localement`;
+    if (cachedList) {
+      cachedList.innerHTML = "";
+      if (!cachedDocs || cachedDocs.length === 0) {
+        cachedList.innerHTML = `<div class="empty-list-note">Aucun document en cache local</div>`;
+      } else {
+        cachedDocs.forEach(d => {
+          const row = document.createElement("div");
+          row.className = "download-task-row";
+          row.innerHTML = `
+            <div style="flex:1; min-width:0;">
+              <div style="font-weight:600; font-size:13px; color:var(--text-main);">${escapeHtml(d.title || d.filename)}</div>
+              <div style="font-size:11.5px; color:var(--text-muted);">${d.total_pages || 1} pages ${d.file_size ? '• ' + formatBytes(d.file_size) : ''}</div>
+            </div>
+            <button class="btn btn-sm btn-secondary btn-del-cache" title="Supprimer du cache" data-id="${d.id}">
+              Retirer
+            </button>
+          `;
+          row.querySelector(".btn-del-cache").addEventListener("click", async () => {
+            await window.downloadQueueManager.removeDocumentFromCache(d.id);
+            refreshDownloadsView();
+            loadFoldersAndDocuments();
+          });
+          cachedList.appendChild(row);
+        });
+      }
+    }
+  }
+
+  const downloadsGlobalPauseBtn = document.getElementById("downloadsGlobalPauseBtn");
+  if (downloadsGlobalPauseBtn) {
+    downloadsGlobalPauseBtn.addEventListener("click", () => {
+      if (!window.downloadQueueManager) return;
+      if (window.downloadQueueManager.isPaused) {
+        window.downloadQueueManager.resume();
+      } else {
+        window.downloadQueueManager.pause();
+      }
+      refreshDownloadsView();
+    });
+  }
+
+  const refreshCachedDocsBtn = document.getElementById("refreshCachedDocsBtn");
+  if (refreshCachedDocsBtn) {
+    refreshCachedDocsBtn.addEventListener("click", () => refreshDownloadsView());
+  }
+
+  // Mise à jour de la Vue Réglages
+  async function refreshSettingsView() {
+    const cachedCountEl = document.getElementById("settingsCachedCount");
+    const storageUsedEl = document.getElementById("settingsStorageUsed");
+    if (window.downloadQueueManager && cachedCountEl) {
+      cachedCountEl.textContent = window.downloadQueueManager.cachedDocIds.size;
+    }
+    if (storageUsedEl) {
+      if (navigator.storage && navigator.storage.estimate) {
+        const est = await navigator.storage.estimate().catch(() => null);
+        if (est && est.usage) {
+          storageUsedEl.textContent = formatBytes(est.usage);
+        }
+      }
+    }
+  }
+
+  // Sélecteur de Thème dans les Réglages
+  const themeSegmentedControl = document.getElementById("themeSegmentedControl");
+  if (themeSegmentedControl) {
+    const savedTheme = localStorage.getItem("docseeker_theme") || "light";
+    themeSegmentedControl.querySelectorAll(".segmented-btn").forEach(btn => {
+      btn.classList.toggle("active", btn.getAttribute("data-theme") === savedTheme);
+      btn.addEventListener("click", () => {
+        const t = btn.getAttribute("data-theme");
+        themeSegmentedControl.querySelectorAll(".segmented-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        localStorage.setItem("docseeker_theme", t);
+        if (t === "dark") {
+          document.body.className = "dark-theme";
+        } else if (t === "light") {
+          document.body.className = "light-theme";
+        } else {
+          const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          document.body.className = prefersDark ? "dark-theme" : "light-theme";
+        }
+      });
+    });
+  }
+
+  // Bouton Purger le Cache Local
+  const settingsClearCacheBtn = document.getElementById("settingsClearCacheBtn");
+  if (settingsClearCacheBtn) {
+    settingsClearCacheBtn.addEventListener("click", async () => {
+      if (confirm("Voulez-vous supprimer tous les documents mis en cache localement et réinitialiser la base SQLite hors-ligne ?")) {
+        try {
+          if (window.pdfCacheManager) await window.pdfCacheManager.clearAll();
+          if (typeof caches !== 'undefined') {
+            await caches.delete('docseeker_covers').catch(() => {});
+            await caches.delete('docseeker_offline_crops').catch(() => {});
+            await caches.delete('docseeker-pdf-v1').catch(() => {});
+          }
+          if (window.downloadQueueManager) {
+            window.downloadQueueManager.reinitializeWorker();
+            window.downloadQueueManager.cachedDocIds.clear();
+          }
+          showToast("Cache local vidé avec succès", "success");
+          refreshSettingsView();
+          loadFoldersAndDocuments();
+        } catch (e) {
+          console.error("Erreur vidage cache:", e);
+          showToast("Erreur lors de la suppression du cache", "error");
+        }
+      }
+    });
+  }
+
+  const settingsLoginModalBtn = document.getElementById("settingsLoginModalBtn");
+  if (settingsLoginModalBtn) {
+    settingsLoginModalBtn.addEventListener("click", () => showLoginModal());
+  }
+
+  // =========================================================================
   // Authentification Native (Compte Unique Administrateur)
   // =========================================================================
   const loginModal = document.getElementById("loginModal");
@@ -1656,17 +1947,19 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
-  // Recherche Interne au Document (Split View, Header Viewer, Tiroir Mobile)
+  // Recherche Interne au Document (Split View, Header Viewer, Tiroir Mobile, Tiroir Lecteur)
   // =========================================================================
   function syncDocSearchInputs(val, sourceInput = null) {
     if (docSearchInput && docSearchInput !== sourceInput && docSearchInput.value !== val) docSearchInput.value = val;
     if (viewerDocSearchInput && viewerDocSearchInput !== sourceInput && viewerDocSearchInput.value !== val) viewerDocSearchInput.value = val;
     if (drawerDocSearchInput && drawerDocSearchInput !== sourceInput && drawerDocSearchInput.value !== val) drawerDocSearchInput.value = val;
+    if (inDocDrawerSearchInput && inDocDrawerSearchInput !== sourceInput && inDocDrawerSearchInput.value !== val) inDocDrawerSearchInput.value = val;
 
     const hasVal = Boolean(val && val.trim().length > 0);
     if (clearDocSearchBtn) clearDocSearchBtn.style.display = hasVal ? "flex" : "none";
     if (viewerDocSearchClearBtn) viewerDocSearchClearBtn.style.display = hasVal ? "flex" : "none";
     if (drawerDocSearchClearBtn) drawerDocSearchClearBtn.style.display = hasVal ? "flex" : "none";
+    if (inDocDrawerClearBtn) inDocDrawerClearBtn.style.display = hasVal ? "flex" : "none";
   }
 
   if (docSearchInput) {
@@ -1740,6 +2033,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (drawerDocSearchClearBtn) {
     drawerDocSearchClearBtn.addEventListener("click", () => {
+      syncDocSearchInputs("");
+      performDocSearch("", true);
+    });
+  }
+
+  // Écouteurs pour le Volet Latéral du Lecteur PDF (Goodnotes inDocSearchDrawer)
+  if (inDocDrawerSearchInput) {
+    inDocDrawerSearchInput.addEventListener("input", (e) => {
+      const rawVal = e.target.value;
+      syncDocSearchInputs(rawVal, inDocDrawerSearchInput);
+      if (!rawVal.trim()) {
+        performDocSearch("", false);
+      }
+    });
+  }
+
+  if (inDocDrawerClearBtn) {
+    inDocDrawerClearBtn.addEventListener("click", () => {
       syncDocSearchInputs("");
       performDocSearch("", true);
     });
@@ -1864,6 +2175,20 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
+    // Mettre à jour la sélection visuelle dans le volet Goodnotes du Lecteur
+    if (inDocDrawerOccurrencesList) {
+      const inDocCards = inDocDrawerOccurrencesList.children;
+      if (inDocCards.length > 0) {
+        if (prevIndex >= 0 && prevIndex < inDocCards.length) {
+          inDocCards[prevIndex].classList.remove('active');
+        }
+        if (index < inDocCards.length) {
+          inDocCards[index].classList.add('active');
+          scrollActiveCardIntoView(inDocCards[index]);
+        }
+      }
+    }
+
     if (occ) {
       if (viewerPageBadge) {
         viewerPageBadge.textContent = `Page ${occ.page_number}`;
@@ -1888,7 +2213,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Support de la touche Entrée dans les champs de recherche du document
   let lastExecutedDocSearchQuery = "";
-  [viewerDocSearchInput, docSearchInput, drawerDocSearchInput].forEach(inp => {
+  [viewerDocSearchInput, docSearchInput, drawerDocSearchInput, inDocDrawerSearchInput].forEach(inp => {
     if (inp) {
       inp.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
@@ -1955,8 +2280,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function setDocOccurrencesSortMode(mode) {
     currentDocOccurrencesSortMode = mode;
-    document.querySelectorAll('#sortOccByPageBtn, #drawerSortOccByPageBtn').forEach(btn => btn.classList.toggle('active', mode === 'page'));
-    document.querySelectorAll('#sortOccByRelevanceBtn, #drawerSortOccByRelevanceBtn').forEach(btn => btn.classList.toggle('active', mode === 'relevance'));
+    document.querySelectorAll('#sortOccByPageBtn, #drawerSortOccByPageBtn, #inDocSortByPageBtn').forEach(btn => btn.classList.toggle('active', mode === 'page'));
+    document.querySelectorAll('#sortOccByRelevanceBtn, #drawerSortOccByRelevanceBtn, #inDocSortByRelevanceBtn').forEach(btn => btn.classList.toggle('active', mode === 'relevance'));
 
     if (currentActiveOccurrences && currentActiveOccurrences.length > 0) {
       currentActiveOccurrences = sortDocOccurrences(currentActiveOccurrences, mode);
@@ -1976,6 +2301,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if (sortOccByRelevanceBtn) sortOccByRelevanceBtn.addEventListener("click", () => setDocOccurrencesSortMode('relevance'));
   if (drawerSortOccByPageBtn) drawerSortOccByPageBtn.addEventListener("click", () => setDocOccurrencesSortMode('page'));
   if (drawerSortOccByRelevanceBtn) drawerSortOccByRelevanceBtn.addEventListener("click", () => setDocOccurrencesSortMode('relevance'));
+  if (inDocSortByPageBtn) inDocSortByPageBtn.addEventListener("click", () => setDocOccurrencesSortMode('page'));
+  if (inDocSortByRelevanceBtn) inDocSortByRelevanceBtn.addEventListener("click", () => setDocOccurrencesSortMode('relevance'));
 
   async function performDocSearch(query, updateInputs = true) {
     if (updateInputs) {
@@ -1991,6 +2318,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (viewerDocSearchResultCount) viewerDocSearchResultCount.textContent = "";
       if (mobileOccurrencesCountText) mobileOccurrencesCountText.textContent = pillText;
       if (drawerDocCount) drawerDocCount.textContent = pillText;
+      if (inDocDrawerCount) inDocDrawerCount.textContent = countText;
 
       if (workspace && workspace.classList.contains("split-active")) {
         generalView.style.display = "none";
@@ -2048,6 +2376,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (viewerDocSearchResultCount) viewerDocSearchResultCount.textContent = resultLabel;
       if (mobileOccurrencesCountText) mobileOccurrencesCountText.textContent = pillLabel;
       if (drawerDocCount) drawerDocCount.textContent = pillLabel;
+      if (inDocDrawerCount) inDocDrawerCount.textContent = resultLabel;
 
       currentActiveOccurrences = sortDocOccurrences(occs, currentDocOccurrencesSortMode);
       renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentActiveOccurrences);
@@ -2518,71 +2847,54 @@ document.addEventListener("DOMContentLoaded", () => {
 
     sortedFolders.forEach(folder => {
       const card = document.createElement("div");
-      card.className = "folder-card";
+      card.className = "goodnotes-item-row folder-row folder-card";
       card.setAttribute("data-folder-id", folder.id);
       card.setAttribute("data-doc-count", folder.doc_count || 0);
 
-      const folderColor = "#3b82f6";
       const totalDocsInFolder = folder.doc_count || 0;
       const cachedDocsInFolder = window.downloadQueueManager ? window.downloadQueueManager.getCachedDocsCountForFolder(folder.id) : 0;
       const isFolderComplete = totalDocsInFolder > 0 && cachedDocsInFolder >= totalDocsInFolder;
       const isFolderPartial = cachedDocsInFolder > 0 && (!totalDocsInFolder || cachedDocsInFolder < totalDocsInFolder);
 
-      let folderCacheBadgeHtml = "";
+      let folderSyncHtml = "";
       if (isFolderComplete) {
-        folderCacheBadgeHtml = `<span class="folder-cache-badge complete" title="Tous les documents (${totalDocsInFolder}) sont disponibles hors-ligne">✓</span>`;
-      } else if (isFolderPartial) {
-        folderCacheBadgeHtml = `<span class="folder-cache-badge partial" title="${cachedDocsInFolder}${totalDocsInFolder ? '/' + totalDocsInFolder : ''} document(s) disponible(s) hors-ligne">✓ ${cachedDocsInFolder}${totalDocsInFolder ? '/' + totalDocsInFolder : ''}</span>`;
-      }
-
-      let folderActionBtnHtml = "";
-      if (isFolderComplete) {
-        folderActionBtnHtml = `
-          <button class="folder-btn-action btn-delete-folder-cache" title="Supprimer tous les documents de ce dossier du cache local" data-id="${folder.id}">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
-              <line x1="2" y1="2" x2="22" y2="22"></line>
-            </svg>
+        folderSyncHtml = `
+          <button class="sync-action-btn complete btn-delete-folder-cache" title="Dossier 100% synchronisé (cliquer pour supprimer du cache)" data-id="${folder.id}">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
           </button>
         `;
-      } else {
-        folderActionBtnHtml = `
-          <button class="folder-btn-action btn-download-folder" title="${isFolderPartial ? 'Télécharger les documents manquants de ce dossier' : 'Télécharger tous les documents de ce dossier pour consultation hors-ligne'}" data-id="${folder.id}">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="7 10 12 15 17 10"></polyline>
-              <line x1="12" y1="15" x2="12" y2="3"></line>
-            </svg>
+      } else if (isFolderPartial) {
+        folderSyncHtml = `
+          <button class="sync-action-btn partial btn-download-folder" title="Télécharger les documents manquants (${cachedDocsInFolder}/${totalDocsInFolder})" data-id="${folder.id}">
+            <span class="sync-badge-count">${cachedDocsInFolder}/${totalDocsInFolder}</span>
+          </button>
+        `;
+      } else if (totalDocsInFolder > 0) {
+        folderSyncHtml = `
+          <button class="sync-action-btn btn-download-folder" title="Télécharger tous les documents de ce dossier" data-id="${folder.id}">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><polyline points="8 12 12 16 16 12"></polyline><line x1="12" y1="8" x2="12" y2="16"></line></svg>
           </button>
         `;
       }
 
       card.innerHTML = `
-        <div class="folder-icon-wrapper" style="background-color: ${folderColor};">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <div class="goodnotes-row-icon folder">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
           </svg>
         </div>
-        <div class="folder-info">
-          <div class="folder-name" title="${escapeHtml(folder.name)}">${escapeHtml(folder.name)}</div>
-          <div class="folder-meta" style="display: flex; align-items: center; gap: 4px;">
-            <span>${totalDocsInFolder > 0 ? `${totalDocsInFolder} document${totalDocsInFolder > 1 ? 's' : ''}` : (cachedDocsInFolder > 0 ? `${cachedDocsInFolder} document${cachedDocsInFolder > 1 ? 's' : ''}` : '0 document')}</span>
-            ${folderCacheBadgeHtml}
+        <div class="goodnotes-row-main">
+          <div class="goodnotes-row-title" title="${escapeHtml(folder.name)}">${escapeHtml(folder.name)}</div>
+          <div class="goodnotes-row-meta">
+            <span>${totalDocsInFolder > 0 ? `${totalDocsInFolder} document${totalDocsInFolder > 1 ? 's' : ''}` : '0 document'}</span>
           </div>
         </div>
-        <div class="folder-actions">
-          ${folderActionBtnHtml}
+        <div class="goodnotes-row-actions">
+          ${folderSyncHtml}
           <button class="folder-btn-action btn-delete-folder" title="Supprimer ce dossier" data-id="${folder.id}">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="3 6 5 6 21 6"></polyline>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-            </svg>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
           </button>
-          <div class="folder-chevron">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="9 18 15 12 9 6"></polyline>
-            </svg>
-          </div>
+          <svg class="goodnotes-row-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"></polyline></svg>
         </div>
       `;
 
@@ -2843,9 +3155,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const isIndexing = doc.status === "pending" || doc.status === "indexing";
     const isFailed = doc.status === "failed";
     const statusCardClass = isIndexing ? "is-indexing" : (isFailed ? "is-failed" : "");
+    const isCached = Boolean(window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id));
 
     const card = document.createElement("div");
-    card.className = `doc-card ${selectedDocIds.has(doc.id) ? 'selected' : ''} ${statusCardClass}`;
     card.setAttribute("draggable", "true");
     card.setAttribute("data-doc-id", doc.id);
 
@@ -2913,8 +3225,65 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
 
-    let vignettesHtml = '';
-    if (isSearch) {
+    const query = searchInput ? searchInput.value.trim() : "";
+    const displayTitle = (isSearch && query) 
+      ? highlightTitle(doc.title, query) 
+      : escapeHtml(doc.title);
+
+    if (!isSearch) {
+      // Affichage Goodnotes unifié (ligne continue élégante comme sur mobile)
+      card.className = `goodnotes-item-row document-row doc-card ${selectedDocIds.has(doc.id) ? 'selected' : ''} ${statusCardClass}`;
+      card.innerHTML = `
+        <input type="checkbox" class="doc-selection-checkbox goodnotes-row-checkbox" data-id="${doc.id}" ${selectedDocIds.has(doc.id) ? 'checked' : ''} title="Sélectionner ce document" />
+        <div class="goodnotes-row-icon document ${isCached ? 'cached' : ''}">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+          </svg>
+        </div>
+        <div class="goodnotes-row-main">
+          <div class="goodnotes-row-title doc-title-main" title="${escapeHtml(doc.title)}">${displayTitle}</div>
+          <div class="goodnotes-row-meta">
+            <span>${isIndexing ? (doc.status === 'indexing' ? '⏳ Indexation...' : '⌛ En attente') : (isFailed ? '❌ Échec' : `${doc.total_pages || 1} page${(doc.total_pages || 1) > 1 ? 's' : ''}`)}</span>
+            ${doc.file_size ? `<span>•</span><span>${formatBytes(doc.file_size)}</span>` : ''}
+            ${doc.created_at ? `<span>•</span><span>${new Date(doc.created_at).toLocaleDateString('fr-FR')}</span>` : ''}
+          </div>
+        </div>
+        <div class="goodnotes-row-actions">
+          <button class="doc-cache-btn ${isCached ? 'cached' : ''}" data-id="${doc.id}" title="${isCached ? 'Disponible hors-ligne' : 'Télécharger pour consultation hors-ligne'}" aria-label="Cache hors-ligne">
+            ${isCached ? `
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            ` : `
+              <svg class="cache-icon-cloud" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+            `}
+          </button>
+          <button class="doc-btn-action btn-delete-doc-cache" data-id="${doc.id}" style="${isCached ? '' : 'display: none;'}" title="Supprimer ce document du cache local" aria-label="Supprimer du cache local">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
+              <line x1="2" y1="2" x2="22" y2="22"></line>
+            </svg>
+          </button>
+          <button class="doc-menu-trigger-btn" data-id="${doc.id}" title="Options du document (Renommer, Déplacer, Réindexer, Supprimer)" aria-label="Options">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="12" cy="5" r="2.2"></circle>
+              <circle cx="12" cy="12" r="2.2"></circle>
+              <circle cx="12" cy="19" r="2.2"></circle>
+            </svg>
+          </button>
+          <svg class="goodnotes-row-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+        </div>
+      `;
+    } else {
+      card.className = `doc-card ${selectedDocIds.has(doc.id) ? 'selected' : ''} ${statusCardClass}`;
+      let vignettesHtml = '';
       if (doc.vignettes && doc.vignettes.length > 0) {
         doc.vignettes.forEach(v => {
           vignettesHtml += `
@@ -2929,81 +3298,69 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         vignettesHtml = `<div style="color:var(--text-dim); font-size:12.5px; align-self:center;">Aucun extrait visuel.</div>`;
       }
-    } else {
-      vignettesHtml = `
-        <div style="display:flex; align-items:center; height:100%; color:var(--text-dim); font-size:12.5px;">
-          Tapez un mot-clé ci-dessus pour afficher les extraits cropés avec surbrillance.
+
+      card.innerHTML = `
+        <div class="doc-card-header">
+          <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; flex: 1;">
+            <input type="checkbox" class="doc-selection-checkbox" data-id="${doc.id}" ${selectedDocIds.has(doc.id) ? 'checked' : ''} title="Sélectionner ce document" />
+            <div class="doc-title-main" title="${escapeHtml(doc.title)}">${displayTitle}</div>
+          </div>
+          <div class="doc-meta-badges">
+            ${doc.is_top_result ? `<span class="doc-badge-pill top-badge" title="Score de pertinence le plus élevé">★ Plus pertinent</span>` : ''}
+            <span class="doc-badge-pill highlight">${doc.total_occurrences} occ.</span>
+            ${isIndexing ? `<span class="doc-badge-pill" style="background:rgba(37,99,235,0.1); color:var(--accent);">${doc.status === 'indexing' ? '⏳ Indexation...' : '⌛ En attente'}</span>` : `<span class="doc-badge-pill">${doc.total_pages} p.</span>`}
+            
+            <button class="doc-cache-btn ${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? 'cached' : ''}" data-id="${doc.id}" title="${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? 'Disponible hors-ligne' : 'Télécharger pour consultation hors-ligne'}" aria-label="Cache hors-ligne">
+              ${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? `
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+              ` : `
+                <svg class="cache-icon-cloud" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+              `}
+            </button>
+            <button class="doc-btn-action btn-delete-doc-cache" data-id="${doc.id}" style="${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? '' : 'display: none;'}" title="Supprimer ce document du cache local" aria-label="Supprimer du cache local">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
+                <line x1="2" y1="2" x2="22" y2="22"></line>
+              </svg>
+            </button>
+            <button class="doc-menu-trigger-btn" data-id="${doc.id}" title="Options du document (Renommer, Déplacer, Réindexer, Supprimer)" aria-label="Options">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="12" cy="5" r="2.2"></circle>
+                <circle cx="12" cy="12" r="2.2"></circle>
+                <circle cx="12" cy="19" r="2.2"></circle>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="doc-card-body">
+          <div class="doc-cover-wrapper" title="${isIndexing ? 'Document en cours d\'indexation...' : (isFailed ? 'Échec d\'indexation' : 'Ouvrir le document')}">
+            ${isIndexing ? `
+              <div class="doc-indexing-overlay">
+                <span class="spin-indicator"></span>
+                <span>${doc.status === 'indexing' ? 'Indexation...' : 'En attente'}</span>
+              </div>
+            ` : ''}
+            ${isFailed ? `
+              <div class="doc-failed-overlay" title="${escapeHtml(doc.error_message || 'Erreur d\'indexation')}">
+                <span>Échec</span>
+              </div>
+            ` : ''}
+            <img src="${PLACEHOLDER_COVER_SVG}" data-src="${doc.cover_url}" class="doc-cover-img dynamic-main-crop" alt="Couverture" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
+          </div>
+          <div class="doc-card-vignettes">
+            <div class="vignettes-ribbon-container">
+              ${vignettesHtml}
+            </div>
+          </div>
         </div>
       `;
     }
-
-    const query = searchInput ? searchInput.value.trim() : "";
-    const displayTitle = (isSearch && query) 
-      ? highlightTitle(doc.title, query) 
-      : escapeHtml(doc.title);
-
-    card.innerHTML = `
-      <div class="doc-card-header">
-        <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; flex: 1;">
-          <input type="checkbox" class="doc-selection-checkbox" data-id="${doc.id}" ${selectedDocIds.has(doc.id) ? 'checked' : ''} title="Sélectionner ce document" />
-          <div class="doc-title-main" title="${escapeHtml(doc.title)}">${displayTitle}</div>
-        </div>
-        <div class="doc-meta-badges">
-          ${doc.is_top_result ? `<span class="doc-badge-pill top-badge" title="Score de pertinence le plus élevé">★ Plus pertinent</span>` : ''}
-          ${isSearch ? `<span class="doc-badge-pill highlight">${doc.total_occurrences} occ.</span>` : ''}
-          ${isIndexing ? `<span class="doc-badge-pill" style="background:rgba(37,99,235,0.1); color:var(--accent);">${doc.status === 'indexing' ? '⏳ Indexation...' : '⌛ En attente'}</span>` : `<span class="doc-badge-pill">${doc.total_pages} p.</span>`}
-          
-          <button class="doc-cache-btn ${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? 'cached' : ''}" data-id="${doc.id}" title="${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? 'Disponible hors-ligne' : 'Télécharger pour consultation hors-ligne'}" aria-label="Cache hors-ligne">
-            ${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? `
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                <polyline points="20 6 9 17 4 12"></polyline>
-              </svg>
-            ` : `
-              <svg class="cache-icon-cloud" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                <polyline points="7 10 12 15 17 10"></polyline>
-                <line x1="12" y1="15" x2="12" y2="3"></line>
-              </svg>
-            `}
-          </button>
-          <button class="doc-btn-action btn-delete-doc-cache" data-id="${doc.id}" style="${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? '' : 'display: none;'}" title="Supprimer ce document du cache local" aria-label="Supprimer du cache local">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
-              <line x1="2" y1="2" x2="22" y2="22"></line>
-            </svg>
-          </button>
-          <button class="doc-menu-trigger-btn" data-id="${doc.id}" title="Options du document (Renommer, Déplacer, Réindexer, Supprimer)" aria-label="Options">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-              <circle cx="12" cy="5" r="2.2"></circle>
-              <circle cx="12" cy="12" r="2.2"></circle>
-              <circle cx="12" cy="19" r="2.2"></circle>
-            </svg>
-          </button>
-        </div>
-
-      </div>
-      <div class="doc-card-body">
-        <div class="doc-cover-wrapper" title="${isIndexing ? 'Document en cours d\'indexation...' : (isFailed ? 'Échec d\'indexation' : 'Ouvrir le document')}">
-          ${isIndexing ? `
-            <div class="doc-indexing-overlay">
-              <span class="spin-indicator"></span>
-              <span>${doc.status === 'indexing' ? 'Indexation...' : 'En attente'}</span>
-            </div>
-          ` : ''}
-          ${isFailed ? `
-            <div class="doc-failed-overlay" title="${escapeHtml(doc.error_message || 'Erreur d\'indexation')}">
-              <span>Échec</span>
-            </div>
-          ` : ''}
-          <img src="${PLACEHOLDER_COVER_SVG}" data-src="${doc.cover_url}" class="doc-cover-img dynamic-main-crop" alt="Couverture" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
-        </div>
-        <div class="doc-card-vignettes">
-          <div class="vignettes-ribbon-container">
-            ${vignettesHtml}
-          </div>
-        </div>
-      </div>
-    `;
 
     // Clic case à cocher de sélection tactile
     const checkbox = card.querySelector(".doc-selection-checkbox");
@@ -3289,8 +3646,17 @@ document.addEventListener("DOMContentLoaded", () => {
       openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], firstRect, yRatio, firstOccId);
     };
 
-    card.querySelector(".doc-cover-wrapper").addEventListener("click", openDocAction);
-    card.querySelector(".doc-title-main").addEventListener("click", openDocAction);
+    if (!isSearch) {
+      card.addEventListener("click", (e) => {
+        if (e.target.closest("button") || e.target.closest(".doc-selection-checkbox") || e.target.closest("input")) return;
+        openDocAction(e);
+      });
+    } else {
+      const coverWrapper = card.querySelector(".doc-cover-wrapper");
+      if (coverWrapper) coverWrapper.addEventListener("click", openDocAction);
+      const titleEl = card.querySelector(".doc-title-main");
+      if (titleEl) titleEl.addEventListener("click", openDocAction);
+    }
 
     return card;
   }
@@ -4059,9 +4425,225 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
-  // Split View & Lecteur PDF
+  // Gestionnaire Multi-Onglets Lecteur PDF Goodnotes (tabManager)
   // =========================================================================
+  const tabManager = {
+    openTabs: [],
+    activeTabId: null,
+
+    openTab(docId, docTitle, targetPage = 1, occurrences = [], targetRect = null, targetYRatio = 0, targetOccId = null, searchQuery = null) {
+      const numericDocId = Number(docId);
+      let existingTab = this.openTabs.find(t => Number(t.docId) === numericDocId);
+      if (existingTab) {
+        this.activeTabId = existingTab.id;
+        existingTab.page = targetPage;
+        existingTab.rect = targetRect;
+        existingTab.yRatio = targetYRatio;
+        existingTab.occId = targetOccId;
+        if (searchQuery) existingTab.searchQuery = searchQuery;
+        if (occurrences && occurrences.length > 0) existingTab.occurrences = occurrences;
+      } else {
+        const newTab = {
+          id: `tab_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+          docId: numericDocId,
+          title: docTitle || `Document #${numericDocId}`,
+          page: targetPage,
+          rect: targetRect,
+          yRatio: targetYRatio,
+          occId: targetOccId,
+          searchQuery: searchQuery || currentSearchQuery || "",
+          occurrences: occurrences || [],
+          activeOccurrenceIndex: 0
+        };
+        this.openTabs.push(newTab);
+        this.activeTabId = newTab.id;
+      }
+      this.renderTabsUI();
+      _executeLoadDocumentInViewer(numericDocId, docTitle, targetPage, occurrences, targetRect, targetYRatio, targetOccId);
+    },
+
+    selectTab(tabId) {
+      if (this.activeTabId === tabId) return;
+      const targetTab = this.openTabs.find(t => t.id === tabId);
+      if (!targetTab) return;
+      this.activeTabId = tabId;
+      this.renderTabsUI();
+      _executeLoadDocumentInViewer(
+        targetTab.docId,
+        targetTab.title,
+        targetTab.page,
+        targetTab.occurrences,
+        targetTab.rect,
+        targetTab.yRatio,
+        targetTab.occId
+      );
+    },
+
+    closeTab(tabId) {
+      const idx = this.openTabs.findIndex(t => t.id === tabId);
+      if (idx === -1) return;
+      this.openTabs.splice(idx, 1);
+      if (this.activeTabId === tabId) {
+        if (this.openTabs.length > 0) {
+          const nextIdx = Math.min(idx, this.openTabs.length - 1);
+          const nextTab = this.openTabs[nextIdx];
+          this.activeTabId = nextTab.id;
+          this.renderTabsUI();
+          _executeLoadDocumentInViewer(
+            nextTab.docId,
+            nextTab.title,
+            nextTab.page,
+            nextTab.occurrences,
+            nextTab.rect,
+            nextTab.yRatio,
+            nextTab.occId
+          );
+        } else {
+          this.activeTabId = null;
+          this.renderTabsUI();
+          closeSplitViewer();
+        }
+      } else {
+        this.renderTabsUI();
+      }
+    },
+
+    returnToHome() {
+      workspace.classList.remove("split-active");
+      document.documentElement.classList.remove("doc-open");
+      document.body.classList.remove("doc-open");
+      const appEl = document.getElementById("app");
+      if (appEl) appEl.classList.remove("doc-open");
+      setDocumentZoomLock(false);
+    },
+
+    renderTabsUI() {
+      if (!readerTabsStrip) return;
+      readerTabsStrip.innerHTML = "";
+      this.openTabs.forEach(tab => {
+        const isActive = tab.id === this.activeTabId;
+        const tabEl = document.createElement("div");
+        tabEl.className = `reader-tab-item ${isActive ? 'active' : ''}`;
+        tabEl.setAttribute("data-tab-id", tab.id);
+        tabEl.innerHTML = `
+          <span class="reader-tab-title" title="${escapeHtml(tab.title)}">${escapeHtml(tab.title)}</span>
+          <button class="reader-tab-chevron" title="Détails du document" data-tab-id="${tab.id}">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </button>
+          <button class="reader-tab-close" title="Fermer l'onglet" data-tab-id="${tab.id}">&times;</button>
+        `;
+
+        tabEl.addEventListener("click", (e) => {
+          if (e.target.closest(".reader-tab-close") || e.target.closest(".reader-tab-chevron")) return;
+          this.selectTab(tab.id);
+        });
+
+        const closeBtn = tabEl.querySelector(".reader-tab-close");
+        if (closeBtn) {
+          closeBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            this.closeTab(tab.id);
+          });
+        }
+
+        const chevronBtn = tabEl.querySelector(".reader-tab-chevron");
+        if (chevronBtn) {
+          chevronBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            showTabDocInfoPopover(tab, chevronBtn);
+          });
+        }
+
+        readerTabsStrip.appendChild(tabEl);
+      });
+    }
+  };
+
+  function showTabDocInfoPopover(tab, anchorEl) {
+    if (!tabDocInfoPopover) return;
+    const rect = anchorEl.getBoundingClientRect();
+    tabDocInfoPopover.style.top = `${rect.bottom + 6}px`;
+    tabDocInfoPopover.style.left = `${Math.max(10, Math.min(window.innerWidth - 310, rect.left - 40))}px`;
+    tabDocInfoPopover.style.display = "block";
+
+    const matchedDoc = Array.isArray(currentLoadedDocs) ? currentLoadedDocs.find(d => Number(d.id) === Number(tab.docId)) : null;
+
+    const popoverTitle = document.getElementById("popoverDocTitle");
+    const popoverFilename = document.getElementById("popoverDocFilename");
+    const popoverPages = document.getElementById("popoverDocPages");
+    const popoverSize = document.getElementById("popoverDocSize");
+    const popoverCache = document.getElementById("popoverDocCacheStatus");
+
+    if (popoverTitle) popoverTitle.textContent = tab.title;
+    if (popoverFilename) popoverFilename.textContent = matchedDoc?.filename || `${tab.title}.pdf`;
+    if (popoverPages) popoverPages.textContent = `${matchedDoc?.total_pages || tab.page || 1} pages`;
+    if (popoverSize) popoverSize.textContent = matchedDoc?.file_size ? formatBytes(matchedDoc.file_size) : "-";
+    
+    const isCached = window.downloadQueueManager ? window.downloadQueueManager.isDocumentCached(tab.docId) : false;
+    if (popoverCache) popoverCache.textContent = isCached ? "⚡ Disponible hors-ligne" : "☁️ Sur le serveur";
+  }
+
+  if (closePopoverDocBtn) {
+    closePopoverDocBtn.addEventListener("click", () => {
+      if (tabDocInfoPopover) tabDocInfoPopover.style.display = "none";
+    });
+  }
+
+  document.addEventListener("click", (e) => {
+    if (tabDocInfoPopover && tabDocInfoPopover.style.display !== "none") {
+      if (!e.target.closest("#tabDocInfoPopover") && !e.target.closest(".reader-tab-chevron")) {
+        tabDocInfoPopover.style.display = "none";
+      }
+    }
+  });
+
+  if (readerHomeBtn) {
+    readerHomeBtn.addEventListener("click", () => {
+      tabManager.returnToHome();
+    });
+  }
+
+  if (readerSidebarToggleBtn && inDocSearchDrawer) {
+    readerSidebarToggleBtn.addEventListener("click", () => {
+      const isHidden = (inDocSearchDrawer.style.display === "none" || !inDocSearchDrawer.style.display);
+      inDocSearchDrawer.style.display = isHidden ? "flex" : "none";
+      readerSidebarToggleBtn.classList.toggle("active", isHidden);
+    });
+  }
+
+  let isReaderFitToWidth = false;
+  if (readerFitToWidthBtn) {
+    readerFitToWidthBtn.addEventListener("click", () => {
+      isReaderFitToWidth = !isReaderFitToWidth;
+      readerFitToWidthBtn.classList.toggle("active", isReaderFitToWidth);
+      try {
+        const win = pdfFrame?.contentWindow;
+        if (win && win.PDFViewerApplication && win.PDFViewerApplication.pdfViewer) {
+          win.PDFViewerApplication.pdfViewer.currentScaleValue = isReaderFitToWidth ? "page-width" : "auto";
+        }
+      } catch (e) {}
+    });
+  }
+
+  if (readerShareBtn) {
+    readerShareBtn.addEventListener("click", () => {
+      if (!currentActiveDocId) return;
+      const a = document.createElement("a");
+      a.href = `/api/pdf/${currentActiveDocId}`;
+      a.download = `${currentActiveDocTitle || "document"}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    });
+  }
+
   function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0, targetOccId = null) {
+    tabManager.openTab(docId, docTitle, targetPage, occurrences, targetRect, targetYRatio, targetOccId);
+  }
+
+  function _executeLoadDocumentInViewer(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0, targetOccId = null) {
     const numericDocId = Number(docId);
     targetPage = parseInt(targetPage, 10) || 1;
     const isSameDoc = (Number(currentActiveDocId) === numericDocId);
@@ -4535,6 +5117,14 @@ document.addEventListener("DOMContentLoaded", () => {
         card.classList.toggle('active', isActive);
         if (isActive) scrollActiveCardIntoView(card);
       });
+      if (inDocDrawerOccurrencesList) {
+        const drawerCards = inDocDrawerOccurrencesList.querySelectorAll('.vertical-occ-card');
+        drawerCards.forEach((card, idx) => {
+          const isActive = idx === activeIdx;
+          card.classList.toggle('active', isActive);
+          if (isActive) scrollActiveCardIntoView(card);
+        });
+      }
       return;
     }
 
@@ -4542,8 +5132,19 @@ document.addEventListener("DOMContentLoaded", () => {
     verticalCropManager.clear();
     docOccurrencesList.innerHTML = "";
 
+    if (inDocDrawerCount) {
+      const count = occurrences ? occurrences.length : 0;
+      inDocDrawerCount.textContent = `${count} résultat${count > 1 ? 's' : ''}`;
+    }
+    if (inDocDrawerOccurrencesList) {
+      inDocDrawerOccurrencesList.innerHTML = "";
+    }
+
     if (!occurrences || occurrences.length === 0) {
       docOccurrencesList.innerHTML = `<div style="color:var(--text-muted); font-size:12.5px; padding:10px;">Aucun extrait trouvé pour ce terme dans ce document.</div>`;
+      if (inDocDrawerOccurrencesList) {
+        inDocDrawerOccurrencesList.innerHTML = `<div style="color:var(--text-muted); font-size:12.5px; padding:10px;">Aucun extrait trouvé pour ce terme dans ce document.</div>`;
+      }
       return;
     }
 
@@ -4596,11 +5197,40 @@ document.addEventListener("DOMContentLoaded", () => {
       docOccurrencesList.appendChild(card);
       const img = card.querySelector(".dynamic-crop");
       if (img) verticalCropManager.observe(img);
+
+      if (inDocDrawerOccurrencesList) {
+        const drawerCard = document.createElement("div");
+        drawerCard.className = `vertical-occ-card ${isActive ? 'active' : ''}`;
+        drawerCard.setAttribute("data-doc-id", docId);
+        drawerCard.setAttribute("data-page", occ.page_number);
+        drawerCard.setAttribute("data-occ-id", occ.occ_id || '');
+        drawerCard.innerHTML = `
+          <div class="vertical-occ-img-wrapper">
+            <img src="${placeholderSvg}" data-src="${occ.crop_url}" class="vertical-occ-img dynamic-crop" alt="Extrait p. ${occ.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
+          </div>
+          <div class="vertical-occ-footer">
+            <span class="vertical-occ-page">Page ${occ.page_number}</span>
+            <span class="vertical-occ-snippet" title="${escapeHtml(occ.text_snippet || '')}">${currentSearchQuery ? highlightTitle(occ.text_snippet || '', currentSearchQuery) : escapeHtml(occ.text_snippet || '')}</span>
+          </div>
+        `;
+        drawerCard.addEventListener("click", () => {
+          jumpToOccurrenceByIndex(index);
+        });
+        inDocDrawerOccurrencesList.appendChild(drawerCard);
+        const drawerImg = drawerCard.querySelector(".dynamic-crop");
+        if (drawerImg) verticalCropManager.observe(drawerImg);
+      }
     });
 
     const activeCard = docOccurrencesList.querySelector(".vertical-occ-card.active");
     if (activeCard) {
       scrollActiveCardIntoView(activeCard);
+    }
+    if (inDocDrawerOccurrencesList) {
+      const activeDrawerCard = inDocDrawerOccurrencesList.querySelector(".vertical-occ-card.active");
+      if (activeDrawerCard) {
+        scrollActiveCardIntoView(activeDrawerCard);
+      }
     }
   }
 
