@@ -409,7 +409,10 @@ class PdfCacheManager {
               }
               cursor.continue();
             } else {
-              if (readBytes >= totalBytes || (meta.completed && readBytes > 0)) {
+              // Couverture stricte uniquement : un buffer tronqué (méta d'une ancienne
+              // version du PDF) produirait un document dont les pages de fin échouent.
+              // null = l'app retombe sur l'URL réseau et reconstruit un cache sain.
+              if (readBytes >= totalBytes) {
                 const blob = new Blob([fullArray], { type: 'application/pdf' });
                 const blobUrl = URL.createObjectURL(blob);
                 resolve(blobUrl);

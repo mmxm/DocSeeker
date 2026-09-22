@@ -254,7 +254,9 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
                 cursor.continue();
               } else {
                 try { db.close(); } catch (_) {}
-                if (readBytes >= totalBytes || (meta.completed && readBytes > 0)) {
+                // Couverture stricte : un buffer tronqué (méta d'une ancienne version)
+                // casserait les pages de fin du document côté PDF.js.
+                if (readBytes >= totalBytes) {
                   resolve(fullArray.buffer);
                 } else {
                   resolve(null);
@@ -269,6 +271,36 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
       };
     } catch (err) {
       resolve(null);
+    }
+  });
+}
+
+/**
+ * Purge le cache local (IndexedDB docseeker_pdf_chunks_v2) d'un document incohérent,
+ * afin que le prochain chargement repasse par le réseau et reconstruise un cache sain.
+ */
+async function purgeCorruptLocalCache(docId) {
+  const id = Number(docId);
+  const normUrl = `/api/pdf/${id || docId}`;
+  return new Promise((resolve) => {
+    try {
+      if (typeof indexedDB === 'undefined') return resolve(false);
+      const req = indexedDB.open('docseeker_pdf_chunks_v2', 2);
+      req.onerror = () => resolve(false);
+      req.onsuccess = (e) => {
+        const db = e.target.result;
+        try {
+          const tx = db.transaction(['meta', 'chunks'], 'readwrite');
+          try { tx.objectStore('meta').delete(normUrl); } catch (_) {}
+          try { tx.objectStore('chunks').delete(IDBKeyRange.bound(`${normUrl}#`, `${normUrl}#\uffff`)); } catch (_) {}
+          tx.oncomplete = () => { try { db.close(); } catch (_) {} resolve(true); };
+          tx.onerror = () => { try { db.close(); } catch (_) {} resolve(false); };
+        } catch (_) {
+          try { db.close(); } catch (_) {} resolve(false);
+        }
+      };
+    } catch (_) {
+      resolve(false);
     }
   });
 }
@@ -325,10 +357,6 @@ async function loadPdfDoc(docId, isOffline = false) {
 
   const loadPromise = (async () => {
     try {
-      // 1. Tenter la lecture directe depuis le cache binaire IndexedDB (0ms, 100% hors-ligne pour les PDF standards <= 100 Mo)
-      const localBytes = await getCachedPdfBytesFromIndexedDB(docId);
-      let loadingTask = null;
-
       const pdfParams = {
         disableAutoFetch: false,
         disableStream: false,
@@ -342,17 +370,31 @@ async function loadPdfDoc(docId, isOffline = false) {
         cMapPacked: true,
       };
 
+      const isNetworkOffline = (typeof self !== 'undefined' && self.navigator && self.navigator.onLine === false);
+      let doc = null;
+
+      // 1. Tenter la lecture directe depuis le cache binaire IndexedDB (0ms, 100% hors-ligne pour les PDF standards <= 100 Mo)
+      const localBytes = await getCachedPdfBytesFromIndexedDB(docId);
       if (localBytes) {
-        loadingTask = pdfjsLib.getDocument({
-          data: localBytes,
-          ...pdfParams,
-        });
-      } else {
+        try {
+          const localTask = pdfjsLib.getDocument({ data: localBytes, ...pdfParams });
+          doc = await localTask.promise;
+        } catch (localErr) {
+          // Cache local corrompu ou périmé (méta d'une ancienne version du PDF :
+          // octets tronqués/hybrides → pages manquantes en fin de document).
+          // On purge ce cache incohérent et on retombe sur le chargement réseau.
+          if (!isNetworkOffline) {
+            console.warn(`[CropWorker] Cache local incohérent pour le document ${docId}, purge et repli réseau.`, localErr?.message || localErr);
+            try { await purgeCorruptLocalCache(docId); } catch (_) {}
+          }
+          doc = null;
+        }
+      }
+
+      if (!doc) {
         // Vérifier si le document est disponible dans IndexedDB (ex: gros PDF > 100 Mo complet)
         const isLocallyCached = await isDocumentCachedInIndexedDB(docId);
 
-        // Détecter si l'application ou le navigateur est en mode hors-ligne
-        const isNetworkOffline = (typeof self !== 'undefined' && self.navigator && self.navigator.onLine === false);
         if ((isOffline || isNetworkOffline) && !isLocallyCached) {
           const offlineErr = new Error(`PDF_OFFLINE_UNAVAILABLE: Document ${docId} non mis en cache locale`);
           offlineErr.code = 'PDF_OFFLINE_UNAVAILABLE';
@@ -361,14 +403,13 @@ async function loadPdfDoc(docId, isOffline = false) {
 
         // 2. Chargement via URL (PDF.js utilisera RangeReader et lira les fragments directement depuis IndexedDB)
         const pdfUrl = new URL(`/api/pdf/${docId}`, self.location.origin).href;
-        loadingTask = pdfjsLib.getDocument({
+        const networkTask = pdfjsLib.getDocument({
           url: pdfUrl,
           withCredentials: true,
           ...pdfParams,
         });
+        doc = await networkTask.promise;
       }
-
-      const doc = await loadingTask.promise;
 
       // Nettoyage LRU si le cache dépasse la limite adaptative
       while (pdfDocCache.size >= PDF_LRU_MAX) {
@@ -425,9 +466,24 @@ async function executeCropRender(task) {
   const { docId, pageNumber, highlightRects, rect, isOffline } = task;
 
   // Wasm supprimé — calcul effectué en JS pur (traduction fidèle de crop.rs)
-  const doc = await loadPdfDoc(docId, isOffline);
-  // Réutilisation directe de la page PDF si déjà décodée récemment (gain majeur sur multi-occurrences)
-  const page = await getOrLoadPage(doc, docId, pageNumber);
+  let doc = null;
+  let page = null;
+  try {
+    doc = await loadPdfDoc(docId, isOffline);
+    // Réutilisation directe de la page PDF si déjà décodée récemment (gain majeur sur multi-occurrences)
+    page = await getOrLoadPage(doc, docId, pageNumber);
+  } catch (loadErr) {
+    // Cache local corrompu ayant réussi à charger mais dont les pages échouent :
+    // purge + repli réseau une seule fois, puis rechargement du document.
+    if (typeof self !== 'undefined' && self.navigator && self.navigator.onLine === false) {
+      throw loadErr;
+    }
+    console.warn(`[CropWorker] Échec d'accès au document ${docId} (page ${pageNumber}), purge du cache local et repli réseau.`, loadErr?.message || loadErr);
+    try { await purgeCorruptLocalCache(docId); } catch (_) {}
+    clearPageCache(docId);
+    doc = await loadPdfDoc(docId, isOffline);
+    page = await getOrLoadPage(doc, docId, pageNumber);
+  }
 
   try {
     const [x0, y0, x1, y1] = rect;

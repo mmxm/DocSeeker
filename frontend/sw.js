@@ -7,7 +7,7 @@
  * 3. Routage résilient avec fallback automatique sur incident réseau.
  */
 
-const APP_VERSION = '10.4';
+const APP_VERSION = '10.5';
 const CACHE_NAME = `docseeker-app-shell-v${APP_VERSION}`;
 const CROP_CACHE_NAME = 'docseeker_offline_crops_v2';
 const COVER_CACHE_NAME = 'docseeker_covers';
@@ -518,7 +518,9 @@ async function createIndexedDbPdfResponse(docId, request) {
                   cursor.continue();
                 } else {
                   try { db.close(); } catch (e) {}
-                  if (readBytes >= totalBytes || (meta.completed && readBytes > 0)) {
+                  // Couverture stricte : un buffer tronqué (méta d'une ancienne version)
+                  // casserait les pages de fin du document côté PDF.js.
+                  if (readBytes >= totalBytes) {
                     resolve(new Response(fullArray.buffer, {
                       status: 200,
                       headers: {
@@ -666,7 +668,9 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
                 cursor.continue();
               } else {
                 try { db.close(); } catch (e) {}
-                if (readBytes >= totalBytes || (meta.completed && readBytes > 0)) {
+                // Couverture stricte : un buffer tronqué (méta d'une ancienne version)
+                // casserait les pages de fin du document côté PDF.js.
+                if (readBytes >= totalBytes) {
                   resolve(fullArray.buffer);
                 } else {
                   resolve(null);
