@@ -223,7 +223,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const viewerBackBtn = document.getElementById("viewerBackBtn");
   const mobileOccurrencesBtn = document.getElementById("mobileOccurrencesBtn");
   const mobileOccurrencesCountText = document.getElementById("mobileOccurrencesCountText");
-  const toggleSidebarBtn = document.getElementById("toggleSidebarBtn");
   const splitResizer = document.getElementById("splitResizer");
   const toggleSelectionModeBtn = document.getElementById("toggleSelectionModeBtn");
 
@@ -977,13 +976,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     window.addEventListener("mouseup", stopResizing);
     window.addEventListener("mouseleave", stopResizing);
-  }
-
-  // Bouton replier/déplier volet latéral gauche (Desktop)
-  if (toggleSidebarBtn) {
-    toggleSidebarBtn.addEventListener("click", () => {
-      workspace.classList.toggle("sidebar-collapsed");
-    });
   }
 
   // Bouton retour mobile dans le lecteur PDF

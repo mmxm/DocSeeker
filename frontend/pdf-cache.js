@@ -400,8 +400,11 @@ class PdfCacheManager {
                 const b = parseInt(parts[0], 10);
                 const chunkBuf = cursor.value;
                 if (chunkBuf && chunkBuf.byteLength) {
-                  fullArray.set(new Uint8Array(chunkBuf), b);
-                  readBytes += chunkBuf.byteLength;
+                  // Garde anti-RangeError : fragment périmé hors des bornes de totalBytes ignoré
+                  if (b >= 0 && b + chunkBuf.byteLength <= totalBytes) {
+                    fullArray.set(new Uint8Array(chunkBuf), b);
+                    readBytes += chunkBuf.byteLength;
+                  }
                 }
               }
               cursor.continue();

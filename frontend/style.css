@@ -434,27 +434,6 @@ body.light-theme {
   pointer-events: none !important;
 }
 
-/* Volet de gauche replié pour immersion totale (Desktop/Tablette) */
-.main-workspace.split-active.sidebar-collapsed .results-pane {
-  display: none !important;
-}
-
-.main-workspace.split-active.sidebar-collapsed .split-resizer {
-  display: none !important;
-}
-
-/* Mesure 2 : Mode Immersion Desktop - Masquage de l'App Header quand la vue est repliée */
-.app-layout:has(.main-workspace.split-active.sidebar-collapsed) .app-header,
-body:has(.main-workspace.split-active.sidebar-collapsed) .app-header {
-  display: none !important;
-}
-
-.app-layout:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace,
-body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
-  height: 100vh !important;
-  height: 100dvh !important;
-}
-
 /* Séparateur redimensionnable Split-View (Desktop) */
 .split-resizer {
   display: none;
@@ -2938,10 +2917,6 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
 
   .btn-occurrences-pill {
     display: inline-flex !important;
-  }
-
-  #toggleSidebarBtn {
-    display: none !important;
   }
 
   .viewer-doc-info {

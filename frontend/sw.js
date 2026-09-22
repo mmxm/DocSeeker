@@ -7,7 +7,7 @@
  * 3. Routage résilient avec fallback automatique sur incident réseau.
  */
 
-const APP_VERSION = '9.5';
+const APP_VERSION = '10.3';
 const CACHE_NAME = `docseeker-app-shell-v${APP_VERSION}`;
 const CROP_CACHE_NAME = 'docseeker_offline_crops_v2';
 const COVER_CACHE_NAME = 'docseeker_covers';
@@ -274,7 +274,11 @@ self.addEventListener('fetch', (event) => {
   if (!url.pathname.startsWith('/api/')) {
     event.respondWith(
       (async () => {
-        let cached = await caches.match(event.request, { ignoreSearch: true }) || await caches.match(url.pathname, { ignoreSearch: true });
+        // Match exact d'abord (respecte ?v=...) : ignoreSearch ne sert qu'en repli,
+        // sinon une URL versionnée ressert indéfiniment l'ancien asset en cache.
+        let cached = await caches.match(event.request)
+          || await caches.match(event.request, { ignoreSearch: true })
+          || await caches.match(url.pathname, { ignoreSearch: true });
         if (!cached && url.pathname.endsWith('sqlite3-opfs-async-proxy.js')) {
           cached = await caches.match('/wasm/sqlite/sqlite3-opfs-async-proxy.js', { ignoreSearch: true });
         }
@@ -504,8 +508,11 @@ async function createIndexedDbPdfResponse(docId, request) {
                     const b = parseInt(parts[0], 10);
                     const chunkBuf = cursor.value;
                     if (chunkBuf && chunkBuf.byteLength) {
-                      fullArray.set(new Uint8Array(chunkBuf), b);
-                      readBytes += chunkBuf.byteLength;
+                      // Garde anti-RangeError : fragment hors bornes ignoré (cache périmé)
+                      if (b >= 0 && b + chunkBuf.byteLength <= totalBytes) {
+                        fullArray.set(new Uint8Array(chunkBuf), b);
+                        readBytes += chunkBuf.byteLength;
+                      }
                     }
                   }
                   cursor.continue();
@@ -649,8 +656,11 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
                   const b = parseInt(parts[0], 10);
                   const chunkBuf = cursor.value;
                   if (chunkBuf && chunkBuf.byteLength) {
-                    fullArray.set(new Uint8Array(chunkBuf), b);
-                    readBytes += chunkBuf.byteLength;
+                    // Garde anti-RangeError : fragment hors bornes ignoré (cache périmé)
+                    if (b >= 0 && b + chunkBuf.byteLength <= totalBytes) {
+                      fullArray.set(new Uint8Array(chunkBuf), b);
+                      readBytes += chunkBuf.byteLength;
+                    }
                   }
                 }
                 cursor.continue();

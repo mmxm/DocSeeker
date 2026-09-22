@@ -242,8 +242,13 @@ async function getCachedPdfBytesFromIndexedDB(docId) {
                   const chunkVal = cursor.value;
                   const chunkBuf = chunkVal instanceof ArrayBuffer ? new Uint8Array(chunkVal) : (ArrayBuffer.isView(chunkVal) ? chunkVal : null);
                   if (chunkBuf && chunkBuf.byteLength) {
-                    fullArray.set(chunkBuf, b);
-                    readBytes += chunkBuf.byteLength;
+                    // Garde anti-RangeError : un fragment périmé (ancien cache, re-téléchargement)
+                    // peut dépasser totalBytes du meta ; on l'ignore au lieu de lever,
+                    // ce qui laisse la vignette retomber sur le fallback réseau.
+                    if (b >= 0 && b + chunkBuf.byteLength <= totalBytes) {
+                      fullArray.set(chunkBuf, b);
+                      readBytes += chunkBuf.byteLength;
+                    }
                   }
                 }
                 cursor.continue();
