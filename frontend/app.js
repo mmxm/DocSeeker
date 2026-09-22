@@ -6166,6 +6166,17 @@ document.addEventListener("DOMContentLoaded", () => {
       if (window.downloadQueueManager && typeof window.downloadQueueManager.reinitializeWorker === "function") {
         window.downloadQueueManager.reinitializeWorker();
       }
+      // La page qui tourne peut encore exécuter du code périmé (scripts en cache HTTP
+      // antérieurs à la nouvelle version du SW) : un seul rechargement automatique
+      // aligne la page sur le contrôleur actif. Garde anti-boucle de 30 s.
+      try {
+        const RELOAD_KEY = "docseeker_last_sw_controller_reload";
+        const last = Number(sessionStorage.getItem(RELOAD_KEY) || 0);
+        if (Date.now() - last > 30000) {
+          sessionStorage.setItem(RELOAD_KEY, String(Date.now()));
+          location.reload();
+        }
+      } catch (_) {}
     });
   }
 

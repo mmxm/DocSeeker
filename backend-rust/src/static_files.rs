@@ -21,7 +21,13 @@ fn get_cache_control(path: &str) -> &'static str {
     } else if path.ends_with(".js")
         || path.ends_with(".mjs")
         || path.ends_with(".css")
-        || path.ends_with(".woff2")
+    {
+        // Scripts et styles applicatifs : revalidation systématique. Un max-age long ici
+        // laisse le HTTP cache du navigateur servir du code périmé sous une URL ?v= récente
+        // (blocages « boutons morts », « vignettes blanches » très difficiles à diagnostiquer).
+        // Les ?v= restent utiles aux navigateurs, mais la fraîcheur doit être garantie serveur.
+        "no-cache"
+    } else if path.ends_with(".woff2")
         || path.ends_with(".svg")
         || path.ends_with(".png")
         || path.ends_with(".webp")
