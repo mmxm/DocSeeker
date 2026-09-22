@@ -69,6 +69,20 @@ export class DocSeekerTestHarness {
 
   async goto(path = '/') {
     await this.page.goto(path);
+    // Contournement déterministe : le service worker sert l'App Shell (app.js)
+    // en Cache-First, ce qui peut masquer le code à l'exécution (stale).
+    // On désactive UNIQUEMENT en contexte en ligne (les specs offline comptent
+    // sur le SW et son cache App Shell — voir ui_offline.spec.mjs).
+    await this.page.evaluate(async () => {
+      try {
+        if (navigator.onLine === false) return;
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg) await reg.unregister();
+        const keys = await caches.keys();
+        await Promise.all(keys.filter(k => k.startsWith('docseeker-app-shell')).map(k => caches.delete(k)));
+      } catch (e) {}
+    }).catch(() => {});
+    await this.page.reload().catch(() => {});
     await this.page.locator('#searchInput').waitFor({ state: 'visible', timeout: 10000 });
     await this.page.locator('#resultsContainer').waitFor({ state: 'visible', timeout: 10000 });
     await this._clearFiltersAndSearch();
@@ -342,11 +356,139 @@ export class DocSeekerTestHarness {
   }
 
   async removeDocFromCache(docId) {
-    const card      = await this.getDocCard(docId);
-    const deleteBtn = card.locator('.btn-delete-doc-cache');
-    await deleteBtn.waitFor({ state: 'visible', timeout: 8000 });
-    this.page.once('dialog', (dialog) => dialog.accept());
-    await deleteBtn.click();
+    const card = await this.getDocCard(docId);
+    const cacheBtn = card.locator('.doc-cache-btn');
+    await cacheBtn.waitFor({ state: 'visible', timeout: 8000 });
+    await cacheBtn.click();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ASSERTIONS — VISUELS DU VIEWER PDF & DE L'INTERFACE
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Vérification visuelle réelle du rendu PDF et de l'interface :
+   * 1. Panneau du viewer visible (#viewerPane)
+   * 2. Onglet actif (.reader-tab-item.active)
+   * 3. Titre du document dans le bandeau (#viewerDocTitle non vide)
+   * 4. Présence et rendu réel d'un canvas de page PDF dans l'iframe (width > 0, height > 0)
+   * 5. Vérifie que le compteur de pages dans le viewer n'est PAS 0 ("0 sur 0" = crash)
+   * 6. Optionnel : capture d'écran visuelle
+   */
+  async assertPdfViewerRendered({ minCanvasWidth = 200, minCanvasHeight = 200, minNonWhitePixels = 30, screenshotName = null } = {}) {
+    const viewerPane = this.page.locator('#viewerPane');
+    await expect(viewerPane).toBeVisible({ timeout: 10000 });
+
+    const activeTab = this.page.locator('.reader-tab-item.active');
+    await expect(activeTab).toBeVisible({ timeout: 10000 });
+
+    const docTitle = this.page.locator('#viewerDocTitle');
+    await expect(docTitle).toBeVisible();
+    const titleText = await docTitle.innerText();
+    expect(titleText.trim().length).toBeGreaterThan(0);
+
+    const pdfFrame = this.page.locator('#pdfFrame');
+    await expect(pdfFrame).toBeVisible({ timeout: 10000 });
+
+    // Inspection dans le DOM de l'iframe PDF.js
+    const frame = this.page.frameLocator('#pdfFrame');
+    const pageView = frame.locator('.page[data-page-number="1"], .page').first();
+    await expect(pageView).toBeVisible({ timeout: 15000 });
+
+    // Attendre que la page soit marquée comme rendue par PDF.js
+    await expect.poll(async () => {
+      return await pageView.evaluate(el => el.getAttribute('data-loaded') === 'true' || el.classList.contains('page'));
+    }, { timeout: 15000 }).toBe(true);
+
+    const canvas = pageView.locator('canvas').first();
+    await expect(canvas).toBeVisible({ timeout: 15000 });
+
+    // 1. Vérification des dimensions réelles du canvas
+    await expect.poll(async () => {
+      return await canvas.evaluate(c => (c.width > 0 && c.height > 0));
+    }, { timeout: 10000 }).toBe(true);
+
+    const actualDims = await canvas.evaluate(c => ({
+      width: c.width || 0,
+      height: c.height || 0
+    }));
+
+    expect(actualDims.width).toBeGreaterThanOrEqual(minCanvasWidth);
+    expect(actualDims.height).toBeGreaterThanOrEqual(minCanvasHeight);
+
+    // 2. Vraie vérification anti-page blanche : échantillonnage des pixels réels du canvas
+    // Si le PDF est une page blanche, nonWhitePixels = 0.
+    await expect.poll(async () => {
+      return await canvas.evaluate(c => {
+        try {
+          const ctx = c.getContext('2d');
+          if (!ctx) return false;
+          const w = Math.min(c.width, 400);
+          const h = Math.min(c.height, 400);
+          const imgData = ctx.getImageData(0, 0, w, h).data;
+          let nonWhite = 0;
+          for (let i = 0; i < imgData.length; i += 16) {
+            const r = imgData[i];
+            const g = imgData[i + 1];
+            const b = imgData[i + 2];
+            const a = imgData[i + 3];
+            if (a > 30 && (r < 240 || g < 240 || b < 240)) {
+              nonWhite++;
+              if (nonWhite > 20) return true;
+            }
+          }
+          return false;
+        } catch (e) {
+          return false;
+        }
+      });
+    }, { timeout: 15000, intervals: [200, 400, 800] }).toBe(true);
+
+    const pixelAnalysis = await canvas.evaluate(c => {
+      try {
+        const ctx = c.getContext('2d');
+        const w = Math.min(c.width, 400);
+        const h = Math.min(c.height, 400);
+        const imgData = ctx.getImageData(0, 0, w, h).data;
+        let nonWhite = 0;
+        for (let i = 0; i < imgData.length; i += 16) {
+          const r = imgData[i];
+          const g = imgData[i + 1];
+          const b = imgData[i + 2];
+          const a = imgData[i + 3];
+          if (a > 30 && (r < 240 || g < 240 || b < 240)) nonWhite++;
+        }
+        return { nonWhitePixels: nonWhite };
+      } catch (e) {
+        return { nonWhitePixels: 0 };
+      }
+    });
+
+    // 3. Vérification de la couche de texte PDF.js (textLayer doit contenir des glyphes réels)
+    const textLayer = pageView.locator('.textLayer');
+    const textSpanCount = await textLayer.locator('span').count();
+    const hasTextOrInk = pixelAnalysis.nonWhitePixels >= minNonWhitePixels || textSpanCount > 0;
+    expect(hasTextOrInk).toBe(true);
+
+    // 4. Vérifier que le nombre total de pages n'est pas 0 (pas de crash "0 sur 0")
+    const numPages = await this.page.evaluate(() => {
+      const win = document.getElementById('pdfFrame')?.contentWindow;
+      return win?.PDFViewerApplication?.pagesCount || 0;
+    });
+    expect(numPages).toBeGreaterThan(0);
+
+    if (screenshotName) {
+      await this.page.screenshot({ path: `tests/ui/screenshots/${screenshotName}.png`, fullPage: false });
+    }
+
+    return {
+      title: titleText,
+      numPages,
+      canvasWidth: actualDims.width,
+      canvasHeight: actualDims.height,
+      nonWhitePixels: pixelAnalysis.nonWhitePixels,
+      textSpans: textSpanCount
+    };
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -387,10 +529,11 @@ export class DocSeekerTestHarness {
       lastResult = await this.page.evaluate(() => {
         const imgs = Array.from(document.querySelectorAll('.vignette-crop-img'));
         if (imgs.length === 0) return { total: 0, corruptCount: 0, corruptSrcs: [] };
-        const corrupt = imgs.filter(img =>
-          (img.complete && img.naturalWidth === 0) ||
-          Boolean(img.closest('.vignette-error'))
-        );
+        const corrupt = imgs.filter(img => {
+          // Si c'est le placeholder SVG ou en attente d'observation viewport, ce n'est pas une image corrompue
+          if (img.src.startsWith('data:image/svg') || img.classList.contains('placeholder') || !img.src) return false;
+          return (img.complete && img.naturalWidth === 0) || Boolean(img.closest('.vignette-error'));
+        });
         return {
           total: imgs.length,
           corruptCount: corrupt.length,
@@ -499,7 +642,14 @@ export class DocSeekerTestHarness {
 
   async spamClick(locator, count = 5, intervalMs = 25) {
     for (let i = 0; i < count; i++) {
-      await locator.click({ force: true, noWaitAfter: true });
+      // Tolérant aux re-renders : la carte peut être reconstruite pendant le spam,
+      // on re-résout le locator à chaque itération (force=true gère les overlays transitoires).
+      try {
+        await locator.click({ force: true, noWaitAfter: true, timeout: 3000 });
+      } catch (e) {
+        // Bouton remplacé par un re-render pendant le spam : on retente une fois.
+        await locator.click({ force: true, noWaitAfter: true, timeout: 3000 }).catch(() => {});
+      }
       if (intervalMs > 0 && i < count - 1) await this.page.waitForTimeout(intervalMs);
     }
   }

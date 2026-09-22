@@ -82,7 +82,6 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
     // Nettoyer si déjà en cache
     const isCached = await cacheBtn.evaluate(b => b.classList.contains('cached'));
     if (isCached) {
-      page.once('dialog', d => d.accept());
       await cacheBtn.click();
       await expect(cacheBtn).not.toHaveClass(/cached/, { timeout: 6000 });
     }
@@ -170,10 +169,6 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
     const cacheBtn = page.locator('.doc-card[data-doc-id="1"] .doc-cache-btn');
     await expect(cacheBtn).toHaveClass(/cached/, { timeout: 10000 });
 
-    page.once('dialog', d => {
-      console.log(`[Core-6] Confirmation : "${d.message()}"`);
-      d.accept();
-    });
     await cacheBtn.click();
 
     await expect(cacheBtn).not.toHaveClass(/cached/, { timeout: 8000 });
@@ -350,20 +345,16 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
     const nephroCard = page.locator('.doc-card[data-doc-id="544"]');
     await expect(nephroCard).toBeVisible({ timeout: 10000 });
     const cacheBtn = nephroCard.locator('.doc-cache-btn');
-    const deleteBtn = nephroCard.locator('.btn-delete-doc-cache');
 
     if (!await cacheBtn.evaluate(el => el.classList.contains('cached'))) {
       await cacheBtn.click();
       await expect(cacheBtn).toHaveClass(/cached/, { timeout: 35000 });
     }
-    await expect(deleteBtn).toBeVisible({ timeout: 5000 });
 
-    // Supprimer puis remettre en cache
-    page.once('dialog', d => d.accept());
-    await deleteBtn.click();
+    // Supprimer puis remettre en cache via le bouton unique sans boîte de dialogue
+    await cacheBtn.click();
     await expect(cacheBtn).not.toHaveClass(/cached/, { timeout: 8000 });
-    await expect(deleteBtn).toBeHidden({ timeout: 5000 });
-    console.log('✅ [Core-11] Bouton nuage barré validé.');
+    console.log('✅ [Core-11] Retrait du cache sans dialogue validé.');
 
     await page.waitForTimeout(300);
     await cacheBtn.click();
@@ -390,4 +381,246 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
     const offlineCb = page.locator('#filterOfflineOnly');
     if (await offlineCb.isChecked()) await offlineCb.uncheck();
   });
+
+  // =========================================================================
+  // Core-12 : Bascules d'onglets multiples en cours de téléchargement (Isolation Cache)
+  // =========================================================================
+
+  test('Core-12 - Changements d Onglets Multiples en Cours de Téléchargement', async ({ page }) => {
+    // 1. Ouvrir le dossier Martingale contenant doc 1 et doc 2
+    await h.openFolder(130);
+    const doc1Card = page.locator('.doc-card[data-doc-id="1"]');
+    const doc2Card = page.locator('.doc-card[data-doc-id="2"]');
+    await expect(doc1Card).toBeVisible({ timeout: 10000 });
+    await expect(doc2Card).toBeVisible({ timeout: 10000 });
+
+    // Nettoyer le cache pour s'assurer d'une progression dynamique
+    await h.cleanDocCache(1);
+    await h.cleanDocCache(2);
+
+    // 2. Ouvrir Doc 1 dans le viewer
+    await doc1Card.locator('.doc-title-main').click();
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('.reader-tab-item')).toHaveCount(1);
+
+    // Déclencher le téléchargement de Doc 1
+    await page.evaluate(() => {
+      if (window.downloadQueueManager) {
+        window.downloadQueueManager.enqueueDocument(1);
+      }
+    });
+
+    // 3. Ouvrir Doc 2 dans un deuxième onglet via window.tabManager.openTab
+    await page.evaluate(() => {
+      if (window.tabManager) {
+        window.tabManager.openTab(2, 'Document 2', 1);
+      }
+      if (window.downloadQueueManager) {
+        window.downloadQueueManager.enqueueDocument(2);
+      }
+    });
+
+    await expect(page.locator('.reader-tab-item')).toHaveCount(2);
+
+    // 4. Effectuer plusieurs bascules d'onglets successives pendant le téléchargement
+    const tab1 = page.locator('.reader-tab-item').first();
+    const tab2 = page.locator('.reader-tab-item').nth(1);
+
+    for (let i = 0; i < 4; i++) {
+      // Bascule vers tab 1
+      await tab1.click();
+      await expect(tab1).toHaveClass(/active/);
+      await page.waitForTimeout(300);
+
+      // Bascule vers tab 2
+      await tab2.click();
+      await expect(tab2).toHaveClass(/active/);
+      await page.waitForTimeout(300);
+    }
+
+    // 5. Vérifier que les onglets et le viewer sont sains, avec vérification visuelle du rendu PDF
+    await h.assertPdfViewerRendered();
+
+    // Vérifier que le badge de cache est cohérent
+    const badge = page.locator('#viewerCacheBadge');
+    if (await badge.isVisible()) {
+      const text = await badge.innerText();
+      expect(text).not.toContain('NaN');
+      expect(text).not.toContain('undefined');
+    }
+
+    // Fermer l'un des onglets pour tester la stabilité
+    await tab2.locator('.reader-tab-close').click();
+    await expect(page.locator('.reader-tab-item')).toHaveCount(1);
+    await expect(tab1).toHaveClass(/active/);
+
+    // Re-vérifier le rendu visuel après fermeture de l'onglet
+    await h.assertPdfViewerRendered();
+
+    console.log('✅ [Core-12] Changements d onglets multiples en cours de téléchargement validés sans crash ni glitch.');
+  });
+
+  // =========================================================================
+  // Core-13 : Cycle Hybride - Démarrage PDF.js, Interruption Accueil, Cache IDB,
+  // Reprise Manuelle sans Duplication & 100% Cache (Vérification Visuelle Réelle)
+  // =========================================================================
+
+  test('Core-13 - Cycle Hybride : Démarrage PDF.js, Interruption Accueil, Cache IDB, Reprise Manuelle sans Duplication & 100% Cache', async ({ page }) => {
+    // 1. Ouvrir le dossier Martingale (doc 1)
+    await h.openFolder(130);
+    const doc1Card = page.locator('.doc-card[data-doc-id="1"]');
+    await expect(doc1Card).toBeVisible({ timeout: 10000 });
+
+    // Nettoyer le cache pour un test pur
+    await h.cleanDocCache(1);
+
+    // 2. Démarrage de la mise en cache dans PDF.js via ouverture du PDF dans l'UI
+    await doc1Card.locator('.doc-title-main').click();
+
+    // Vraie vérification visuelle de l'affichage du PDF et de l'interface
+    const visualInfo = await h.assertPdfViewerRendered({ minCanvasWidth: 200, minCanvasHeight: 200 });
+    console.log(`[Core-13] PDF.js rendu visuel validé : "${visualInfo.title}", ${visualInfo.numPages} pages, canvas ${visualInfo.canvasWidth}x${visualInfo.canvasHeight}px ✅`);
+
+    // Laisser PDF.js télécharger ses premiers fragments
+    await page.waitForTimeout(600);
+
+    // 3. Interruption par retour à l'accueil
+    const homeBtn = page.locator('#readerHomeBtn');
+    await expect(homeBtn).toBeVisible();
+    await homeBtn.click();
+
+    // Vérifier que le viewer est masqué et que l'accueil est de retour
+    await expect(page.locator('#viewerPane')).toBeHidden();
+    await expect(page.locator('#generalView')).toBeVisible();
+
+    // 4. Vérification du cache partiel dans IndexedDB (docseeker_pdf_chunks_v2)
+    const idbStats = await page.evaluate(async () => {
+      if (!window.pdfCacheManager) return null;
+      return await window.pdfCacheManager.getCachedStats(1);
+    });
+    console.log('[Core-13] État fragments IndexedDB post-interruption :', idbStats);
+    expect(idbStats).not.toBeNull();
+    expect(idbStats.downloadedBytes).toBeGreaterThan(0);
+
+    // 5. Clic sur le bouton de mise en cache manuel (Style iCloud Sync)
+    const cacheBtn = doc1Card.locator('.doc-cache-btn');
+    await expect(cacheBtn).toBeVisible();
+    await cacheBtn.click();
+
+    // 6. Vérification qu'il n'y a pas de duplication et qu'à la fin tout est en cache à 100%
+    await h.downloadDocToComplete(1, 30000);
+    await expect(cacheBtn).toHaveClass(/cached/, { timeout: 10000 });
+
+    const finalStats = await page.evaluate(async () => {
+      if (!window.pdfCacheManager) return null;
+      return await window.pdfCacheManager.getCachedStats(1);
+    });
+    expect(finalStats.status).toBe('complete');
+    expect(finalStats.progress).toBe(100);
+    console.log(`[Core-13] Document 1 finalisé à 100% dans IndexedDB (${finalStats.downloadedBytes} octets) ✅`);
+
+    // 7. Rouvrir le document et vérifier visuellement le rendu instantané depuis le cache local
+    await doc1Card.locator('.doc-title-main').click();
+    const finalVisual = await h.assertPdfViewerRendered({ minCanvasWidth: 200, minCanvasHeight: 200 });
+    console.log(`[Core-13] Réouverture post-cache 100% validée visuellement : canvas ${finalVisual.canvasWidth}x${finalVisual.canvasHeight}px ✅`);
+
+    console.log('✅ [Core-13] Cycle hybride PDF.js -> Interruption -> Reprise Manuelle validé avec succès.');
+  });
+
+  // =========================================================================
+  // Core-14 : Suppression du Cache depuis le Badge du Reader en Plein Téléchargement
+  // =========================================================================
+
+  test('Core-14 - Suppression du Cache depuis le Badge du Reader en Plein Téléchargement', async ({ page }) => {
+    // 1. Ouvrir le dossier Martingale
+    await h.openFolder(130);
+    const doc2Card = page.locator('.doc-card[data-doc-id="2"]');
+    await expect(doc2Card).toBeVisible({ timeout: 10000 });
+
+    // Nettoyer le cache
+    await h.cleanDocCache(2);
+
+    // 2. Ouvrir Doc 2 dans le viewer
+    await doc2Card.locator('.doc-title-main').click();
+    await h.assertPdfViewerRendered();
+
+    // Déclencher le téléchargement
+    await page.evaluate(() => {
+      if (window.downloadQueueManager) {
+        window.downloadQueueManager.enqueueDocument(2);
+      }
+    });
+
+    const badge = page.locator('#viewerCacheBadge');
+    await expect(badge).toBeVisible({ timeout: 10000 });
+
+    // 3. Cliquer sur le badge de cache pour déclencher la suppression en plein téléchargement sans dialogue
+    await badge.click();
+
+    // 4. Vérifier que le cache est purgé et que le badge passe à l'état cloud (non téléchargé)
+    await expect(badge).toHaveClass(/cloud/, { timeout: 10000 });
+    await h.assertPdfViewerRendered();
+
+    console.log('✅ [Core-14] Suppression du cache depuis le badge viewer en cours de téléchargement validée.');
+  });
+
+  // =========================================================================
+  // Core-15 : Non-Héritage de la Recherche Intra-Document entre Onglets
+  // (Régression du bug : la recherche « Y » tapée dans B rejouée sur A)
+  // =========================================================================
+
+  test('Core-15 - Aucun Héritage de Recherche Intra-Doc entre Documents (Onglets A/B)', async ({ page }) => {
+    // 1. Recherche globale "grossesse" (contexte : l'état global est alimenté)
+    await h.search('grossesse');
+    const doc1Card = page.locator('.doc-card[data-doc-id="1"]');
+    await expect(doc1Card).toBeVisible({ timeout: 10000 });
+
+    // 2. Ouvrir le PDF B (doc 1) via vignette — hérite de la recherche globale (comportement voulu)
+    await doc1Card.locator('.vignette-item').first().click();
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('#inDocDrawerSearchInput')).toHaveValue(/grossesse/, { timeout: 10000 });
+
+    // 3. Taper « Y » (= complication) dans la recherche intra-doc de B
+    const drawerInput = page.locator('#inDocDrawerSearchInput');
+    await drawerInput.fill('complication');
+    await drawerInput.press('Enter');
+    await expect(page.locator('#viewerDocSearchResultCount')).toContainText('résultat', { timeout: 10000 });
+    await expect(drawerInput).toHaveValue('complication');
+    // Garde-fou anti-erreur silencieuse : les extraits doivent être réellement rendus
+    // (dans le tiroir visible ; #docOccurrencesList desktop vit dans #resultsPane, masqué en vue doc)
+    await expect(page.locator('#inDocDrawerOccurrencesList .vertical-occ-card').first()).toBeVisible({ timeout: 10000 });
+
+    // 4. Ouvrir le PDF A (doc 3) dans un 2e onglet SANS recherche explicite
+    await page.evaluate(() => window.tabManager.openTab(3, 'Document 3', 1));
+    await expect(page.locator('.reader-tab-item')).toHaveCount(2);
+    await page.waitForTimeout(2500);
+
+    // 5. ASSERTIONS CLÉS — A ne doit PAS hériter de « complication »
+    await expect(page.locator('#inDocDrawerSearchInput')).not.toHaveValue('complication');
+    const frameUrl = await page.evaluate(() => document.getElementById('pdfFrame')?.contentWindow?.location?.href || '');
+    expect(frameUrl).not.toMatch(/search=[^&]/);
+
+    const overlayCount = await page.evaluate(() =>
+      document.getElementById('pdfFrame')?.contentWindow?.document.querySelectorAll('.active-occ-overlay').length ?? 0
+    );
+    expect(overlayCount).toBe(0);
+
+    // 6. Recherche explicitement relancée sur A : doit fonctionner normalement
+    const drawerInputA = page.locator('#inDocDrawerSearchInput');
+    await drawerInputA.fill('grossesse');
+    await drawerInputA.press('Enter');
+    await page.waitForTimeout(1500);
+    await expect(page.locator('#viewerDocSearchResultCount')).toContainText('résultat', { timeout: 10000 });
+    await expect(drawerInputA).toHaveValue('grossesse');
+
+    // 7. Retour sur l'onglet B : B doit restaurer SA recherche (complication), pas celle de A
+    const tabB = page.locator('.reader-tab-item').first();
+    await tabB.click();
+    await page.waitForTimeout(2000);
+    await expect(page.locator('#inDocDrawerSearchInput')).toHaveValue('complication', { timeout: 10000 });
+    await expect(page.locator('#viewerDocSearchResultCount')).toContainText('résultat');
+
+    console.log('✅ [Core-15] Recherche intra-doc isolée par onglet : A vierge, recherche relancée OK, B restauré avec « complication ».');
+  });
 });
+

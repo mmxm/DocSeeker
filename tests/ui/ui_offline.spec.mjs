@@ -339,7 +339,9 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
     await firstVig.click();
     await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
     await expect(page.locator('#viewerPageBadge')).toHaveText('Page 267');
-    const activeOcc = page.locator('#docOccurrencesList .vertical-occ-card.active');
+    // La liste desktop #docOccurrencesList vit dans #resultsPane, masqué en mode lecteur ;
+    // les extraits visibles sont dans le tiroir #inDocDrawerOccurrencesList.
+    const activeOcc = page.locator('#inDocDrawerOccurrencesList .vertical-occ-card.active');
     await expect(activeOcc).toBeVisible({ timeout: 10000 });
     await expect(activeOcc.locator('.vertical-occ-page')).toHaveText('Page 267');
 

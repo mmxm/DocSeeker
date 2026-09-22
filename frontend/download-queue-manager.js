@@ -20,6 +20,7 @@ class DownloadQueueManager {
     this._workerReqId = 0;
     this._workerCallbacks = new Map();
     this._workerFailed = false;
+    this._indexingDocIds = new Set();
 
     this._initWorker();
   }
@@ -192,12 +193,13 @@ class DownloadQueueManager {
 
   async ensureDocumentIndexedLocally(docId) {
     const id = Number(docId);
-    if (!id || this.cachedDocIds.has(id)) return;
+    if (!id || this.cachedDocIds.has(id) || this._indexingDocIds.has(id)) return;
+    this._indexingDocIds.add(id);
     try {
       const bundleRes = await fetch(`/api/documents/${id}/offline-bundle`);
       if (bundleRes.ok) {
         const bundle = await bundleRes.json();
-        await this.sendToWorker('INSERT_BUNDLE', { bundle });
+        await this.sendToWorker('INSERT_BUNDLE', { bundle }, 60000);
         const isComplete = window.pdfCacheManager ? await window.pdfCacheManager.isComplete(id) : false;
         if (isComplete) {
           this.cachedDocIds.add(id);
@@ -211,6 +213,8 @@ class DownloadQueueManager {
       }
     } catch (e) {
       console.warn(`[DownloadQueueManager] Erreur ensureDocumentIndexedLocally(${id}):`, e);
+    } finally {
+      this._indexingDocIds.delete(id);
     }
   }
 
@@ -410,6 +414,9 @@ class DownloadQueueManager {
       const task = this.activeTasks.get(Number(docId));
       if (task) {
         task.status = 'paused';
+        if (task.controller) {
+          try { task.controller.abort(); } catch (e) {}
+        }
         if (task.pdfTask) {
           try { task.pdfTask.destroy(); } catch (e) {}
         }
@@ -445,6 +452,9 @@ class DownloadQueueManager {
 
     const task = this.activeTasks.get(id);
     if (task) {
+      if (task.controller) {
+        try { task.controller.abort(); } catch (e) {}
+      }
       if (task.pdfTask) {
         try { task.pdfTask.destroy(); } catch (e) {}
       }
@@ -524,76 +534,207 @@ class DownloadQueueManager {
         }
       }
 
-      // 3. Déclencher le téléchargement binaire complet et stockage dans IndexedDB
-      const pdfRes = await fetch(`/api/pdf/${docId}`);
-      if (pdfRes.ok) {
-        const contentLength = Number(pdfRes.headers.get('content-length')) || 0;
-        let arrayBuffer;
-        
-        if (pdfRes.body && contentLength > 0) {
-          const reader = pdfRes.body.getReader();
-          const chunks = [];
-          let receivedBytes = 0;
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
-            receivedBytes += value.length;
-            task.downloadedBytes = receivedBytes;
-            task.totalBytes = contentLength;
-            task.progress = Math.min(95, Math.round((receivedBytes / contentLength) * 90));
-            this._notify();
-          }
-          const allChunks = new Uint8Array(receivedBytes);
-          let position = 0;
-          for (const chunk of chunks) {
-            allChunks.set(chunk, position);
-            position += chunk.length;
-          }
-          arrayBuffer = allChunks.buffer;
-        } else {
-          arrayBuffer = await pdfRes.arrayBuffer();
+      // 3. Déclencher le téléchargement binaire et stockage incrémental dans IndexedDB
+      // Vérifier d'abord si déjà complet
+      if (window.pdfCacheManager) {
+        const alreadyComplete = await window.pdfCacheManager.isComplete(docId);
+        if (alreadyComplete) {
+          task.status = 'complete';
+          task.progress = 100;
+          this.cachedDocIds.add(docId);
+          this._notify();
+          return;
         }
+      }
 
-        const actualTotal = arrayBuffer.byteLength;
+      // Si le document est actuellement ouvert dans le viewer, PDF.js le télécharge déjà avec priorité
+      if (typeof window !== "undefined" && window.currentActiveDocId && Number(window.currentActiveDocId) === Number(docId)) {
+        console.log(`[DownloadQueueManager] Doc ${docId} est ouvert dans le viewer, coordination avec PDF.js`);
+        await new Promise((resolve) => {
+          let resolved = false;
+          const check = async () => {
+            if (resolved) return;
+            const complete = window.pdfCacheManager ? await window.pdfCacheManager.isComplete(docId) : false;
+            if (complete) {
+              resolved = true;
+              resolve();
+            }
+          };
+          const interval = setInterval(check, 300);
+          const unbind = window.pdfCacheManager?.onProgress(docId, (info) => {
+            if (info.status === 'complete' || info.progress >= 100) {
+              if (!resolved) {
+                resolved = true;
+                clearInterval(interval);
+                unbind?.();
+                resolve();
+              }
+            }
+          });
+          setTimeout(() => {
+            if (!resolved) {
+              resolved = true;
+              clearInterval(interval);
+              unbind?.();
+              resolve();
+            }
+          }, 120000);
+        });
+      } else {
+        const controller = new AbortController();
+        task.controller = controller;
+
         const CHUNK_SIZE = 256 * 1024;
         const normUrl = `/api/pdf/${docId}`;
-        
-        if (window.pdfCacheManager) {
-          const db = await window.pdfCacheManager.init();
-          if (db) {
-            const tx = db.transaction(['chunks', 'meta'], 'readwrite');
-            const chunkStore = tx.objectStore('chunks');
-            const metaStore = tx.objectStore('meta');
+        const prefix = `${normUrl}#`;
 
-            for (let begin = 0; begin < actualTotal; begin += CHUNK_SIZE) {
-              const end = Math.min(begin + CHUNK_SIZE, actualTotal);
-              const chunkData = arrayBuffer.slice(begin, end);
-              chunkStore.put(chunkData, `${normUrl}#${begin}_${end}`);
+        // Scanner les clés de chunks déjà existants pour éviter les écritures redondantes
+        const db = window.pdfCacheManager ? await window.pdfCacheManager.init() : null;
+        const existingChunks = new Set();
+        if (db && db.objectStoreNames.contains('chunks')) {
+          await new Promise((resolve) => {
+            try {
+              const tx = db.transaction('chunks', 'readonly');
+              const store = tx.objectStore('chunks');
+              const range = IDBKeyRange.bound(prefix, prefix + '\uffff');
+              const req = store.openKeyCursor(range);
+              req.onsuccess = (e) => {
+                const cursor = e.target.result;
+                if (cursor) {
+                  existingChunks.add(String(cursor.key));
+                  cursor.continue();
+                } else {
+                  resolve();
+                }
+              };
+              req.onerror = () => resolve();
+            } catch (e) {
+              resolve();
+            }
+          });
+        }
+
+        const pdfRes = await fetch(`/api/pdf/${docId}`, { signal: controller.signal });
+        if (pdfRes.ok) {
+          const contentLength = Number(pdfRes.headers.get('content-length')) || 0;
+          task.totalBytes = contentLength;
+
+          if (window.pdfCacheManager && contentLength > 0) {
+            window.pdfCacheManager.setDocumentTotalBytes(docId, contentLength);
+          }
+
+          if (pdfRes.body && contentLength > 0) {
+            const reader = pdfRes.body.getReader();
+            let receivedBytes = 0;
+            let currentOffset = 0;
+            let accumulator = new Uint8Array(CHUNK_SIZE * 2);
+            let accumulatorLen = 0;
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              if (accumulatorLen + value.length > accumulator.length) {
+                const newAcc = new Uint8Array(Math.max(accumulator.length * 2, accumulatorLen + value.length));
+                newAcc.set(accumulator.subarray(0, accumulatorLen), 0);
+                accumulator = newAcc;
+              }
+              accumulator.set(value, accumulatorLen);
+              accumulatorLen += value.length;
+              receivedBytes += value.length;
+
+              // Découper et persister les blocs complets de 256 Ko immédiatement au fil de l'eau
+              while (accumulatorLen >= CHUNK_SIZE) {
+                const chunkData = accumulator.slice(0, CHUNK_SIZE);
+                const begin = currentOffset;
+                const end = begin + CHUNK_SIZE;
+                const chunkKey = `${normUrl}#${begin}_${end}`;
+
+                if (db && !existingChunks.has(chunkKey)) {
+                  try {
+                    const tx = db.transaction('chunks', 'readwrite');
+                    tx.objectStore('chunks').put(chunkData.buffer, chunkKey);
+                    existingChunks.add(chunkKey);
+                  } catch (e) {}
+                }
+
+                currentOffset = end;
+                accumulator.copyWithin(0, CHUNK_SIZE, accumulatorLen);
+                accumulatorLen -= CHUNK_SIZE;
+              }
+
+              task.downloadedBytes = receivedBytes;
+              task.progress = Math.min(99, Math.round((receivedBytes / contentLength) * 100));
+              this._notify();
             }
 
-            metaStore.put({
-              url: normUrl,
-              totalBytes: actualTotal,
-              downloadedBytes: actualTotal,
-              completed: true,
-              updatedAt: Date.now()
-            }, normUrl);
-
-            await new Promise(resolve => {
-              tx.oncomplete = resolve;
-              tx.onerror = resolve;
-            });
-
-            await window.pdfCacheManager.markComplete(docId, actualTotal);
-            this.cachedDocIds.add(docId);
-            const allDocs = await this.getAllCachedDocs().catch(() => []);
-            if (Array.isArray(allDocs)) {
-              this._cachedDocsList = allDocs;
+            // Écrire le reliquat final (< 256 Ko)
+            if (accumulatorLen > 0) {
+              const chunkData = accumulator.slice(0, accumulatorLen);
+              const begin = currentOffset;
+              const end = begin + accumulatorLen;
+              const chunkKey = `${normUrl}#${begin}_${end}`;
+              if (db && !existingChunks.has(chunkKey)) {
+                try {
+                  const tx = db.transaction('chunks', 'readwrite');
+                  tx.objectStore('chunks').put(chunkData.buffer, chunkKey);
+                  existingChunks.add(chunkKey);
+                } catch (e) {}
+              }
             }
-            this._notify();
+
+            // Marquer complet dans meta
+            if (db) {
+              try {
+                const metaTx = db.transaction('meta', 'readwrite');
+                metaTx.objectStore('meta').put({
+                  url: normUrl,
+                  totalBytes: contentLength,
+                  downloadedBytes: contentLength,
+                  completed: true,
+                  updatedAt: Date.now()
+                }, normUrl);
+              } catch (e) {}
+            }
+
+            if (window.pdfCacheManager) {
+              await window.pdfCacheManager.markComplete(docId, contentLength);
+            }
+          } else {
+            const arrayBuffer = await pdfRes.arrayBuffer();
+            const actualTotal = arrayBuffer.byteLength;
+            if (db) {
+              const tx = db.transaction(['chunks', 'meta'], 'readwrite');
+              const chunkStore = tx.objectStore('chunks');
+              const metaStore = tx.objectStore('meta');
+
+              for (let begin = 0; begin < actualTotal; begin += CHUNK_SIZE) {
+                const end = Math.min(begin + CHUNK_SIZE, actualTotal);
+                const chunkData = arrayBuffer.slice(begin, end);
+                chunkStore.put(chunkData, `${normUrl}#${begin}_${end}`);
+              }
+
+              metaStore.put({
+                url: normUrl,
+                totalBytes: actualTotal,
+                downloadedBytes: actualTotal,
+                completed: true,
+                updatedAt: Date.now()
+              }, normUrl);
+
+              await new Promise(r => { tx.oncomplete = r; tx.onerror = r; });
+              if (window.pdfCacheManager) {
+                await window.pdfCacheManager.markComplete(docId, actualTotal);
+              }
+            }
           }
         }
+      }
+
+      this.cachedDocIds.add(docId);
+      const allDocs = await this.getAllCachedDocs().catch(() => []);
+      if (Array.isArray(allDocs)) {
+        this._cachedDocsList = allDocs;
       }
 
       task.status = 'complete';

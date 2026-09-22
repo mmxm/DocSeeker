@@ -5581,6 +5581,9 @@ class PDFFindController {
     pageIndex = -1,
     matchIndex = -1
   }) {
+    if (typeof window !== "undefined" && window._suppressPdfJsFindScroll) {
+      return;
+    }
     if (!this._scrollMatches || !element) {
       return;
     } else if (matchIndex === -1 || matchIndex !== this._selected.matchIdx) {
@@ -13760,6 +13763,8 @@ const PDFViewerApplication = {
     this._contentLength = null;
     this._saveInProgress = false;
     this._hasAnnotationEditors = false;
+    this._isOpening = false;
+    this._openPromise = null;
     promises.push(this.pdfScriptingManager.destroyPromise, this.passwordPrompt.close());
     this.setTitle();
     this.pdfSidebar?.reset();
@@ -13773,9 +13778,15 @@ const PDFViewerApplication = {
     this._PDFBug?.cleanup();
     await Promise.all(promises);
   },
+  _isOpening: false,
+  _openSeq: 0,
   async open(args) {
+    const currentSeq = ++this._openSeq;
     if (this.pdfLoadingTask) {
       await this.close();
+      if (currentSeq !== this._openSeq) {
+        return;
+      }
     }
     const workerParams = AppOptions.getAll(OptionKind.WORKER);
     Object.assign(GlobalWorkerOptions, workerParams);
@@ -13802,11 +13813,19 @@ const PDFViewerApplication = {
       loaded,
       total
     }) => {
+      if (currentSeq !== this._openSeq) return;
       this.progress(loaded / total);
       try {
         this.eventBus?.dispatch("docprogress", { source: this, loaded, total });
+        let docId = null;
+        try {
+          const u = args.originalUrl || args.url || window.location.href;
+          const m = String(u).match(/\/api\/pdf\/(\d+)/);
+          if (m) docId = Number(m[1]);
+        } catch (e) {}
         window.parent?.postMessage({
           type: "docseeker_pdf_progress",
+          docId,
           loaded,
           total,
           percent: Math.round((loaded / total) * 100)
@@ -13814,9 +13833,13 @@ const PDFViewerApplication = {
       } catch (e) {}
     };
     return loadingTask.promise.then(pdfDocument => {
+      if (currentSeq !== this._openSeq) {
+        try { pdfDocument.destroy(); } catch (e) {}
+        return;
+      }
       this.load(pdfDocument);
     }, reason => {
-      if (loadingTask !== this.pdfLoadingTask) {
+      if (currentSeq !== this._openSeq || loadingTask !== this.pdfLoadingTask) {
         return undefined;
       }
       let key = "pdfjs-loading-error";
@@ -13948,8 +13971,15 @@ const PDFViewerApplication = {
       }
       try {
         this.eventBus?.dispatch("doccomplete", { source: this, length });
+        let docId = null;
+        try {
+          const u = this.url || this._downloadUrl || (new URL(window.location.href).searchParams.get("file")) || "";
+          const m = String(u).match(/\/api\/pdf\/(\d+)/);
+          if (m) docId = Number(m[1]);
+        } catch (e) {}
         window.parent?.postMessage({
           type: "docseeker_pdf_complete",
+          docId,
           length
         }, "*");
       } catch (e) {}
@@ -14175,8 +14205,15 @@ const PDFViewerApplication = {
     this._contentLength ??= contentLength;
     if (this._contentLength && this._contentLength > 0) {
       try {
+        let docId = null;
+        try {
+          const u = this.url || this._downloadUrl || (new URL(window.location.href).searchParams.get("file")) || "";
+          const m = String(u).match(/\/api\/pdf\/(\d+)/);
+          if (m) docId = Number(m[1]);
+        } catch (e) {}
         window.parent?.postMessage({
           type: "docseeker_pdf_meta",
+          docId,
           total: this._contentLength
         }, "*");
       } catch (e) {}

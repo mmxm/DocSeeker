@@ -235,10 +235,12 @@ body.light-theme {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   transition: var(--transition);
+  z-index: 5;
+  pointer-events: auto;
 }
 
 .clear-btn:hover {
@@ -623,6 +625,18 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
   background: #fef3c7;
   color: #b45309;
   border: 1px solid #fde68a;
+}
+
+.viewer-cache-badge.cloud {
+  background: rgba(100, 116, 139, 0.08);
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+}
+
+.viewer-cache-badge.cloud:hover {
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .viewer-doc-title {
@@ -1018,33 +1032,32 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
   font-weight: 700;
 }
 
-/* Bouton de mise en cache / statut hors-ligne */
+/* Bouton de mise en cache / statut hors-ligne (Style iCloud Sync circulaire) */
 .doc-cache-btn {
-  height: 24px;
-  width: 24px;
-  min-width: 24px;
+  height: 26px;
+  width: 26px;
+  min-width: 26px;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
+  border-radius: 50%;
   color: var(--text-muted);
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   flex-shrink: 0;
-  font-size: 11px;
-  font-weight: 500;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  position: relative;
 }
 
 .doc-cache-btn:hover {
   background: var(--bg-hover);
   color: var(--accent);
-  border-color: var(--accent-border, #bfdbfe);
-  transform: translateY(-1px);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  border-color: var(--accent);
+  transform: scale(1.06);
+  box-shadow: 0 2px 5px rgba(37, 99, 235, 0.15);
 }
 
 .doc-cache-btn.cached {
@@ -1059,7 +1072,37 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
   color: #dc2626;
 }
 
-/* Bouton d'action distinct pour supprimer un document du cache local (consistant avec les dossiers) */
+.doc-cache-btn.downloading {
+  background: rgba(59, 130, 246, 0.06);
+  border-color: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.doc-cache-btn.downloading:hover {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.doc-cache-btn.downloading:hover .progress-stop-square {
+  fill: #dc2626;
+}
+
+.doc-cache-btn .progress-ring {
+  width: 26px;
+  height: 26px;
+  display: block;
+}
+
+.doc-cache-btn .progress-ring-circle {
+  transition: stroke-dashoffset 0.25s ease-out;
+}
+
+.doc-cache-btn .progress-ring.spinning {
+  animation: spin 1s linear infinite;
+}
+
+/* Bouton d'action distinct pour supprimer un document du cache local */
 .doc-btn-action {
   background: none;
   border: none;
@@ -1075,38 +1118,9 @@ body:has(.main-workspace.split-active.sidebar-collapsed) .main-workspace {
   flex-shrink: 0;
 }
 
-.doc-btn-action.btn-delete-doc-cache:hover {
-  color: var(--danger);
-  background-color: rgba(239, 68, 68, 0.1);
-}
-
-.doc-cache-btn.downloading {
-  width: auto;
-  min-width: 24px;
-  padding: 0 6px;
-  gap: 4px;
-  background: rgba(59, 130, 246, 0.1);
-  border-color: rgba(59, 130, 246, 0.3);
-  color: var(--accent);
-  cursor: wait;
-}
-
-.doc-cache-btn .cache-btn-text {
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: -0.1px;
-}
-
-.spin-indicator {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border: 2px solid rgba(37, 99, 235, 0.25);
-  border-top-color: var(--accent, #2563eb);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  box-sizing: border-box;
-  flex-shrink: 0;
+.doc-btn-action.btn-delete-doc-cache,
+.btn-delete-doc-cache {
+  display: none !important;
 }
 
 /* Bouton déclencheur du Menu Contextuel de carte */
@@ -4096,6 +4110,13 @@ body.dark-theme .main-sidebar-drawer {
   transform: scale(1.05);
 }
 
+.reader-home-btn.active {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+  box-shadow: 0 1px 4px rgba(37, 99, 235, 0.35);
+}
+
 .reader-tabs-scroll-area {
   flex: 1;
   overflow-x: auto;
@@ -4210,29 +4231,29 @@ body.dark-theme .main-sidebar-drawer {
   padding: 0 4px;
 }
 
-/* 6. En-tête et panneau de gauche (cadre bleu) masqués en mode lecture PDF */
-body.doc-open .app-header,
-.app-layout.doc-open .app-header,
-.app-layout:has(.main-workspace.split-active) .app-header,
-body:has(.main-workspace.split-active) .app-header {
+/* 6. En-tête et panneau de gauche masqués en mode lecture PDF, affichés en mode onglet Accueil */
+body.doc-open:not(.home-tab-active) .app-header,
+.app-layout.doc-open:not(.home-tab-active) .app-header,
+.app-layout:has(.main-workspace.split-active):not(.home-tab-active) .app-header,
+body:has(.main-workspace.split-active):not(.home-tab-active) .app-header {
   display: none !important;
 }
 
-body.doc-open .main-workspace,
-.app-layout.doc-open .main-workspace,
-.app-layout:has(.main-workspace.split-active) .main-workspace,
-body:has(.main-workspace.split-active) .main-workspace {
-  height: 100vh !important;
-  height: 100dvh !important;
-  max-height: 100vh !important;
-  max-height: 100dvh !important;
+body.doc-open:not(.home-tab-active) .main-workspace,
+.app-layout.doc-open:not(.home-tab-active) .main-workspace,
+.app-layout:has(.main-workspace.split-active):not(.home-tab-active) .main-workspace,
+body:has(.main-workspace.split-active):not(.home-tab-active) .main-workspace {
+  height: calc(100vh - 40px) !important;
+  height: calc(100dvh - 40px) !important;
+  max-height: calc(100vh - 40px) !important;
+  max-height: calc(100dvh - 40px) !important;
 }
 
-/* Mode Document Ouvert : Masquage total du panneau bibliothèque/résultats (cadre bleu) */
-body.doc-open .results-pane,
-.app-layout.doc-open .results-pane,
-.main-workspace.split-active .results-pane,
-body:has(.main-workspace.split-active) .results-pane {
+/* Mode Document Ouvert : Masquage du panneau bibliothèque quand un PDF est actif */
+body.doc-open:not(.home-tab-active) .results-pane,
+.app-layout.doc-open:not(.home-tab-active) .results-pane,
+.main-workspace.split-active:not(.home-tab-active) .results-pane,
+body:has(.main-workspace.split-active):not(.home-tab-active) .results-pane {
   display: none !important;
 }
 
@@ -4243,14 +4264,46 @@ body:has(.main-workspace.split-active) .split-resizer {
   display: none !important;
 }
 
-body.doc-open .viewer-pane,
-.app-layout.doc-open .viewer-pane,
-.main-workspace.split-active .viewer-pane,
-body:has(.main-workspace.split-active) .viewer-pane {
+body.doc-open:not(.home-tab-active) .viewer-pane,
+.app-layout.doc-open:not(.home-tab-active) .viewer-pane,
+.main-workspace.split-active:not(.home-tab-active) .viewer-pane,
+body:has(.main-workspace.split-active):not(.home-tab-active) .viewer-pane {
   display: flex !important;
   flex: 1 1 100% !important;
   width: 100% !important;
   max-width: 100% !important;
+}
+
+/* Mode Onglet Accueil Actif : Le contenu de l'accueil (Screen 2) est contenu sous la barre d'onglets (Screen 3) */
+body.home-tab-active .reader-top-tab-bar,
+.app-layout.home-tab-active .reader-top-tab-bar {
+  display: flex !important;
+}
+
+body.home-tab-active .app-header,
+.app-layout.home-tab-active .app-header {
+  display: flex !important;
+}
+
+body.home-tab-active .main-workspace,
+.app-layout.home-tab-active .main-workspace {
+  display: flex !important;
+  height: calc(100vh - 86px) !important;
+  height: calc(100dvh - 86px) !important;
+  max-height: calc(100vh - 86px) !important;
+  max-height: calc(100dvh - 86px) !important;
+}
+
+body.home-tab-active .results-pane,
+.app-layout.home-tab-active .results-pane {
+  display: flex !important;
+  flex: 1 1 100% !important;
+  width: 100% !important;
+}
+
+body.home-tab-active .viewer-pane,
+.app-layout.home-tab-active .viewer-pane {
+  display: none !important;
 }
 
 /* 7. Documents et dossiers Goodnotes en ligne (compact, horizontal) */

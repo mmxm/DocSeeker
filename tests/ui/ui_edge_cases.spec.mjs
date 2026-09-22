@@ -512,7 +512,8 @@ test.describe('Matrice H - Gestion des Dossiers', () => {
     // 1. Localiser un dossier visible à la racine
     const folderCard = page.locator('.folder-card').first();
     await expect(folderCard).toBeVisible({ timeout: 8000 });
-    const folderName = (await folderCard.locator('.folder-name, .folder-title').textContent()).trim();
+    // Design « goodnotes-row » : le nom du dossier est dans .goodnotes-row-title
+    const folderName = (await folderCard.locator('.goodnotes-row-title').textContent()).trim();
 
     // 2. Déclencher des clics rapides consécutifs sur la carte
     await Promise.all([
@@ -884,7 +885,8 @@ test.describe('Matrice I - Import / Upload de PDF', () => {
 
       // Vérifier l'absence totale du badge "Échec" et la présence du nombre de pages
       await expect(docCard.locator('.doc-failed-overlay')).not.toBeVisible();
-      await expect(docCard).toContainText('2 p.');
+      // La variante « ligne » du design actuel affiche « 2 pages » (la variante grille affiche « 2 p. »)
+      await expect(docCard).toContainText(/2 p(ages|\.)/);
       console.log('[I8] Carte visible dans la bibliothèque : 2 p., 0 badge Échec ✅');
 
       // 4. Recherche de Mots-Clés (FTS / BM25)
@@ -942,32 +944,31 @@ test.describe('Matrice I - Import / Upload de PDF', () => {
     // 3. Ouvrir le document 023 en Split View
     await docCard.locator('.doc-title-main').click();
     await expect(page.locator('#workspace')).toHaveClass(/split-active/, { timeout: 10000 });
-    await expect(page.locator('#docDetailView')).toBeVisible({ timeout: 8000 });
+    // Design actuel : le tiroir d'extraits remplace le panneau desktop (#docDetailView,
+    // dans #resultsPane, est masqué en mode lecteur). Sans recherche préalable, le tiroir
+    // ne s'ouvre pas automatiquement : on l'ouvre comme un utilisateur, via le bouton du volet.
+    await page.locator('#readerSidebarToggleBtn').click();
+    await expect(page.locator('#inDocSearchDrawer')).toBeVisible({ timeout: 8000 });
 
-    // Vérifier l'absence du titre redondant dans le panneau latéral
-    await expect(page.locator('#docDetailTitle')).not.toBeVisible();
+    // L'en-tête du tiroir expose le compteur de résultats et la recherche intra-doc
+    await expect(page.locator('#inDocDrawerCount')).toBeVisible();
 
-    // Vérifier la position du bouton retour (flèche à gauche du champ de recherche)
-    const backBtn = page.locator('#backToResultsBtn');
-    await expect(backBtn).toBeVisible();
-    const docSearchInput = page.locator('#docSearchInput');
-    await expect(docSearchInput).toHaveAttribute('placeholder', '');
-    const backBox = await backBtn.boundingBox();
-    const searchBox = await docSearchInput.boundingBox();
-    expect(backBox.x + backBox.width).toBeLessThanOrEqual(searchBox.x + 20);
+    // Le champ de recherche intra-doc du tiroir est le point d'entrée de la recherche
+    const docSearchInput = page.locator('#inDocDrawerSearchInput');
+    await expect(docSearchInput).toBeVisible();
 
     // 4. Recherche intra-document de "Aménorrhée" (cas d'usage exact de l'utilisateur Screen 1 & 2)
     await docSearchInput.fill('Aménorrhée');
     await docSearchInput.press('Enter');
 
-    // Vérifier que le compteur de détail affiche bien 1 résultat (et non 0 résultat)
-    const detailCount = page.locator('#docDetailCount');
+    // Vérifier que le compteur de résultats de la recherche intra-doc affiche 1 résultat (et non 0)
+    const detailCount = page.locator('#viewerDocSearchResultCount');
     await expect(detailCount).toContainText('1 résultat', { timeout: 8000 });
     const countText = await detailCount.textContent();
     console.log(`[I9] Compteur split view : "${countText}"`);
 
-    // Vérifier la présence de la carte d'occurrence dans la liste verticale
-    const vertOccs = page.locator('#docOccurrencesList .vertical-occ-card');
+    // Vérifier la présence de la carte d'occurrence dans le tiroir d'extraits visible
+    const vertOccs = page.locator('#inDocDrawerOccurrencesList .vertical-occ-card');
     await expect(vertOccs.first()).toBeVisible({ timeout: 5000 });
     await expect(vertOccs.first()).toContainText('Aménorrhée');
     console.log('✅ [I9] Occurrence "Aménorrhée" correctement détectée et affichée dans le Split View.');

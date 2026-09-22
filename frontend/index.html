@@ -6,8 +6,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <title>DocSeeker - Bibliothèque & Recherche PDF</title>
-  <meta name="app-version" content="10.2">
-  <link rel="stylesheet" href="/style.css?v=10.2">
+  <meta name="app-version" content="10.3">
+  <link rel="stylesheet" href="/style.css?v=10.3">
   <link rel="icon" href="/favicon.ico">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.json">
@@ -96,6 +96,24 @@
         <span id="appVersionBadge" class="app-version-pill" title="Commit / Version"></span>
       </div>
     </aside>
+
+    <!-- 1. Barre d'onglets supérieure Goodnotes (Multi-Onglets Universels) -->
+    <div class="reader-top-tab-bar" id="readerTopTabBar" style="display: none;">
+      <!-- Bouton retour à l'accueil / explorateur -->
+      <button id="readerHomeBtn" class="reader-home-btn" title="Retourner aux documents" aria-label="Retourner aux documents">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+          <polyline points="9 22 9 12 15 12 15 22"></polyline>
+        </svg>
+      </button>
+
+      <!-- Bande déroulante des onglets ouverts -->
+      <div class="reader-tabs-scroll-area">
+        <div class="reader-tabs-strip" id="readerTabsStrip">
+          <!-- Onglets dynamiques générés par app.js -->
+        </div>
+      </div>
+    </div>
 
     <!-- Barre de navigation supérieure Mode Épuré Goodnotes -->
     <header class="app-header" id="appHeader">
@@ -480,21 +498,6 @@
             </div>
           </div>
 
-          <!-- Section Thème & Affichage -->
-          <div class="settings-card">
-            <h3 class="settings-card-title">Thème & Affichage</h3>
-            <div class="settings-row">
-              <div class="settings-label-group">
-                <span class="settings-label-title">Apparence</span>
-                <span class="settings-label-desc">Choisissez le thème de l'interface</span>
-              </div>
-              <div class="segmented-control" id="themeSegmentedControl">
-                <button type="button" class="segmented-btn active" data-theme="light">Clair</button>
-                <button type="button" class="segmented-btn" data-theme="dark">Sombre</button>
-                <button type="button" class="segmented-btn" data-theme="system">Système</button>
-              </div>
-            </div>
-          </div>
 
           <!-- Section Stockage Local -->
           <div class="settings-card">
@@ -529,25 +532,6 @@
 
       <!-- Colonne de droite : Lecteur PDF Multi-Onglets Style Goodnotes -->
       <aside class="viewer-pane" id="viewerPane">
-        
-        <!-- 1. Barre d'onglets supérieure Goodnotes -->
-        <div class="reader-top-tab-bar" id="readerTopTabBar">
-          <!-- Bouton retour à l'accueil / explorateur -->
-          <button id="readerHomeBtn" class="reader-home-btn" title="Retourner aux documents" aria-label="Retourner aux documents">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-              <polyline points="9 22 9 12 15 12 15 22"></polyline>
-            </svg>
-          </button>
-
-          <!-- Bande déroulante des onglets ouverts -->
-          <div class="reader-tabs-scroll-area">
-            <div class="reader-tabs-strip" id="readerTabsStrip">
-              <!-- Onglets dynamiques générés par app.js -->
-            </div>
-          </div>
-        </div>
-
         <!-- 2. Toolbar secondaire Goodnotes -->
         <div class="viewer-header" id="readerToolbar">
           <div class="viewer-doc-info">
@@ -998,8 +982,8 @@
 
   </div>
 
-  <script src="/pdf-cache.js?v=10.2"></script>
-  <script src="/download-queue-manager.js?v=10.2"></script>
-  <script src="/app.js?v=10.2"></script>
+  <script src="/pdf-cache.js?v=10.3"></script>
+  <script src="/download-queue-manager.js?v=10.3"></script>
+  <script src="/app.js?v=10.3"></script>
 </body>
 </html>

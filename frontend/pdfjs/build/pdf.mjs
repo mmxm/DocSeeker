@@ -10135,6 +10135,19 @@ class PDFFetchStreamReader {
     this._isRangeSupported = !source.disableRange;
     const headers = new Headers(stream.headers);
     const url = source.url;
+
+    let normUrl = url;
+    try {
+      const locOrigin = (typeof window !== "undefined" && window.location) 
+        ? window.location.origin 
+        : (typeof self !== "undefined" && self.location ? self.location.origin : undefined);
+      normUrl = locOrigin ? new URL(url, locOrigin).pathname : url;
+    } catch (e) {}
+    this._normUrl = normUrl;
+    this._accumulatedBytes = [];
+    this._accumulatedLen = 0;
+    this._currentOffset = 0;
+
     fetch(url, createFetchOptions(headers, this._withCredentials, this._abortController)).then(response => {
       stream._responseOrigin = getResponseOrigin(response.url);
       if (!validateResponseStatus(response.status)) {
@@ -10183,12 +10196,87 @@ class PDFFetchStreamReader {
       done
     } = await this._reader.read();
     if (done) {
+      if (this._normUrl && this._accumulatedLen > 0) {
+        try {
+          const merged = new Uint8Array(this._accumulatedLen);
+          let off = 0;
+          for (const b of this._accumulatedBytes) {
+            merged.set(b, off);
+            off += b.byteLength;
+          }
+          const begin = this._currentOffset;
+          const end = begin + this._accumulatedLen;
+          const chunkKey = `${this._normUrl}#${begin}_${end}`;
+          _writeCachedChunk(chunkKey, merged.buffer);
+          if (typeof window !== "undefined") {
+            let chunkDocId = null;
+            try {
+              const m = String(this._normUrl || "").match(/\/api\/pdf\/(\d+)/);
+              if (m) chunkDocId = Number(m[1]);
+            } catch (e) {}
+            window.parent?.postMessage({
+              type: "docseeker_chunk_saved",
+              docId: chunkDocId,
+              cacheKey: chunkKey,
+              chunkSize: this._accumulatedLen,
+              totalBytes: this._contentLength || 0
+            }, "*");
+          }
+        } catch (e) {}
+        this._accumulatedBytes = [];
+        this._accumulatedLen = 0;
+      }
       return {
         value,
         done
       };
     }
     this._loaded += value.byteLength;
+
+    if (this._normUrl) {
+      const CHUNK_SIZE = 256 * 1024;
+      this._accumulatedBytes.push(new Uint8Array(value));
+      this._accumulatedLen += value.byteLength;
+      while (this._accumulatedLen >= CHUNK_SIZE) {
+        const merged = new Uint8Array(CHUNK_SIZE);
+        let off = 0;
+        while (off < CHUNK_SIZE && this._accumulatedBytes.length > 0) {
+          const first = this._accumulatedBytes[0];
+          const needed = CHUNK_SIZE - off;
+          if (first.byteLength <= needed) {
+            merged.set(first, off);
+            off += first.byteLength;
+            this._accumulatedBytes.shift();
+          } else {
+            merged.set(first.subarray(0, needed), off);
+            this._accumulatedBytes[0] = first.subarray(needed);
+            off += needed;
+          }
+        }
+        this._accumulatedLen -= CHUNK_SIZE;
+        const begin = this._currentOffset;
+        const end = begin + CHUNK_SIZE;
+        const chunkKey = `${this._normUrl}#${begin}_${end}`;
+        _writeCachedChunk(chunkKey, merged.buffer);
+        this._currentOffset = end;
+
+        if (typeof window !== "undefined") {
+          let chunkDocId = null;
+          try {
+            const m = String(this._normUrl || "").match(/\/api\/pdf\/(\d+)/);
+            if (m) chunkDocId = Number(m[1]);
+          } catch (e) {}
+          window.parent?.postMessage({
+            type: "docseeker_chunk_saved",
+            docId: chunkDocId,
+            cacheKey: chunkKey,
+            chunkSize: CHUNK_SIZE,
+            totalBytes: this._contentLength || 0
+          }, "*");
+        }
+      }
+    }
+
     this.onProgress?.({
       loaded: this._loaded,
       total: this._contentLength
@@ -10332,7 +10420,13 @@ class PDFFetchStreamRangeReader {
       this._readCapability.resolve();
       this._reader = response.body.getReader();
       this._accumulatedChunks = [];
-    }).catch(this._readCapability.reject);
+    }).catch(err => {
+      if (err.name === 'AbortError' || this._abortController.signal.aborted) {
+        this._readCapability.resolve();
+        return;
+      }
+      this._readCapability.reject(err);
+    });
   }
 
   get isStreamingSupported() {
@@ -10340,7 +10434,19 @@ class PDFFetchStreamRangeReader {
   }
 
   async read() {
-    await this._readCapability.promise;
+    try {
+      await this._readCapability.promise;
+    } catch (e) {
+      if (e.name === 'AbortError' || this._abortController.signal.aborted) {
+        return { value: undefined, done: true };
+      }
+      throw e;
+    }
+
+    if (this._abortController.signal.aborted) {
+      return { value: undefined, done: true };
+    }
+
     if (this._fromCache) {
       if (this._cachedData) {
         const data = this._cachedData;
@@ -10360,10 +10466,17 @@ class PDFFetchStreamRangeReader {
       };
     }
 
-    const {
-      value,
-      done
-    } = await this._reader.read();
+    let value, done;
+    try {
+      const res = await this._reader.read();
+      value = res.value;
+      done = res.done;
+    } catch (readErr) {
+      if (readErr.name === 'AbortError' || this._abortController.signal.aborted) {
+        return { value: undefined, done: true };
+      }
+      throw readErr;
+    }
     if (done) {
       if (this._accumulatedChunks && this._accumulatedChunks.length > 0 && this._cacheKey) {
         try {
@@ -10377,8 +10490,14 @@ class PDFFetchStreamRangeReader {
           }
           _writeCachedChunk(this._cacheKey, merged.buffer);
           if (typeof window !== "undefined") {
+            let chunkDocId = null;
+            try {
+              const m = String(this._cacheKey || "").match(/\/api\/pdf\/(\d+)/);
+              if (m) chunkDocId = Number(m[1]);
+            } catch (e) {}
             window.parent?.postMessage({
               type: "docseeker_chunk_saved",
+              docId: chunkDocId,
               cacheKey: this._cacheKey,
               chunkSize: totalLen,
               totalBytes: this._totalLength || 0

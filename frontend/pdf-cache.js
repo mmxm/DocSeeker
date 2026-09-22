@@ -452,14 +452,19 @@ class PdfCacheManager {
         metaTx.onerror = () => resolve();
       });
 
-      // 2. Parcourir et supprimer tous les fragments de ce document
+      // 2. Supprimer immédiatement et atomiquement tous les fragments de ce document
       await new Promise((resolve) => {
         const chunkTx = db.transaction(DOCSEEKER_CHUNK_STORE, "readwrite");
         const store = chunkTx.objectStore(DOCSEEKER_CHUNK_STORE);
         const prefix = `${normUrl}#`;
         const range = IDBKeyRange.bound(prefix, prefix + "\uffff");
+        try {
+          store.delete(range);
+        } catch (delErr) {
+          console.warn("[PdfCacheManager] store.delete(range) fallback:", delErr);
+        }
+        // Curseur de secours pour compatibilité anciens moteurs
         const req = store.openKeyCursor(range);
-
         req.onsuccess = (evt) => {
           const cursor = evt.target.result;
           if (cursor) {

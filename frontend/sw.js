@@ -9,7 +9,7 @@
 
 const APP_VERSION = '9.5';
 const CACHE_NAME = `docseeker-app-shell-v${APP_VERSION}`;
-const CROP_CACHE_NAME = 'docseeker_offline_crops';
+const CROP_CACHE_NAME = 'docseeker_offline_crops_v2';
 const COVER_CACHE_NAME = 'docseeker_covers';
 
 const VERSIONED_ASSETS = [
@@ -168,23 +168,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 2. Vignettes de recherche (/api/crop/{docId}/{page}/{occId}) : Cache First
+  // 2. Vignettes de recherche (/api/crop/{docId}/{page}/{occId}) : Cache First avec clé URL complète
   if (url.pathname.startsWith('/api/crop/')) {
     event.respondWith(
       caches.open(CROP_CACHE_NAME).then(async (cache) => {
-        // Match strict d'abord (URL exacte avec query params)
+        // Match exact avec query params pour respecter la recherche et les surlignages spécifiques
         let cached = await cache.match(event.request);
-        // Fallback 1 : ignoreSearch (tolère les différences de query string, ex: ?v= de version)
-        if (!cached) cached = await cache.match(event.request, { ignoreSearch: true });
-        // Fallback 2 : match sur le pathname seul (clé normalisée stockée par app.js)
-        if (!cached) cached = await cache.match(url.pathname);
         if (cached) return cached;
 
         return fetch(event.request).then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
-            // Stocker avec l'URL normalisée (sans query params) pour maximiser la réutilisabilité
-            const normalizedKey = new Request(url.pathname);
-            cache.put(normalizedKey, networkResponse.clone());
+            cache.put(event.request, networkResponse.clone());
             return networkResponse;
           }
           return new Response('Offline crop not available', { status: 503, statusText: 'Offline Crop Missing' });
@@ -201,9 +195,6 @@ self.addEventListener('fetch', (event) => {
     const id = url.pathname.replace('/api/pdf/', '').split('/')[0];
 
     // En mode déconnecté : servir immédiatement depuis IndexedDB
-    // Note : sur iOS en PWA standalone, navigator.onLine peut rester 'true' même
-    // hors connexion réelle. On essaie donc IndexedDB en priorité si le PDF est
-    // en cache, et on bascule vers le réseau seulement si IndexedDB ne répond pas.
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       event.respondWith(
         (async () => {
@@ -221,40 +212,9 @@ self.addEventListener('fetch', (event) => {
       return;
     }
 
-    // En ligne (ou iOS où onLine peut être unreliable) :
-    // Tenter IndexedDB d'abord si le PDF pourrait être en cache local,
-    // puis fallback vers le réseau. Cela couvre le cas iOS PWA standalone
-    // où la connexion est coupée mais navigator.onLine est toujours true.
-    event.respondWith(
-      (async () => {
-        // Essai IndexedDB avec timeout court (ne bloque pas si en ligne)
-        let idbRes = null;
-        try {
-          const idbPromise = createIndexedDbPdfResponse(id, event.request);
-          const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 50));
-          idbRes = await Promise.race([idbPromise, timeoutPromise]);
-        } catch (e) {}
-
-        // Si IndexedDB répond, on sert depuis le cache local
-        if (idbRes) return idbRes;
-
-        // Sinon, tenter le réseau normalement
-        try {
-          return await fetch(event.request);
-        } catch (networkErr) {
-          // Réseau vraiment indisponible → re-tenter IndexedDB sans timeout
-          try {
-            const cachedRes = await createIndexedDbPdfResponse(id, event.request);
-            if (cachedRes) return cachedRes;
-          } catch (e) {}
-          return new Response('PDF non disponible hors-ligne', {
-            status: 503,
-            statusText: 'PDF Offline Unavailable',
-            headers: { 'Content-Type': 'text/plain' },
-          });
-        }
-      })()
-    );
+    // En ligne : laisser passer nativement au réseau sans interposition !
+    // PDF.js gère lui-même son cache direct dans IndexedDB (docseeker_pdf_chunks_v2).
+    // Ne pas intercepter élimine totalement les erreurs 'ServiceWorker intercepted the request and encountered an unexpected error'.
     return;
   }
 
@@ -490,7 +450,10 @@ async function createIndexedDbPdfResponse(docId, request) {
                     cursor.continue();
                   } else {
                     try { db.close(); } catch (e) {}
-                    if (bytesCopied === 0) {
+                    if (bytesCopied < sliceLength) {
+                      // Les fragments en cache ne couvrent pas toute la plage demandée :
+                      // On retourne null pour que le navigateur charge les vrais octets via le réseau
+                      // et n'injecte JAMAIS de zéros qui corrompent la table XRef de PDF.js.
                       return resolve(null);
                     }
                     resolve(new Response(sliceBuffer.buffer, {
@@ -510,6 +473,12 @@ async function createIndexedDbPdfResponse(docId, request) {
             }
 
             // ─── CAS B : Requête intégrale (HTTP 200) ───
+            // Ne servir une requête 200 depuis IndexedDB QUE si le fichier est marqué 100% complet
+            if (!meta.completed) {
+              try { db.close(); } catch (e) {}
+              return resolve(null);
+            }
+
             // Pour les PDF <= 100 Mo : buffer complet direct
             if (totalBytes <= 100 * 1024 * 1024) {
               const chunkTx = db.transaction('chunks', 'readonly');

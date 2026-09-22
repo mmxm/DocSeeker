@@ -139,17 +139,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     async renderAndCache(docId, pageNumber, highlightRects, rect, cropUrl, isOffline = false, onReqIdAssigned = null) {
-      // Normaliser l'URL : supprimer les query params pour garantir la cohérence
-      // entre stockage (app.js) et lecture offline (sw.js avec ignoreSearch fallback)
-      const normalizedCropKey = cropUrl ? cropUrl.split('?')[0] : null;
+      const cropCacheKey = cropUrl || `/api/crop/${docId}/${pageNumber}/0`;
 
       // 1. Vérification immédiate dans CacheStorage (0ms, évite tout calcul PDF redondant)
-      if (normalizedCropKey && typeof caches !== 'undefined') {
+      if (typeof caches !== 'undefined') {
         try {
-          const cache = await caches.open('docseeker_offline_crops');
-          // Chercher par URL normalisée d'abord (clé canonique), puis URL originale
-          let cached = await cache.match(normalizedCropKey);
-          if (!cached && cropUrl && cropUrl !== normalizedCropKey) cached = await cache.match(cropUrl);
+          const cache = await caches.open('docseeker_offline_crops_v2');
+          const cached = await cache.match(cropCacheKey);
           if (cached) {
             const blob = await cached.blob();
             if (blob && blob.size > 0) return blob;
@@ -174,15 +170,14 @@ document.addEventListener("DOMContentLoaded", () => {
       const blob = await blobPromise;
       if (blob && typeof caches !== 'undefined') {
         try {
-          const cache = await caches.open('docseeker_offline_crops');
+          const cache = await caches.open('docseeker_offline_crops_v2');
           const response = new Response(blob, {
             headers: {
               'Content-Type': 'image/webp',
               'Cache-Control': 'public, max-age=604800, immutable'
             }
           });
-          // Stocker avec l'URL normalisée pour maximiser la réutilisabilité
-          await cache.put(normalizedCropKey || cropUrl, response);
+          await cache.put(cropCacheKey, response);
         } catch (e) {}
       }
       return blob;
@@ -251,6 +246,47 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let currentActiveOccurrences = [];
   let currentActiveOccurrenceIndex = -1;
+
+  // =========================================================================
+  // État de Recherche Intra-Document — Propriétaire : l'ONGLET (tabManager).
+  // Chaque onglet porte searchQuery / occurrences / searchActive /
+  // activeOccurrenceIndex. Les variables ci-dessus ne sont que la PROJECTION
+  // de l'état de l'onglet actif vers les vues (stepper, volet, tiroir).
+  // Flux unique : onglet → projection → DOM. Aucun héritage inter-documents.
+  // =========================================================================
+  function getActiveTab() {
+    return (typeof tabManager !== 'undefined' && tabManager.activeTabId)
+      ? tabManager.openTabs.find(t => t.id === tabManager.activeTabId) || null
+      : null;
+  }
+
+  // Terme de recherche intra-document de l'onglet actif (jamais le global)
+  function getActiveDocSearchTerm() {
+    return (getActiveTab()?.searchQuery || '').trim();
+  }
+
+  // Dernier terme projeté vers PDF.js (anti-doublon de dispatch 'find')
+  let _projectedTabSearchQuery = null;
+
+  // Projeter l'état de recherche de l'onglet actif vers les vues (canal 3)
+  function projectTabSearchToActive() {
+    const tab = getActiveTab();
+    if (!tab) return;
+    const searchChanged = tab.searchQuery !== _projectedTabSearchQuery;
+    currentDocOriginalOccurrences = tab.occurrences || [];
+    currentActiveOccurrences = sortDocOccurrences(tab.occurrences || [], currentDocOccurrencesSortMode);
+    if (Number.isInteger(tab.activeOccurrenceIndex) && tab.activeOccurrenceIndex >= 0 && tab.activeOccurrenceIndex < currentActiveOccurrences.length) {
+      currentActiveOccurrenceIndex = tab.activeOccurrenceIndex;
+    } else {
+      currentActiveOccurrenceIndex = currentActiveOccurrences.length > 0 ? 0 : -1;
+      tab.activeOccurrenceIndex = currentActiveOccurrenceIndex;
+    }
+    syncDocSearchInputs(tab.searchQuery || "");
+    if (searchChanged) {
+      _projectedTabSearchQuery = tab.searchQuery || "";
+      updateViewerSearchHighlight(tab.searchQuery || "");
+    }
+  }
 
   // Tiroir Mobile d'extraits
   const mobileDrawerOverlay = document.getElementById("mobileDrawerOverlay");
@@ -768,7 +804,13 @@ document.addEventListener("DOMContentLoaded", () => {
     const ctxMenuToggleCacheText = document.getElementById("ctxMenuToggleCacheText");
     if (ctxMenuToggleCache && ctxMenuToggleCacheText && window.downloadQueueManager) {
       const isCached = window.downloadQueueManager.isDocumentCached(docId);
-      if (isCached) {
+      const isTaskActive = window.downloadQueueManager.activeTasks.has(docId);
+      const isTaskQueued = window.downloadQueueManager.queue.includes(docId);
+      const stats = window.pdfCacheManager ? window.pdfCacheManager.progressCache.get(docId) : null;
+      const hasChunks = Boolean(stats && stats.downloadedBytes > 0);
+      const canDelete = isCached || isTaskActive || isTaskQueued || hasChunks;
+
+      if (canDelete) {
         ctxMenuToggleCacheText.textContent = "Supprimer du cache local";
         ctxMenuToggleCache.classList.add("danger");
       } else {
@@ -853,16 +895,28 @@ document.addEventListener("DOMContentLoaded", () => {
       closeContextMenu();
       if (!window.downloadQueueManager) return;
       const isCached = window.downloadQueueManager.isDocumentCached(id);
+      const isTaskActive = window.downloadQueueManager.activeTasks.has(id);
+      const isTaskQueued = window.downloadQueueManager.queue.includes(id);
+
       if (isCached) {
-        if (confirm(`Supprimer "${title}" du cache local hors-ligne ?`)) {
-          await window.downloadQueueManager.removeDocumentFromCache(id);
-          showToast(`"${title}" supprimé du cache local`, "info");
-          updateDocCardCacheUI(id);
-          if (filterOfflineOnly && filterOfflineOnly.checked) {
-            if (currentSearchQuery) performSearch(currentSearchQuery);
-            else loadFoldersAndDocuments();
+        await window.downloadQueueManager.removeDocumentFromCache(id);
+        showToast(`"${title}" supprimé du cache local`, "info");
+        updateDocCardCacheUI(id);
+        if (Number(currentActiveDocId) === Number(id)) {
+          const badge = document.getElementById("viewerCacheBadge");
+          if (badge) {
+            badge.style.display = "none";
+            badge.className = "viewer-doc-badge viewer-cache-badge";
           }
         }
+        if (filterOfflineOnly && filterOfflineOnly.checked) {
+          if (currentSearchQuery) performSearch(currentSearchQuery);
+          else loadFoldersAndDocuments();
+        }
+      } else if (isTaskActive || isTaskQueued) {
+        await window.downloadQueueManager.cancelDownload(id);
+        showToast(`Téléchargement interrompu pour "${title}"`, "info");
+        updateDocCardCacheUI(id);
       } else {
         await window.downloadQueueManager.enqueueDocument(id);
         updateDocCardCacheUI(id);
@@ -999,6 +1053,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const placeholderSvg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='120'%3E%3Crect width='100%25' height='100%25' fill='%23f1f5f9'/%3E%3C/svg%3E";
 
+    const drawerSearchTerm = getActiveDocSearchTerm();
+
     let activeTargetIndex = -1;
     if (activeOccId && occurrences) {
       activeTargetIndex = occurrences.findIndex(o => String(o.occ_id) === String(activeOccId));
@@ -1026,7 +1082,7 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
         <div class="vertical-occ-footer">
           <span class="vertical-occ-page">Page ${occ.page_number}</span>
-          <span class="vertical-occ-snippet">${currentSearchQuery ? highlightTitle(occ.text_snippet || '', currentSearchQuery) : escapeHtml(occ.text_snippet || '')}</span>
+          <span class="vertical-occ-snippet">${drawerSearchTerm ? highlightTitle(occ.text_snippet || '', drawerSearchTerm) : escapeHtml(occ.text_snippet || '')}</span>
         </div>
       `;
       item.addEventListener("click", () => {
@@ -1034,7 +1090,8 @@ document.addEventListener("DOMContentLoaded", () => {
         currentActiveOccurrenceIndex = index;
         updateOccurrenceStepperUI();
         const targetRect = (occ.highlight_rects && occ.highlight_rects.length > 0) ? occ.highlight_rects[0] : occ.rect;
-        openDocumentInSplitView(docId, docTitle, occ.page_number, occurrences, targetRect, occ.y_ratio || 0, occ.occ_id);
+        // Héritage EXPLICITE de la recherche globale au moment du clic (résultat de recherche)
+        openDocumentInSplitView(docId, docTitle, occ.page_number, occurrences, targetRect, occ.y_ratio || 0, occ.occ_id, currentSearchQuery || null);
       });
       drawerOccurrencesList.appendChild(item);
       const img = item.querySelector(".dynamic-crop");
@@ -1248,28 +1305,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Sélecteur de Thème dans les Réglages
-  const themeSegmentedControl = document.getElementById("themeSegmentedControl");
-  if (themeSegmentedControl) {
-    const savedTheme = localStorage.getItem("docseeker_theme") || "light";
-    themeSegmentedControl.querySelectorAll(".segmented-btn").forEach(btn => {
-      btn.classList.toggle("active", btn.getAttribute("data-theme") === savedTheme);
-      btn.addEventListener("click", () => {
-        const t = btn.getAttribute("data-theme");
-        themeSegmentedControl.querySelectorAll(".segmented-btn").forEach(b => b.classList.remove("active"));
-        btn.classList.add("active");
-        localStorage.setItem("docseeker_theme", t);
-        if (t === "dark") {
-          document.body.className = "dark-theme";
-        } else if (t === "light") {
-          document.body.className = "light-theme";
-        } else {
-          const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-          document.body.className = prefersDark ? "dark-theme" : "light-theme";
-        }
-      });
-    });
-  }
+  // Thème clair systématique
+  document.body.className = "light-theme";
 
   // Bouton Purger le Cache Local
   const settingsClearCacheBtn = document.getElementById("settingsClearCacheBtn");
@@ -1677,15 +1714,13 @@ document.addEventListener("DOMContentLoaded", () => {
     const val = e.target.value.trim();
     clearSearchBtn.style.display = val ? "flex" : "none";
 
-    // Si le champ est entièrement vidé alors qu'une recherche était active, réinitialiser immédiatement
+    // Si le champ est entièrement vidé, réinitialiser immédiatement
     if (!val) {
-      if (currentSearchQuery || isSearchActive) {
-        currentSearchQuery = "";
-        isSearchActive = false;
-        lastSearchResultsData = null;
-        document.querySelectorAll(".doc-card").forEach(card => card.style.opacity = "1");
-        loadFoldersAndDocuments();
-      }
+      currentSearchQuery = "";
+      isSearchActive = false;
+      lastSearchResultsData = null;
+      document.querySelectorAll(".doc-card").forEach(card => card.style.opacity = "1");
+      loadFoldersAndDocuments();
     }
   });
 
@@ -1704,14 +1739,18 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  clearSearchBtn.addEventListener("click", () => {
+  clearSearchBtn.addEventListener("click", (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
     searchInput.value = "";
     clearSearchBtn.style.display = "none";
-    searchInput.focus();
     currentSearchQuery = "";
     isSearchActive = false;
     lastSearchResultsData = null;
     loadFoldersAndDocuments();
+    searchInput.focus();
   });
 
   // Filtre : Titres uniquement
@@ -1863,13 +1902,20 @@ document.addEventListener("DOMContentLoaded", () => {
       viewerContainer.__autoHideHooked = true;
 
       viewerContainer.addEventListener("scroll", () => {
+        const st = viewerContainer.scrollTop;
+        if (typeof tabManager !== 'undefined' && tabManager.activeTabId) {
+          const curTab = tabManager.openTabs.find(t => t.id === tabManager.activeTabId);
+          if (curTab) {
+            curTab.scrollTop = st;
+            curTab.scrollLeft = viewerContainer.scrollLeft;
+          }
+        }
         if (window.innerWidth > 900) {
           if (viewerPane && viewerPane.classList.contains("header-hidden")) {
             viewerPane.classList.remove("header-hidden");
           }
           return;
         }
-        const st = viewerContainer.scrollTop;
         if (st <= 15) {
           if (viewerPane) viewerPane.classList.remove("header-hidden");
         } else if (st > lastViewerScrollTop + 20) {
@@ -1929,6 +1975,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function showGeneralResultsView() {
+    if (resultsPane) resultsPane.style.display = "";
     docDetailView.style.display = "none";
     generalView.style.display = "block";
     document.querySelectorAll(".vignette-item.active").forEach(el => el.classList.remove("active"));
@@ -1959,6 +2006,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // =========================================================================
   // Recherche Interne au Document (Split View, Header Viewer, Tiroir Mobile, Tiroir Lecteur)
+  // Propriétaire de l'état : l'onglet actif (tabManager). Cette fonction écrit
+  // la requête + occurrences dans l'onglet puis projette vers les vues.
   // =========================================================================
   function syncDocSearchInputs(val, sourceInput = null) {
     if (docSearchInput && docSearchInput !== sourceInput && docSearchInput.value !== val) docSearchInput.value = val;
@@ -1998,8 +2047,9 @@ document.addEventListener("DOMContentLoaded", () => {
         viewerDocSearchWrapper.style.display = "flex";
         if (viewerDocSearchInput) {
           viewerDocSearchInput.focus();
-          if (currentSearchQuery && !viewerDocSearchInput.value) {
-            syncDocSearchInputs(currentSearchQuery);
+          const tabTerm = getActiveDocSearchTerm();
+          if (currentSearchQuery && tabTerm && !viewerDocSearchInput.value) {
+            syncDocSearchInputs(tabTerm);
           }
         }
       } else {
@@ -2212,15 +2262,46 @@ document.addEventListener("DOMContentLoaded", () => {
         viewerPageBadge.textContent = `Page ${occ.page_number}`;
       }
       const targetRect = (occ.highlight_rects && occ.highlight_rects.length > 0) ? occ.highlight_rects[0] : occ.rect;
+      // L'onglet actif est le propriétaire : la position ET l'index de stepper y sont persistés
+      const activeTab = getActiveTab();
+      if (activeTab) {
+        activeTab.page = occ.page_number;
+        activeTab.rect = targetRect;
+        activeTab.yRatio = occ.y_ratio || 0;
+        activeTab.occId = occ.occ_id;
+        activeTab.activeOccurrenceIndex = index;
+      }
       goToPageAndScrollToOccurrence(occ.page_number, targetRect, occ.y_ratio);
     }
   }
 
   function goToNextOccurrence() {
+    // F3 / stepper : piloter l'occurrence du document AFFICHÉ (onglet actif),
+    // jamais celles du dernier document recherché (bug sœur).
+    const tab = getActiveTab();
+    if (tab) {
+      if (tab.searchActive) {
+        performDocSearch(tab.searchQuery || "", true);
+        return;
+      }
+      if (tab.occurrences && tab.occurrences.length > 0) {
+        projectTabSearchToActive();
+      }
+    }
     jumpToOccurrenceByIndex(currentActiveOccurrenceIndex + 1);
   }
 
   function goToPrevOccurrence() {
+    const tab = getActiveTab();
+    if (tab) {
+      if (tab.searchActive) {
+        performDocSearch(tab.searchQuery || "", true);
+        return;
+      }
+      if (tab.occurrences && tab.occurrences.length > 0) {
+        projectTabSearchToActive();
+      }
+    }
     jumpToOccurrenceByIndex(currentActiveOccurrenceIndex - 1);
   }
 
@@ -2231,14 +2312,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Support de la touche Entrée dans les champs de recherche du document
   let lastExecutedDocSearchQuery = "";
+  let lastExecutedDocSearchDocId = null;
   [viewerDocSearchInput, docSearchInput, drawerDocSearchInput, inDocDrawerSearchInput].forEach(inp => {
     if (inp) {
       inp.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
           e.preventDefault();
           const query = (inp.value || "").trim();
-          if (query !== lastExecutedDocSearchQuery) {
+          if (query !== lastExecutedDocSearchQuery || lastExecutedDocSearchDocId !== Number(currentActiveDocId)) {
             lastExecutedDocSearchQuery = query;
+            lastExecutedDocSearchDocId = Number(currentActiveDocId);
             performDocSearch(query, false);
           } else {
             if (e.shiftKey) {
@@ -2323,11 +2406,26 @@ document.addEventListener("DOMContentLoaded", () => {
   if (inDocSortByRelevanceBtn) inDocSortByRelevanceBtn.addEventListener("click", () => setDocOccurrencesSortMode('relevance'));
 
   async function performDocSearch(query, updateInputs = true) {
+    // Propriétaire : l'onglet actif. Une recherche frappe TOUJOURS le document
+    // de l'onglet courant, jamais un état global hérité d'un autre document.
+    const tab = getActiveTab();
+    if (!tab || !currentActiveDocId || Number(tab.docId) !== Number(currentActiveDocId)) {
+      console.warn("[DocSearch] ignorée : aucun onglet actif cohérent avec le document affiché");
+      return;
+    }
+    const searchDocId = Number(currentActiveDocId);
+    const searchDocTitle = currentActiveDocTitle;
+    // Une recherche explicite (saisie, effacement) met TOUJOURS à jour l'état de
+    // l'onglet ; updateInputs ne concerne que la synchronisation des champs.
+    tab.searchQuery = query;
     if (updateInputs) {
       syncDocSearchInputs(query);
     }
 
     if (!query) {
+      // Effacement : restaurer la base de l'ONGLET (extrait cliqué), pas un autre document
+      tab.searchActive = false;
+      currentDocOriginalOccurrences = tab.occurrences || [];
       const origCount = currentDocOriginalOccurrences ? currentDocOriginalOccurrences.length : 0;
       const countText = `${origCount} résultat${origCount > 1 ? 's' : ''}`;
       const pillText = `${origCount} extrait${origCount > 1 ? 's' : ''}`;
@@ -2346,7 +2444,7 @@ document.addEventListener("DOMContentLoaded", () => {
       currentActiveOccurrences = sortDocOccurrences(currentDocOriginalOccurrences || [], currentDocOccurrencesSortMode);
       renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentActiveOccurrences);
       renderDrawerOccurrences(currentActiveDocId, currentActiveDocTitle, currentActiveOccurrences);
-      updateViewerSearchHighlight(currentSearchQuery);
+      updateViewerSearchHighlight(tab.searchQuery || "");
 
       if (currentActiveOccurrences.length > 0) {
         const curPage = getCurrentViewerPage();
@@ -2397,9 +2495,12 @@ document.addEventListener("DOMContentLoaded", () => {
       if (inDocDrawerCount) inDocDrawerCount.textContent = resultLabel;
 
       currentActiveOccurrences = sortDocOccurrences(occs, currentDocOccurrencesSortMode);
-      renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentActiveOccurrences);
-      renderDrawerOccurrences(currentActiveDocId, currentActiveDocTitle, currentActiveOccurrences);
-      updateViewerSearchHighlight(query);
+      // Race : ne rien écrire si l'onglet actif a changé pendant la recherche
+      if (Number(tab.docId) !== searchDocId || getActiveTab() !== tab) return;
+      tab.occurrences = occs;
+      tab.searchActive = true;
+      renderVerticalOccurrences(searchDocId, searchDocTitle, currentActiveOccurrences);
+      renderDrawerOccurrences(searchDocId, searchDocTitle, currentActiveOccurrences);
 
       if (occs.length > 0) {
         const curPage = getCurrentViewerPage();
@@ -2676,13 +2777,17 @@ document.addEventListener("DOMContentLoaded", () => {
     lastSearchResultsData = null;
     savedGeneralResultsScrollTop = 0;
     foldersSection.style.display = "";
+    resultsContainer.innerHTML = "";
+    if (searchStats) searchStats.textContent = "";
+    if (clearSearchBtn && (!searchInput || !searchInput.value.trim())) {
+      clearSearchBtn.style.display = "none";
+    }
     showGeneralResultsView();
     renderBreadcrumbs();
     updateFolderFilterVisibility();
     updatePasteButtonUI();
 
     sectionTitle.textContent = currentFolderId ? `Documents dans "${currentFolderName}"` : "Documents";
-    searchStats.textContent = "";
 
     try {
       // Si complètement hors-ligne réseau : initialiser et charger directement depuis SQLite-Wasm local
@@ -3280,22 +3385,16 @@ document.addEventListener("DOMContentLoaded", () => {
         <div class="goodnotes-row-actions">
           <button class="doc-cache-btn ${isCached ? 'cached' : ''}" data-id="${doc.id}" title="${isCached ? 'Disponible hors-ligne' : 'Télécharger pour consultation hors-ligne'}" aria-label="Cache hors-ligne">
             ${isCached ? `
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="20 6 9 17 4 12"></polyline>
               </svg>
             ` : `
-              <svg class="cache-icon-cloud" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                <polyline points="7 10 12 15 17 10"></polyline>
-                <line x1="12" y1="15" x2="12" y2="3"></line>
+              <svg class="cache-icon-cloud" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19 16.9A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"></path>
+                <polyline points="8 17 12 21 16 17"></polyline>
+                <line x1="12" y1="12" x2="12" y2="21"></line>
               </svg>
             `}
-          </button>
-          <button class="doc-btn-action btn-delete-doc-cache" data-id="${doc.id}" style="${isCached ? '' : 'display: none;'}" title="Supprimer ce document du cache local" aria-label="Supprimer du cache local">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
-              <line x1="2" y1="2" x2="22" y2="22"></line>
-            </svg>
           </button>
           <button class="doc-menu-trigger-btn" data-id="${doc.id}" title="Options du document (Renommer, Déplacer, Réindexer, Supprimer)" aria-label="Options">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -3338,22 +3437,16 @@ document.addEventListener("DOMContentLoaded", () => {
             
             <button class="doc-cache-btn ${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? 'cached' : ''}" data-id="${doc.id}" title="${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? 'Disponible hors-ligne' : 'Télécharger pour consultation hors-ligne'}" aria-label="Cache hors-ligne">
               ${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? `
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="20 6 9 17 4 12"></polyline>
                 </svg>
               ` : `
-                <svg class="cache-icon-cloud" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                  <polyline points="7 10 12 15 17 10"></polyline>
-                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                <svg class="cache-icon-cloud" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M19 16.9A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"></path>
+                  <polyline points="8 17 12 21 16 17"></polyline>
+                  <line x1="12" y1="12" x2="12" y2="21"></line>
                 </svg>
               `}
-            </button>
-            <button class="doc-btn-action btn-delete-doc-cache" data-id="${doc.id}" style="${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? '' : 'display: none;'}" title="Supprimer ce document du cache local" aria-label="Supprimer du cache local">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
-                <line x1="2" y1="2" x2="22" y2="22"></line>
-              </svg>
             </button>
             <button class="doc-menu-trigger-btn" data-id="${doc.id}" title="Options du document (Renommer, Déplacer, Réindexer, Supprimer)" aria-label="Options">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -3414,34 +3507,36 @@ document.addEventListener("DOMContentLoaded", () => {
       if (now - lastCacheActionTime < 60) return;
       lastCacheActionTime = now;
 
-      if (!window.downloadQueueManager.isDocumentCached(doc.id)) return;
+      const isCached = window.downloadQueueManager.isDocumentCached(doc.id);
+      const isTaskActive = window.downloadQueueManager.activeTasks.has(doc.id);
+      const isTaskQueued = window.downloadQueueManager.queue.includes(doc.id);
+      const stats = window.pdfCacheManager ? window.pdfCacheManager.progressCache.get(doc.id) : null;
+      const hasChunks = Boolean(stats && stats.downloadedBytes > 0);
+      const canDelete = isCached || isTaskActive || isTaskQueued || hasChunks;
 
-      if (deleteDocCacheBtn) deleteDocCacheBtn.disabled = true;
-      try {
-        if (confirm(`Supprimer "${doc.title || doc.filename}" du cache local hors-ligne ?`)) {
-          lastCacheActionTime = Date.now();
-          if (cacheBtn) {
-            cacheBtn.style.pointerEvents = "none";
-            setTimeout(() => { if (cacheBtn) cacheBtn.style.pointerEvents = ""; }, 60);
-          }
-          await window.downloadQueueManager.removeDocumentFromCache(doc.id);
-          updateDocCardCacheUI(doc.id);
-          showToast(`Document "${doc.title || doc.filename}" supprimé du cache local`, "info");
-          if (filterOfflineOnly && filterOfflineOnly.checked) {
-            if (currentSearchQuery) performSearch(currentSearchQuery);
-            else loadFoldersAndDocuments();
-          }
+      if (!canDelete) return;
+
+      lastCacheActionTime = Date.now();
+      if (cacheBtn) {
+        cacheBtn.style.pointerEvents = "none";
+        setTimeout(() => { if (cacheBtn) cacheBtn.style.pointerEvents = ""; }, 60);
+      }
+      await window.downloadQueueManager.removeDocumentFromCache(doc.id);
+      updateDocCardCacheUI(doc.id);
+      if (Number(currentActiveDocId) === Number(doc.id)) {
+        const badge = document.getElementById("viewerCacheBadge");
+        if (badge) {
+          badge.className = "viewer-doc-badge viewer-cache-badge cloud";
+          badge.textContent = "☁️ Non téléchargé";
+          badge.title = "Document en ligne (non stocké localement). Cliquez pour le mettre en cache hors-ligne.";
         }
-      } finally {
-        if (deleteDocCacheBtn) deleteDocCacheBtn.disabled = false;
+      }
+      showToast(`"${doc.title || doc.filename}" retiré du cache local`, "info");
+      if (filterOfflineOnly && filterOfflineOnly.checked) {
+        if (currentSearchQuery) performSearch(currentSearchQuery);
+        else loadFoldersAndDocuments();
       }
     };
-
-    // Bouton distinct supprimer du cache (nuage barré)
-    const deleteDocCacheBtn = card.querySelector(".btn-delete-doc-cache");
-    if (deleteDocCacheBtn) {
-      deleteDocCacheBtn.addEventListener("click", handleDeleteDocCache);
-    }
 
     // Clic bouton cache hors-ligne
     const cacheBtn = card.querySelector(".doc-cache-btn");
@@ -3464,13 +3559,17 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         await window.downloadQueueManager.ensureInitialized(1500).catch(() => {});
         const isCurrentlyCached = window.downloadQueueManager.isDocumentCached(doc.id);
+        const isTaskActive = window.downloadQueueManager.activeTasks.has(doc.id);
+        const isTaskQueued = window.downloadQueueManager.queue.includes(doc.id);
+        const stats = window.pdfCacheManager ? window.pdfCacheManager.progressCache.get(doc.id) : null;
         if (isCurrentlyCached) {
           await handleDeleteDocCache(e);
+        } else if (isTaskActive || isTaskQueued) {
+          await window.downloadQueueManager.cancelDownload(doc.id);
+          showToast(`Téléchargement interrompu pour "${doc.title || doc.filename}"`, "info");
+          updateDocCardCacheUI(doc.id);
         } else {
           lastCacheActionTime = now;
-          cacheBtn.className = "doc-cache-btn downloading";
-          cacheBtn.title = "Téléchargement en cours...";
-          cacheBtn.innerHTML = `<span class="spin-indicator"></span>`;
           await window.downloadQueueManager.enqueueDocument(doc.id);
           updateDocCardCacheUI(doc.id);
           showToast(`Document "${doc.title || doc.filename}" ajouté à la file de téléchargement`, "info");
@@ -3551,7 +3650,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const occId = vEl.getAttribute("data-occ");
         let rect = null;
         try { rect = JSON.parse(vEl.getAttribute("data-rect") || "[]"); } catch(e) {}
-        openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], rect, yRatio, occId);
+        // Héritage EXPLICITE de la recherche globale au moment du clic (vignette de résultat)
+        openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], rect, yRatio, occId, currentSearchQuery || null);
       });
 
       // Scroll infini horizontal : chargement transparent des occurrences suivantes au scroll vers la droite
@@ -3669,7 +3769,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const firstRect = firstOcc ? ((firstOcc.highlight_rects && firstOcc.highlight_rects.length > 0) ? firstOcc.highlight_rects[0] : firstOcc.rect) : null;
       const yRatio = firstOcc ? firstOcc.y_ratio : 0;
       const firstOccId = firstOcc ? firstOcc.occ_id : null;
-      openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], firstRect, yRatio, firstOccId);
+      // Héritage EXPLICITE de la recherche globale au moment du clic (couverture/titre de résultat)
+      openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], firstRect, yRatio, firstOccId, currentSearchQuery || null);
     };
 
     if (!isSearch) {
@@ -4457,8 +4558,37 @@ document.addEventListener("DOMContentLoaded", () => {
     openTabs: [],
     activeTabId: null,
 
+    saveCurrentTabState() {
+      const currentTab = this.openTabs.find(t => t.id === this.activeTabId);
+      if (!currentTab) return;
+      currentTab.page = getCurrentViewerPage();
+      currentTab.activeOccurrenceIndex = currentActiveOccurrenceIndex;
+      try {
+        const win = pdfFrame?.contentWindow;
+        const container = win?.document?.getElementById("viewerContainer");
+        if (container) {
+          currentTab.scrollTop = container.scrollTop;
+          currentTab.scrollLeft = container.scrollLeft;
+        }
+      } catch (e) {}
+      if (currentActiveOccurrences && currentActiveOccurrences[currentActiveOccurrenceIndex]) {
+        const activeOcc = currentActiveOccurrences[currentActiveOccurrenceIndex];
+        currentTab.page = activeOcc.page_number;
+        currentTab.rect = (activeOcc.highlight_rects && activeOcc.highlight_rects.length > 0) ? activeOcc.highlight_rects[0] : activeOcc.rect;
+        currentTab.yRatio = activeOcc.y_ratio || 0;
+        currentTab.occId = activeOcc.occ_id;
+      }
+    },
+
     openTab(docId, docTitle, targetPage = 1, occurrences = [], targetRect = null, targetYRatio = 0, targetOccId = null, searchQuery = null) {
       const numericDocId = Number(docId);
+      this.saveCurrentTabState();
+      // Quitter le mode accueil
+      document.body.classList.remove("home-tab-active");
+      document.documentElement.classList.remove("home-tab-active");
+      const appEl = document.getElementById("app");
+      if (appEl) appEl.classList.remove("home-tab-active");
+
       let existingTab = this.openTabs.find(t => Number(t.docId) === numericDocId);
       if (existingTab) {
         this.activeTabId = existingTab.id;
@@ -4466,8 +4596,17 @@ document.addEventListener("DOMContentLoaded", () => {
         existingTab.rect = targetRect;
         existingTab.yRatio = targetYRatio;
         existingTab.occId = targetOccId;
-        if (searchQuery) existingTab.searchQuery = searchQuery;
-        if (occurrences && occurrences.length > 0) existingTab.occurrences = occurrences;
+        existingTab.scrollTop = null; // nouvelle navigation demandée
+        if (searchQuery) {
+          existingTab.searchQuery = searchQuery;
+          existingTab.occurrences = (occurrences && occurrences.length > 0) ? occurrences : existingTab.occurrences;
+          existingTab.searchActive = true;
+        } else {
+          // CANAL 2 : une ouverture sans recherche explicite ne réactive pas une
+          // ancienne recherche (ni celle d'un autre document).
+          existingTab.searchQuery = "";
+          existingTab.searchActive = false;
+        }
       } else {
         const newTab = {
           id: `tab_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
@@ -4477,27 +4616,40 @@ document.addEventListener("DOMContentLoaded", () => {
           rect: targetRect,
           yRatio: targetYRatio,
           occId: targetOccId,
-          searchQuery: searchQuery || currentSearchQuery || "",
+          // CANAL 2 : plus d'héritage du global — une ouverture sans recherche
+          // explicite démarre toujours sans recherche intra-doc.
+          searchQuery: searchQuery || "",
           occurrences: occurrences || [],
-          activeOccurrenceIndex: 0
+          activeOccurrenceIndex: 0,
+          scrollTop: null
         };
         this.openTabs.push(newTab);
         this.activeTabId = newTab.id;
       }
       this.renderTabsUI();
-      _executeLoadDocumentInViewer(numericDocId, docTitle, targetPage, occurrences, targetRect, targetYRatio, targetOccId);
+      _executeLoadDocumentInViewer(numericDocId, docTitle, targetPage, occurrences, targetRect, targetYRatio, targetOccId, existingTab?.scrollTop ?? null);
     },
 
     selectTab(tabId) {
-      if (this.activeTabId === tabId) return;
-      const currentTab = this.openTabs.find(t => t.id === this.activeTabId);
-      if (currentTab) {
-        currentTab.page = getCurrentViewerPage();
+      if (tabId === 'home') {
+        this.returnToHome();
+        return;
       }
+      if (this.activeTabId === tabId) return;
+      this.saveCurrentTabState();
+
+      // Quitter le mode accueil
+      document.body.classList.remove("home-tab-active");
+      document.documentElement.classList.remove("home-tab-active");
+      const appEl = document.getElementById("app");
+      if (appEl) appEl.classList.remove("home-tab-active");
+
       const targetTab = this.openTabs.find(t => t.id === tabId);
       if (!targetTab) return;
       this.activeTabId = tabId;
       this.renderTabsUI();
+      // CANAL 3 : _executeLoadDocumentInViewer lit l'état de recherche de
+      // targetTab (champ, occurrences, surbrillance) — voir getActiveTab().
       _executeLoadDocumentInViewer(
         targetTab.docId,
         targetTab.title,
@@ -4505,7 +4657,9 @@ document.addEventListener("DOMContentLoaded", () => {
         targetTab.occurrences,
         targetTab.rect,
         targetTab.yRatio,
-        targetTab.occId
+        targetTab.occId,
+        targetTab.scrollTop,
+        targetTab.activeOccurrenceIndex
       );
     },
 
@@ -4526,11 +4680,21 @@ document.addEventListener("DOMContentLoaded", () => {
             nextTab.occurrences,
             nextTab.rect,
             nextTab.yRatio,
-            nextTab.occId
+            nextTab.occId,
+            nextTab.scrollTop,
+            nextTab.activeOccurrenceIndex
           );
         } else {
-          this.activeTabId = null;
+          this.activeTabId = 'home';
           this.renderTabsUI();
+          this.returnToHome();
+          document.body.classList.remove("doc-open");
+          document.documentElement.classList.remove("doc-open");
+          document.body.classList.remove("home-tab-active");
+          document.documentElement.classList.remove("home-tab-active");
+          const appEl = document.getElementById("app");
+          if (appEl) appEl.classList.remove("home-tab-active");
+          if (readerTopTabBar) readerTopTabBar.style.display = "none";
           closeSplitViewer();
         }
       } else {
@@ -4539,10 +4703,23 @@ document.addEventListener("DOMContentLoaded", () => {
     },
 
     returnToHome() {
-      const currentTab = this.openTabs.find(t => t.id === this.activeTabId);
-      if (currentTab) {
-        currentTab.page = getCurrentViewerPage();
+      this.saveCurrentTabState();
+      // Geler l'état de l'onglet courant AVANT de détacher activeTabId,
+      // sinon saveCurrentTabState ne trouve plus l'onglet.
+      const frozenTab = getActiveTab();
+      this.activeTabId = 'home';
+      this.renderTabsUI();
+
+      if (currentActiveDocId && window.pdfCacheManager) {
+        window.pdfCacheManager.pauseDownload(currentActiveDocId);
       }
+
+      // Appliquer le mode onglet accueil
+      document.body.classList.add("home-tab-active");
+      document.documentElement.classList.add("home-tab-active");
+      const appEl = document.getElementById("app");
+      if (appEl) appEl.classList.add("home-tab-active");
+
       workspace.classList.remove("split-active");
       if (viewerPane) {
         viewerPane.style.display = "none";
@@ -4551,17 +4728,42 @@ document.addEventListener("DOMContentLoaded", () => {
       if (readerSidebarToggleBtn) readerSidebarToggleBtn.classList.remove("active");
       if (docDetailView) docDetailView.style.display = "none";
       if (generalView) generalView.style.display = "";
-      document.documentElement.classList.remove("doc-open");
-      document.body.classList.remove("doc-open");
-      const appEl = document.getElementById("app");
-      if (appEl) appEl.classList.remove("doc-open");
+      // Bug sœur : réafficher les extraits de la RECHERCHE GLOBALE (liste de
+      // gauche), pas ceux du dernier document consulté.
+      if (frozenTab && currentSearchQuery && lastSearchResultsData) {
+        const searchDoc = (lastSearchResultsData.results || []).find(d => Number(d.id) === Number(frozenTab.docId));
+        if (searchDoc) {
+          const searchOccs = searchDoc.occurrences_by_page || searchDoc.vignettes || [];
+          currentDocOriginalOccurrences = searchOccs;
+          currentActiveOccurrences = sortDocOccurrences(searchOccs, currentDocOccurrencesSortMode);
+          renderVerticalOccurrences(frozenTab.docId, frozenTab.title, currentActiveOccurrences);
+          renderDrawerOccurrences(frozenTab.docId, frozenTab.title, currentActiveOccurrences);
+        }
+      }
+      if (resultsPane) {
+        resultsPane.style.display = "";
+        if (savedGeneralResultsScrollTop > 0) {
+          resultsPane.scrollTop = savedGeneralResultsScrollTop;
+        }
+      }
       setDocumentZoomLock(false);
-      if (resultsPane && savedGeneralResultsScrollTop > 0) {
-        resultsPane.scrollTop = savedGeneralResultsScrollTop;
+      if (clearSearchBtn && searchInput) {
+        clearSearchBtn.style.display = searchInput.value.trim() ? "flex" : "none";
       }
     },
 
     renderTabsUI() {
+      if (!readerTopTabBar) return;
+      if (this.openTabs.length === 0 && this.activeTabId !== 'home') {
+        readerTopTabBar.style.display = "none";
+        return;
+      }
+      readerTopTabBar.style.display = "flex";
+
+      if (readerHomeBtn) {
+        readerHomeBtn.classList.toggle("active", this.activeTabId === 'home');
+      }
+
       if (!readerTabsStrip) return;
       readerTabsStrip.innerHTML = "";
       this.openTabs.forEach(tab => {
@@ -4651,14 +4853,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (readerSidebarToggleBtn) {
     readerSidebarToggleBtn.addEventListener("click", () => {
-      const drawer = document.getElementById("inDocSearchDrawer");
-      if (!drawer) return;
-      const isHidden = (drawer.style.display === "none" || !drawer.style.display);
-      drawer.style.display = isHidden ? "flex" : "none";
+      const drawerEl = document.getElementById("inDocSearchDrawer");
+      if (!drawerEl) return;
+      const isHidden = (drawerEl.style.display === "none" || !drawerEl.style.display);
+      drawerEl.style.display = isHidden ? "flex" : "none";
       readerSidebarToggleBtn.classList.toggle("active", isHidden);
       if (isHidden) {
-        if (inDocDrawerSearchInput && !inDocDrawerSearchInput.value && currentSearchQuery) {
-          inDocDrawerSearchInput.value = currentSearchQuery;
+        const tabTerm = getActiveDocSearchTerm();
+        if (inDocDrawerSearchInput && !inDocDrawerSearchInput.value && tabTerm) {
+          inDocDrawerSearchInput.value = tabTerm;
         }
         if (inDocDrawerOccurrencesList) {
           const activeCard = inDocDrawerOccurrencesList.querySelector(".vertical-occ-card.active");
@@ -4696,12 +4899,17 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0, targetOccId = null) {
-    tabManager.openTab(docId, docTitle, targetPage, occurrences, targetRect, targetYRatio, targetOccId);
+  function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0, targetOccId = null, searchQuery = null) {
+    tabManager.openTab(docId, docTitle, targetPage, occurrences, targetRect, targetYRatio, targetOccId, searchQuery);
   }
+  window.tabManager = tabManager;
+  window.openDocumentInSplitView = openDocumentInSplitView;
 
-  function _executeLoadDocumentInViewer(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0, targetOccId = null) {
+  let currentViewerLoadSeq = 0;
+
+  function _executeLoadDocumentInViewer(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0, targetOccId = null, targetScrollTop = null, targetOccIndex = null) {
     const numericDocId = Number(docId);
+    const thisLoadSeq = ++currentViewerLoadSeq;
     targetPage = parseInt(targetPage, 10) || 1;
     const isSameDoc = (Number(currentActiveDocId) === numericDocId);
     if (!isSameDoc && currentActiveDocId && window.pdfCacheManager) {
@@ -4709,7 +4917,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     currentActiveDocId = numericDocId;
     currentActiveDocTitle = docTitle;
-    currentDocOriginalOccurrences = occurrences;
+
+    // CANAL 2 : la requête intra-doc vient de l'ONGLET cible, jamais du global.
+    // Un onglet ouvert sans recherche (vignette, accueil) démarre avec "".
+    const targetTab = (typeof tabManager !== 'undefined')
+      ? tabManager.openTabs.find(t => Number(t.docId) === numericDocId)
+      : null;
+    const effectiveSearchQuery = (targetTab && targetTab.searchQuery) || "";
 
     // Le streaming HTTP 206 et le cache natif HTTP du navigateur gèrent le chargement et la mise en cache de manière optimale sans collision réseau.
     if (window.pdfCacheManager) {
@@ -4740,50 +4954,74 @@ document.addEventListener("DOMContentLoaded", () => {
     workspace.classList.add("split-active");
     if (mainSidebarDrawer) mainSidebarDrawer.classList.remove("open");
     if (mainSidebarOverlay) mainSidebarOverlay.style.display = "none";
+
+    // Ouvrir automatiquement le volet latéral des résultats in-doc dès qu'un document est ouvert avec des résultats
+    if (inDocSearchDrawer) {
+      const hasResults = (occurrences && occurrences.length > 0) || (effectiveSearchQuery && effectiveSearchQuery.trim());
+      if (hasResults) {
+        inDocSearchDrawer.style.display = "flex";
+      }
+    }
     if (readerSidebarToggleBtn) {
       const isDrawerOpen = inDocSearchDrawer && inDocSearchDrawer.style.display === "flex";
       readerSidebarToggleBtn.classList.toggle("active", isDrawerOpen);
     }
+    document.body.classList.remove("home-tab-active");
+    document.documentElement.classList.remove("home-tab-active");
+    const appEl = document.getElementById("app");
+    if (appEl) appEl.classList.remove("home-tab-active");
+
     if (viewerPane) {
       viewerPane.classList.remove("header-hidden");
       viewerPane.style.display = "";
     }
+    if (resultsPane) {
+      resultsPane.style.display = "none";
+    }
     lastViewerScrollTop = 0;
     document.documentElement.classList.add("doc-open");
     document.body.classList.add("doc-open");
-    const appEl = document.getElementById("app");
     if (appEl) appEl.classList.add("doc-open");
     setDocumentZoomLock(true);
 
-    // Réinitialiser / synchroniser la recherche interne
-    syncDocSearchInputs(currentSearchQuery || "");
+    // CANAL 1 : synchroniser les champs avec la recherche de l'ONGLET cible
+    syncDocSearchInputs(effectiveSearchQuery);
     if (viewerDocSearchWrapper) viewerDocSearchWrapper.style.display = "none";
     if (viewerDocSearchResultCount) {
-      viewerDocSearchResultCount.textContent = currentSearchQuery ? `${occurrences.length} résultat${occurrences.length > 1 ? 's' : ''}` : "";
+      viewerDocSearchResultCount.textContent = effectiveSearchQuery ? `${occurrences.length} résultat${occurrences.length > 1 ? 's' : ''}` : "";
     }
 
     currentActiveOccurrences = occurrences || [];
-    if (!currentSearchQuery && (!occurrences || occurrences.length === 0)) {
+    if (!effectiveSearchQuery && (!occurrences || occurrences.length === 0)) {
       if (inDocDrawerCount) inDocDrawerCount.textContent = "0 résultat";
       if (inDocDrawerOccurrencesList) {
         inDocDrawerOccurrencesList.innerHTML = `<div style="color:var(--text-muted); font-size:12.5px; padding:20px; text-align:center;">Recherchez un terme ci-dessus pour afficher les extraits correspondants dans ce document.</div>`;
       }
     }
     let initialIdx = 0;
-    if (targetOccId && targetPage && occurrences && occurrences.length > 0) {
+    if (targetOccIndex !== null && targetOccIndex !== undefined && targetOccIndex >= 0 && occurrences && targetOccIndex < occurrences.length) {
+      initialIdx = targetOccIndex;
+    } else if (targetOccId && targetPage && occurrences && occurrences.length > 0) {
       const foundIdx = occurrences.findIndex(o => String(o.occ_id) === String(targetOccId) && Number(o.page_number) === Number(targetPage));
       if (foundIdx !== -1) initialIdx = foundIdx;
-    }
-    if (initialIdx === 0 && targetPage && occurrences && occurrences.length > 0) {
+    } else if (initialIdx === 0 && targetPage && occurrences && occurrences.length > 0) {
       const foundIdx = occurrences.findIndex(o => Number(o.page_number) === Number(targetPage));
       if (foundIdx !== -1) initialIdx = foundIdx;
-    }
-    if (initialIdx === 0 && targetOccId && occurrences && occurrences.length > 0) {
+    } else if (initialIdx === 0 && targetOccId && occurrences && occurrences.length > 0) {
       const foundIdx = occurrences.findIndex(o => String(o.occ_id) === String(targetOccId));
       if (foundIdx !== -1) initialIdx = foundIdx;
     }
     currentActiveOccurrenceIndex = currentActiveOccurrences.length > 0 ? initialIdx : -1;
     updateOccurrenceStepperUI();
+
+    // Persister l'état de recherche initial dans l'ONGLET (propriétaire de l'état)
+    const loadTab = getActiveTab();
+    if (loadTab && Number(loadTab.docId) === numericDocId) {
+      loadTab.searchQuery = effectiveSearchQuery;
+      loadTab.occurrences = currentActiveOccurrences;
+      loadTab.activeOccurrenceIndex = currentActiveOccurrenceIndex;
+      loadTab.searchActive = Boolean(effectiveSearchQuery);
+    }
 
     if (resultsPane && generalView && generalView.style.display !== "none") {
       savedGeneralResultsScrollTop = resultsPane.scrollTop;
@@ -4816,8 +5054,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Si ouvert depuis une recherche globale, charger en tâche de fond l'intégralité des occurrences du document
     // pour un parcours séquentiel complet (stepper et tiroir) sans bloquer l'affichage immédiat
-    if (currentSearchQuery && (!occurrences || occurrences.length >= 25)) {
-      const activeQuery = currentSearchQuery;
+    if (effectiveSearchQuery && (!occurrences || occurrences.length >= 25)) {
+      const activeQuery = effectiveSearchQuery;
       const isDocCached = window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(numericDocId);
       const isOfflineMode = !navigator.onLine || (filterOfflineOnly && filterOfflineOnly.checked);
 
@@ -4837,7 +5075,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       fetchFullDocOccs()
         .then(data => {
-          if (currentActiveDocId !== numericDocId || currentSearchQuery !== activeQuery) return;
+          if (currentActiveDocId !== numericDocId || getActiveTab() !== targetTab || targetTab.searchQuery !== activeQuery) return;
           const fullOccs = data.occurrences || [];
           if (fullOccs.length > 0 && (!occurrences || fullOccs.length !== occurrences.length)) {
             currentDocOriginalOccurrences = fullOccs;
@@ -4939,7 +5177,10 @@ document.addEventListener("DOMContentLoaded", () => {
         viewerCacheBadge.textContent = "⚠️ Erreur (Cliquer pour réparer)";
         viewerCacheBadge.title = "Une erreur est survenue lors du chargement. Cliquez pour vider le cache et recharger.";
       } else {
-        viewerCacheBadge.style.display = "none";
+        viewerCacheBadge.style.display = "inline-flex";
+        viewerCacheBadge.className = "viewer-doc-badge viewer-cache-badge cloud";
+        viewerCacheBadge.textContent = "☁️ Non téléchargé";
+        viewerCacheBadge.title = "Document en ligne (non stocké localement). Cliquez pour le mettre en cache hors-ligne.";
       }
 
     };
@@ -4950,19 +5191,37 @@ document.addEventListener("DOMContentLoaded", () => {
       viewerCacheBadge.addEventListener("click", async (e) => {
         e.stopPropagation();
         if (!currentActiveDocId) return;
-        if (confirm("Voulez-vous réinitialiser le cache local pour ce document et le recharger ?")) {
-          if (window.pdfCacheManager) {
+        const isComplete = window.downloadQueueManager ? window.downloadQueueManager.isDocumentCached(currentActiveDocId) : false;
+        const isTaskActive = window.downloadQueueManager && window.downloadQueueManager.activeTasks.has(Number(currentActiveDocId));
+        if (isComplete || isTaskActive) {
+          if (window.downloadQueueManager) {
+            await window.downloadQueueManager.cancelDownload(currentActiveDocId);
+            await window.downloadQueueManager.removeDocumentFromCache(currentActiveDocId);
+          } else if (window.pdfCacheManager) {
             await window.pdfCacheManager.invalidate(currentActiveDocId);
           }
           updateCacheUI("none", 0);
-          pdfFrame.src = `/pdfjs/web/viewer.html?v=5.9&verbosity=0&file=/api/pdf/${currentActiveDocId}#page=${getCurrentViewerPage() || 1}&_nocache=${Date.now()}`;
+          updateDocCardCacheUI(currentActiveDocId);
+          showToast("Cache local supprimé pour ce document", "info");
+        } else {
+          if (window.downloadQueueManager) {
+            await window.downloadQueueManager.enqueueDocument(currentActiveDocId);
+            updateDocCardCacheUI(currentActiveDocId);
+            showToast("Mise en cache hors-ligne lancée", "info");
+          }
         }
       });
     }
 
     if (window.pdfCacheManager) {
+      window.pdfCacheManager.getProgress(numericDocId).then(p => {
+        if (thisLoadSeq === currentViewerLoadSeq && Number(currentActiveDocId) === numericDocId && p) {
+          updateCacheUI(p.status, p.progress, p.downloadedBytes, p.totalBytes);
+        }
+      }).catch(() => {});
+
       window.pdfCacheManager.onProgress(numericDocId, (info) => {
-        if (Number(currentActiveDocId) === numericDocId) {
+        if (thisLoadSeq === currentViewerLoadSeq && Number(currentActiveDocId) === numericDocId) {
           updateCacheUI(info.status, info.progress, info.downloadedBytes, info.totalBytes);
         }
       });
@@ -4973,28 +5232,35 @@ document.addEventListener("DOMContentLoaded", () => {
       window._pdfViewerMessageListenerAttached = true;
       window.addEventListener("message", (evt) => {
         if (!evt.data) return;
+        const msgDocId = evt.data.docId || (evt.data.cacheKey ? Number(String(evt.data.cacheKey).match(/\/api\/pdf\/(\d+)/)?.[1]) : null);
+        const targetId = msgDocId || currentActiveDocId;
+
         if (evt.data.type === "docseeker_pdf_progress") {
           const { loaded, total, percent } = evt.data;
-          if (window.pdfCacheManager && currentActiveDocId) {
-            window.pdfCacheManager.updateProgressFromViewer(currentActiveDocId, loaded, total);
+          if (window.pdfCacheManager && targetId) {
+            window.pdfCacheManager.updateProgressFromViewer(targetId, loaded, total);
           }
-          updateCacheUI(percent >= 100 ? "complete" : "downloading", percent, loaded, total);
+          if (targetId && Number(targetId) === Number(currentActiveDocId)) {
+            updateCacheUI(percent >= 100 ? "complete" : "downloading", percent, loaded, total);
+          }
         } else if (evt.data.type === "docseeker_pdf_meta") {
           const { total } = evt.data;
-          if (window.pdfCacheManager && currentActiveDocId && total > 0) {
-            window.pdfCacheManager.setDocumentTotalBytes(currentActiveDocId, total);
+          if (window.pdfCacheManager && targetId && total > 0) {
+            window.pdfCacheManager.setDocumentTotalBytes(targetId, total);
           }
         } else if (evt.data.type === "docseeker_chunk_saved") {
           const { chunkSize, totalBytes } = evt.data;
-          if (window.pdfCacheManager && currentActiveDocId) {
-            window.pdfCacheManager.recordChunkDownloaded(currentActiveDocId, chunkSize, totalBytes);
+          if (window.pdfCacheManager && targetId) {
+            window.pdfCacheManager.recordChunkDownloaded(targetId, chunkSize, totalBytes);
           }
         } else if (evt.data.type === "docseeker_pdf_complete") {
           const { length } = evt.data;
-          if (window.pdfCacheManager && currentActiveDocId) {
-            window.pdfCacheManager.markComplete(currentActiveDocId, length);
+          if (window.pdfCacheManager && targetId) {
+            window.pdfCacheManager.markComplete(targetId, length);
           }
-          updateCacheUI("complete", 100, length, length);
+          if (targetId && Number(targetId) === Number(currentActiveDocId)) {
+            updateCacheUI("complete", 100, length, length);
+          }
         }
       });
     }
@@ -5016,11 +5282,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (window.pdfCacheManager) {
           const complete = await window.pdfCacheManager.isComplete(numericDocId);
+          if (thisLoadSeq !== currentViewerLoadSeq) return;
+
           if (complete) {
             updateCacheUI("complete", 100);
           } else {
             window.pdfCacheManager.getProgress(numericDocId).then(p => {
-              if (Number(currentActiveDocId) === numericDocId) {
+              if (thisLoadSeq === currentViewerLoadSeq && Number(currentActiveDocId) === numericDocId) {
                 updateCacheUI(p.status, p.progress, p.downloadedBytes, p.totalBytes);
               }
             }).catch(() => {});
@@ -5031,6 +5299,7 @@ document.addEventListener("DOMContentLoaded", () => {
           if (navigator.onLine === false || isDocCached || complete) {
             try {
               const localBlobUrl = await window.pdfCacheManager.getBlobUrl(numericDocId);
+              if (thisLoadSeq !== currentViewerLoadSeq) return;
               if (localBlobUrl) {
                 if (window._currentPdfBlobUrl) {
                   try { URL.revokeObjectURL(window._currentPdfBlobUrl); } catch (e) {}
@@ -5044,12 +5313,21 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         }
 
+        if (thisLoadSeq !== currentViewerLoadSeq) return;
+
         let viewerUrl = `/pdfjs/web/viewer.html?v=5.9&verbosity=0&file=${encodeURIComponent(pdfTargetUrl)}#page=${targetPage}`;
-        if (currentSearchQuery) {
-          viewerUrl += `&search=${encodeURIComponent(currentSearchQuery)}`;
+        // CANAL 4 : le hash ne porte QUE la recherche de l'onglet cible.
+        // Jamais la requête d'un autre document (le global).
+        if (effectiveSearchQuery) {
+          viewerUrl += `&search=${encodeURIComponent(effectiveSearchQuery)}`;
+        } else {
+          viewerUrl += `&search=`;
         }
 
         const win = pdfFrame.contentWindow;
+        if (win) {
+          win._suppressPdfJsFindScroll = true;
+        }
         const isWarm = Boolean(
           win &&
           win.PDFViewerApplication &&
@@ -5062,19 +5340,24 @@ document.addEventListener("DOMContentLoaded", () => {
           // L'iframe, les scripts PDF.js (3.5 Mo) et le WebWorker sont déjà prêts en mémoire.
           try {
             win.history.replaceState(null, "", viewerUrl);
+            win._suppressPdfJsFindScroll = true;
           } catch (e) {}
 
           try {
             const app = win.PDFViewerApplication;
 
             const onDocReady = () => {
+              if (thisLoadSeq !== currentViewerLoadSeq || Number(currentActiveDocId) !== numericDocId) return;
               try {
-                if (app.page !== targetPage) {
-                  app.page = targetPage;
+                const maxPages = app.pagesCount || (app.pdfDocument ? app.pdfDocument.numPages : 0);
+                const safePage = (maxPages > 0 && targetPage > maxPages) ? maxPages : Math.max(1, targetPage || 1);
+                if (app.page !== safePage) {
+                  app.page = safePage;
                 }
               } catch (e) {}
               setTimeout(() => {
-                goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
+                if (thisLoadSeq !== currentViewerLoadSeq || Number(currentActiveDocId) !== numericDocId) return;
+                goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio, targetScrollTop);
                 hookIframePinchZoomIsolation();
                 hookIframeScrollAutoHide();
               }, 60);
@@ -5084,14 +5367,21 @@ document.addEventListener("DOMContentLoaded", () => {
               app.eventBus._on("pagesinit", onDocReady, { once: true });
             }
 
+            if (thisLoadSeq !== currentViewerLoadSeq) return;
             await app.open({ url: pdfTargetUrl });
+            if (thisLoadSeq !== currentViewerLoadSeq) return;
 
             // Sécurité si pagesinit s'est déjà produit ou pour assurer le cadrage exact
             setTimeout(() => {
-              if (app.page !== targetPage) {
-                try { app.page = targetPage; } catch (e) {}
-              }
-              goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
+              if (thisLoadSeq !== currentViewerLoadSeq || Number(currentActiveDocId) !== numericDocId) return;
+              try {
+                const maxPages = app.pagesCount || (app.pdfDocument ? app.pdfDocument.numPages : 0);
+                const safePage = (maxPages > 0 && targetPage > maxPages) ? maxPages : Math.max(1, targetPage || 1);
+                if (app.page !== safePage) {
+                  app.page = safePage;
+                }
+              } catch (e) {}
+              goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio, targetScrollTop);
               hookIframePinchZoomIsolation();
               hookIframeScrollAutoHide();
             }, 180);
@@ -5105,8 +5395,13 @@ document.addEventListener("DOMContentLoaded", () => {
         // Micro-différé de 120ms : garantit que les 3-4 vignettes visibles
         // occupent les slots réseau du navigateur en priorité avant le chargement lourd du PDF
         setTimeout(() => {
+          if (thisLoadSeq !== currentViewerLoadSeq || Number(currentActiveDocId) !== numericDocId) return;
           pdfFrame.src = viewerUrl;
           pdfFrame.onload = () => {
+            if (thisLoadSeq !== currentViewerLoadSeq || Number(currentActiveDocId) !== numericDocId) return;
+            try {
+              if (pdfFrame.contentWindow) pdfFrame.contentWindow._suppressPdfJsFindScroll = true;
+            } catch (e) {}
             hookIframePinchZoomIsolation();
             hookIframeScrollAutoHide();
 
@@ -5158,7 +5453,7 @@ document.addEventListener("DOMContentLoaded", () => {
             } catch (e) {}
 
             setTimeout(() => {
-              goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
+              goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio, targetScrollTop);
               hookIframePinchZoomIsolation();
               hookIframeScrollAutoHide();
             }, 400);
@@ -5236,6 +5531,9 @@ document.addEventListener("DOMContentLoaded", () => {
       activeTargetIndex = 0;
     }
 
+    // Terme de surbrillance : la recherche intra-doc de l'onglet actif (jamais le global)
+    const activeDocSearchTerm = getActiveDocSearchTerm();
+
     occurrences.forEach((occ, index) => {
       const card = document.createElement("div");
       const isActive = (index === activeTargetIndex);
@@ -5252,7 +5550,7 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
         <div class="vertical-occ-footer">
           <span class="vertical-occ-page">Page ${occ.page_number}</span>
-          <span class="vertical-occ-snippet" title="${escapeHtml(occ.text_snippet || '')}">${currentSearchQuery ? highlightTitle(occ.text_snippet || '', currentSearchQuery) : escapeHtml(occ.text_snippet || '')}</span>
+          <span class="vertical-occ-snippet" title="${escapeHtml(occ.text_snippet || '')}">${activeDocSearchTerm ? highlightTitle(occ.text_snippet || '', activeDocSearchTerm) : escapeHtml(occ.text_snippet || '')}</span>
         </div>
       `;
 
@@ -5276,13 +5574,16 @@ document.addEventListener("DOMContentLoaded", () => {
         drawerCard.setAttribute("data-doc-id", docId);
         drawerCard.setAttribute("data-page", occ.page_number);
         drawerCard.setAttribute("data-occ-id", occ.occ_id || '');
+        drawerCard.setAttribute("data-rect", JSON.stringify(occ.rect || []));
+        drawerCard.setAttribute("data-hl-rects", JSON.stringify(occ.highlight_rects || (occ.rect ? [occ.rect] : [])));
+        drawerCard.setAttribute("data-yratio", occ.y_ratio || 0);
         drawerCard.innerHTML = `
           <div class="vertical-occ-img-wrapper">
             <img src="${placeholderSvg}" data-src="${occ.crop_url}" class="vertical-occ-img dynamic-crop" alt="Extrait p. ${occ.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
           </div>
           <div class="vertical-occ-footer">
             <span class="vertical-occ-page">Page ${occ.page_number}</span>
-            <span class="vertical-occ-snippet" title="${escapeHtml(occ.text_snippet || '')}">${currentSearchQuery ? highlightTitle(occ.text_snippet || '', currentSearchQuery) : escapeHtml(occ.text_snippet || '')}</span>
+            <span class="vertical-occ-snippet" title="${escapeHtml(occ.text_snippet || '')}">${activeDocSearchTerm ? highlightTitle(occ.text_snippet || '', activeDocSearchTerm) : escapeHtml(occ.text_snippet || '')}</span>
           </div>
         `;
         drawerCard.addEventListener("click", () => {
@@ -5306,8 +5607,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function goToPageAndScrollToOccurrence(pageNumber, rect = null, yRatio = 0.0) {
+  function goToPageAndScrollToOccurrence(pageNumber, rect = null, yRatio = 0.0, targetScrollTop = null) {
     try {
+      if (!document.body.classList.contains('doc-open') || (viewerPane && viewerPane.style.display === 'none')) return;
       const pNum = parseInt(pageNumber, 10) || 1;
       pageNumber = pNum;
       const win = pdfFrame.contentWindow;
@@ -5322,6 +5624,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (maxPages > 0 && pageNumber > maxPages) {
           pageNumber = maxPages;
         }
+        if (pageNumber < 1) pageNumber = 1;
 
         if (app.page !== pageNumber) {
           try {
@@ -5337,21 +5640,29 @@ document.addEventListener("DOMContentLoaded", () => {
 
           docViewer.querySelectorAll(".active-occ-overlay").forEach(el => el.remove());
 
+          // Si un scroll précis était mémorisé pour cet onglet, le restaurer directement au pixel près
+          if (targetScrollTop !== null && targetScrollTop !== undefined && targetScrollTop >= 0) {
+            container.scrollTop = targetScrollTop;
+          }
+
           // Vérifier si une recherche active est en cours
           const hasActiveSearch = Boolean(
             (currentSearchQuery && currentSearchQuery.trim()) ||
-            (docSearchInput && docSearchInput.value.trim())
+            (docSearchInput && docSearchInput.value.trim()) ||
+            getActiveDocSearchTerm()
           );
 
           // Si pas de recherche ou pas de coordonnées valides : NE PAS afficher de cadre bleu
           if (!hasActiveSearch || !rect || !Array.isArray(rect) || rect.length !== 4) {
-            if (yRatio && yRatio > 0) {
-              const top = pageDiv.clientHeight * yRatio;
-              const targetScrollTop = pageDiv.offsetTop + top - (container.clientHeight / 2);
-              container.scrollTo({
-                top: Math.max(0, targetScrollTop),
-                behavior: "smooth"
-              });
+            if (targetScrollTop === null || targetScrollTop === undefined) {
+              if (yRatio && yRatio > 0) {
+                const top = pageDiv.clientHeight * yRatio;
+                const calcScroll = pageDiv.offsetTop + top - (container.clientHeight / 2);
+                container.scrollTo({
+                  top: Math.max(0, calcScroll),
+                  behavior: "smooth"
+                });
+              }
             }
             return;
           }
@@ -5404,11 +5715,15 @@ document.addEventListener("DOMContentLoaded", () => {
           overlay.style.zIndex = "50";
           pageDiv.appendChild(overlay);
 
-          const targetScrollTop = pageDiv.offsetTop + top - (container.clientHeight / 2) + (height / 2);
-          container.scrollTo({
-            top: Math.max(0, targetScrollTop),
-            behavior: "smooth"
-          });
+          if (targetScrollTop !== null && targetScrollTop !== undefined && targetScrollTop >= 0) {
+            container.scrollTop = targetScrollTop;
+          } else {
+            const calcScrollTop = pageDiv.offsetTop + top - (container.clientHeight / 2) + (height / 2);
+            container.scrollTo({
+              top: Math.max(0, calcScrollTop),
+              behavior: "smooth"
+            });
+          }
         };
 
         alignOccurrence();
@@ -5876,50 +6191,74 @@ document.addEventListener("DOMContentLoaded", () => {
     const cards = document.querySelectorAll(`.doc-card[data-doc-id="${id}"], .doc-card[data-id="${id}"]`);
     cards.forEach(card => {
       const btn = card.querySelector(".doc-cache-btn");
-      const deleteBtn = card.querySelector(".btn-delete-doc-cache");
       if (!btn) return;
       const isTaskActive = window.downloadQueueManager && window.downloadQueueManager.activeTasks.has(id);
       const isTaskQueued = window.downloadQueueManager && window.downloadQueueManager.queue.includes(id);
       const isCached = window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(id);
 
+      const stats = window.pdfCacheManager ? window.pdfCacheManager.progressCache.get(id) : null;
+      const hasChunks = Boolean(stats && stats.downloadedBytes > 0);
+
+      // Rayon r=10, circonférence = 2 * PI * 10 ≈ 62.83
+      const circumference = 62.83;
+
       if (isTaskActive) {
         const task = window.downloadQueueManager.activeTasks.get(id);
-        const progress = task ? (task.progress || 0) : 0;
+        const progress = Math.max(1, Math.min(100, task ? (task.progress || 0) : 0));
+        const offset = (circumference * (1 - progress / 100)).toFixed(2);
+
         btn.className = "doc-cache-btn downloading";
-        btn.title = `Téléchargement en cours (${progress}%)...`;
+        btn.title = `Téléchargement en cours : ${progress}% (cliquer pour interrompre)`;
         btn.innerHTML = `
-          <span class="spin-indicator"></span>
-          <span class="cache-btn-text">${progress > 0 ? progress + '%' : ''}</span>
+          <svg class="progress-ring" viewBox="0 0 26 26">
+            <circle cx="13" cy="13" r="10" stroke="rgba(37, 99, 235, 0.18)" stroke-width="2.2" fill="none" />
+            <circle class="progress-ring-circle" cx="13" cy="13" r="10" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round" fill="none" stroke-dasharray="${circumference}" stroke-dashoffset="${offset}" transform="rotate(-90 13 13)" />
+            <rect class="progress-stop-square" x="9.5" y="9.5" width="7" height="7" rx="1.5" fill="var(--accent)" />
+          </svg>
         `;
-        if (deleteBtn) deleteBtn.style.display = "none";
       } else if (isTaskQueued) {
         btn.className = "doc-cache-btn downloading";
-        btn.title = "En file d'attente de téléchargement...";
+        btn.title = "En attente de téléchargement... (cliquer pour annuler)";
         btn.innerHTML = `
-          <span class="spin-indicator"></span>
-          <span class="cache-btn-text">Attente</span>
+          <svg class="progress-ring spinning" viewBox="0 0 26 26">
+            <circle cx="13" cy="13" r="10" stroke="rgba(37, 99, 235, 0.18)" stroke-width="2.2" fill="none" />
+            <circle class="progress-ring-circle" cx="13" cy="13" r="10" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round" fill="none" stroke-dasharray="18 45" />
+            <rect class="progress-stop-square" x="9.5" y="9.5" width="7" height="7" rx="1.5" fill="var(--accent)" />
+          </svg>
         `;
-        if (deleteBtn) deleteBtn.style.display = "none";
       } else if (isCached) {
         btn.className = "doc-cache-btn cached";
-        btn.title = "Disponible hors-ligne";
+        btn.title = "Disponible hors-ligne (cliquer pour retirer du cache)";
         btn.innerHTML = `
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="20 6 9 17 4 12"></polyline>
           </svg>
         `;
-        if (deleteBtn) deleteBtn.style.display = "";
+      } else if (hasChunks) {
+        const progress = stats && stats.totalBytes > 0 
+          ? Math.max(5, Math.min(95, Math.round((stats.downloadedBytes / stats.totalBytes) * 100))) 
+          : 20;
+        const offset = (circumference * (1 - progress / 100)).toFixed(2);
+
+        btn.className = "doc-cache-btn";
+        btn.title = `Cache partiel (${progress}%) - Cliquer pour compléter le téléchargement`;
+        btn.innerHTML = `
+          <svg class="progress-ring" viewBox="0 0 26 26">
+            <circle cx="13" cy="13" r="10" stroke="rgba(100, 116, 139, 0.2)" stroke-width="2" fill="none" />
+            <circle class="progress-ring-circle" cx="13" cy="13" r="10" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round" fill="none" stroke-dasharray="${circumference}" stroke-dashoffset="${offset}" transform="rotate(-90 13 13)" />
+            <path d="M13 8.5v6.5M10.5 12.5l2.5 2.5 2.5-2.5" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+          </svg>
+        `;
       } else {
         btn.className = "doc-cache-btn";
         btn.title = "Télécharger pour consultation hors-ligne";
         btn.innerHTML = `
-          <svg class="cache-icon-cloud" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-            <polyline points="7 10 12 15 17 10"></polyline>
-            <line x1="12" y1="15" x2="12" y2="3"></line>
+          <svg class="cache-icon-cloud" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 16.9A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"></path>
+            <polyline points="8 17 12 21 16 17"></polyline>
+            <line x1="12" y1="12" x2="12" y2="21"></line>
           </svg>
         `;
-        if (deleteBtn) deleteBtn.style.display = "none";
       }
     });
   }
