@@ -47,6 +47,8 @@ pub struct BatchMovePayload {
 #[derive(Deserialize)]
 pub struct UpdateDocumentPayload {
     pub title: Option<String>,
+    /// Nombre de pages réel remonté par le lecteur PDF.js (source de vérité)
+    pub total_pages: Option<i64>,
 }
 
 pub async fn list_documents(
@@ -163,6 +165,16 @@ pub async fn update_document(
             "UPDATE documents SET title = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
             params![clean_title, doc_id],
         ).ok();
+    }
+
+    // Correction du nombre de pages par la valeur exacte lue par PDF.js
+    if let Some(pages) = payload.total_pages {
+        if pages > 0 {
+            conn.execute(
+                "UPDATE documents SET total_pages = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                params![pages, doc_id],
+            ).ok();
+        }
     }
 
     Ok(Json(serde_json::json!({"status": "ok"})))

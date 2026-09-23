@@ -4815,7 +4815,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (popoverTitle) popoverTitle.textContent = tab.title;
     if (popoverFilename) popoverFilename.textContent = matchedDoc?.filename || `${tab.title}.pdf`;
-    if (popoverPages) popoverPages.textContent = `${matchedDoc?.total_pages || tab.page || 1} pages`;
+    // Nombre de pages réel : priorité à la valeur remontée du lecteur PDF.js
+    // (tab.totalPages, exacte), puis la DB distante, puis l'index local.
+    // JAMAIS la page courante : ce n'est pas un nombre de pages.
+    const localDoc = window.downloadQueueManager?._cachedDocsList?.find(d => Number(d.id) === Number(tab.docId));
+    const realPages = tab.totalPages || matchedDoc?.total_pages || localDoc?.total_pages || 0;
+    if (popoverPages) popoverPages.textContent = realPages > 0 ? `${realPages} pages` : "-";
     if (popoverSize) popoverSize.textContent = matchedDoc?.file_size ? formatBytes(matchedDoc.file_size) : "-";
     
     const isCached = window.downloadQueueManager ? window.downloadQueueManager.isDocumentCached(tab.docId) : false;
@@ -5235,9 +5240,28 @@ document.addEventListener("DOMContentLoaded", () => {
             updateCacheUI(percent >= 100 ? "complete" : "downloading", percent, loaded, total);
           }
         } else if (evt.data.type === "docseeker_pdf_meta") {
-          const { total } = evt.data;
+          const { total, numPages } = evt.data;
           if (window.pdfCacheManager && targetId && total > 0) {
             window.pdfCacheManager.setDocumentTotalBytes(targetId, total);
+          }
+          // Le nombre de pages réel (source de vérité : PDF.js) alimente l'onglet,
+          // la DB locale (offline) et la DB distante (popover pour tous les clients).
+          if (targetId && numPages > 0) {
+            const tabForDoc = typeof tabManager !== 'undefined'
+              ? tabManager.openTabs.find(t => Number(t.docId) === Number(targetId))
+              : null;
+            if (tabForDoc && tabForDoc.totalPages !== numPages) {
+              tabForDoc.totalPages = numPages;
+              // Correction distante dédupliquée : une seule requête par ouverture.
+              fetch(`/api/documents/${targetId}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ total_pages: numPages })
+              }).catch(() => {});
+            }
+            if (window.downloadQueueManager?.updateDocTotalPages) {
+              window.downloadQueueManager.updateDocTotalPages(targetId, numPages);
+            }
           }
         } else if (evt.data.type === "docseeker_chunk_saved") {
           const { chunkSize, totalBytes } = evt.data;

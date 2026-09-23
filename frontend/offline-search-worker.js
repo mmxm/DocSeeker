@@ -199,6 +199,19 @@ function updateDocFolders(docs) {
   });
 }
 
+// Persistance du nombre de pages réel (remonté par PDF.js)
+function updateDocTotalPages(docId, totalPages) {
+  if (!db || !docId || !Number.isFinite(totalPages) || totalPages <= 0) return;
+  try {
+    db.exec({
+      sql: 'UPDATE documents SET total_pages = ? WHERE id = ?;',
+      bind: [totalPages, docId]
+    });
+  } catch (e) {
+    console.warn('[OfflineSearchWorker] updateDocTotalPages:', e);
+  }
+}
+
 // Récupération de tous les dossiers en cache local avec décompte des documents locaux
 function getAllCachedFolders() {
   if (!db) return [];
@@ -504,6 +517,11 @@ self.onmessage = async (e) => {
       }
       case 'UPDATE_DOC_FOLDERS': {
         updateDocFolders(payload.docs);
+        self.postMessage({ id, success: true });
+        break;
+      }
+      case 'UPDATE_DOC_TOTAL_PAGES': {
+        updateDocTotalPages(payload.docId, payload.totalPages);
         self.postMessage({ id, success: true });
         break;
       }

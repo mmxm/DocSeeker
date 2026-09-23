@@ -240,6 +240,22 @@ class DownloadQueueManager {
     return await this.getAllCachedDocs();
   }
 
+  // Le nombre de pages réel remonté par PDF.js (source de vérité) est persisté
+  // dans SQLite local : le popover "Nombre de pages" et l'offline l'utilisent.
+  async updateDocTotalPages(docId, totalPages) {
+    const id = Number(docId);
+    if (!id || !Number.isFinite(totalPages) || totalPages <= 0) return;
+    try {
+      await this.sendToWorker('UPDATE_DOC_TOTAL_PAGES', { docId: id, totalPages });
+      if (Array.isArray(this._cachedDocsList)) {
+        const doc = this._cachedDocsList.find(d => Number(d.id) === id);
+        if (doc) doc.total_pages = totalPages;
+      }
+    } catch (e) {
+      // Silencieux : la DB distante reste la source primaire de l'affichage.
+    }
+  }
+
   async removeDocumentFromCache(docId) {
     const id = Number(docId);
     if (!id) return;

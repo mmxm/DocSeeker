@@ -143,18 +143,18 @@ fn get_cache_control(path: &str) -> &'static str {
         "no-cache, no-store, must-revalidate"
     } else if path.ends_with(".html") || path == "index.html" {
         "no-cache"
-    } else if path.starts_with("pdfjs/") {
-        // Assets de PDF.js (viewer.mjs, pdf.mjs, pdf.worker.mjs, etc.) : mise en cache avec revalidation
-        "public, max-age=86400, must-revalidate"
     } else if path.ends_with(".js")
         || path.ends_with(".mjs")
         || path.ends_with(".css")
     {
-        // Scripts et styles applicatifs : revalidation systématique. Un max-age long ici
-        // laisse le HTTP cache du navigateur servir du code périmé sous une URL ?v= récente
-        // (blocages « boutons morts », « vignettes blanches » très difficiles à diagnostiquer).
-        // Les ?v= restent utiles aux navigateurs, mais la fraîcheur doit être garantie serveur.
+        // Scripts et styles applicatifs — Y COMPRIS ceux de pdfjs/ (viewer.mjs,
+        // pdf.mjs…) : revalidation systématique. Un max-age long ici laisse le
+        // HTTP cache du navigateur servir du code périmé sous une URL ?v= fixe
+        // (blocages « boutons morts », correctifs invisibles très difficiles à
+        // diagnostiquer). Les binaires pdfjs (polices, images) restent en cache long.
         "no-cache"
+    } else if path.starts_with("pdfjs/") {
+        "public, max-age=86400, must-revalidate"
     } else if path.ends_with(".woff2")
         || path.ends_with(".svg")
         || path.ends_with(".png")

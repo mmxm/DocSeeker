@@ -14214,7 +14214,8 @@ const PDFViewerApplication = {
         window.parent?.postMessage({
           type: "docseeker_pdf_meta",
           docId,
-          total: this._contentLength
+          total: this._contentLength,
+          numPages: pdfDocument.numPages
         }, "*");
       } catch (e) {}
     }
