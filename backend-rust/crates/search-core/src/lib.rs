@@ -17,6 +17,7 @@ pub use sql::{
     build_doc_search_sql, build_search_query_sql, build_title_search_sql,
     DELETE_ALL_FOLDERS_SQL, DELETE_DOC_PAGES_SQL, DELETE_DOC_SQL, GET_CACHED_DOCS_SQL,
     GET_SUBFOLDER_IDS_SQL, INSERT_OR_REPLACE_DOC_SQL, INSERT_OR_REPLACE_FOLDER_SQL, INSERT_PAGE_SQL,
+    UPSERT_DOC_META_SQL,
 };
 pub use text_norm::normalize_text;
 pub use types::*;

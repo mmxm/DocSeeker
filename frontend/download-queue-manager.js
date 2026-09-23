@@ -137,6 +137,40 @@ class DownloadQueueManager {
     }
   }
 
+  // Miroir complet de la bibliothèque (dossiers + méta de TOUS les docs) dans
+  // SQLite local : l'arborescence reste consultable hors-ligne, les documents
+  // non téléchargés étant marqués 'meta-only' (visibles mais non consultables).
+  async syncLibraryMeta(documents, folders) {
+    if (!Array.isArray(documents)) return;
+    this._libraryDocsList = documents.map(d => ({
+      id: Number(d.id),
+      filename: d.filename,
+      title: d.title || d.filename,
+      folder_id: d.folder_id ?? null,
+      total_pages: d.total_pages || 0,
+      file_size: d.file_size || 0,
+      created_at: d.created_at,
+      updated_at: d.updated_at
+    }));
+    if (Array.isArray(folders)) this._allFolders = folders;
+    await this.sendToWorker('SYNC_LIBRARY_META', { documents: this._libraryDocsList, folders: folders || null }).catch(() => {});
+  }
+
+  // Tous les documents connus (cache + miroir) — pour l'arborescence hors-ligne.
+  async getAllKnownDocs() {
+    const docs = await this.sendToWorker('GET_ALL_KNOWN_DOCS', {}).catch(() => []);
+    if (Array.isArray(docs)) return docs;
+    return this._libraryDocsList || [];
+  }
+
+  // Le document existe-t-il dans le miroir local (méta synchronisée) ?
+  isDocumentKnown(docId) {
+    const id = Number(docId);
+    if (this._libraryDocsList) return this._libraryDocsList.some(d => Number(d.id) === id);
+    if (Array.isArray(this._cachedDocsList)) return this._cachedDocsList.some(d => Number(d.id) === id);
+    return false;
+  }
+
   async syncDocFolders(docs) {
     if (!Array.isArray(docs) || docs.length === 0) return;
     await this.sendToWorker('UPDATE_DOC_FOLDERS', {

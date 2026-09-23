@@ -6,7 +6,7 @@ use search_core::{
     CROP_RENDER_SCALE, DEFAULT_CROP_HEIGHT, DEFAULT_CROP_WIDTH, GET_CACHED_DOCS_SQL,
     GET_SUBFOLDER_IDS_SQL, GOODNOTES_YELLOW_CSS, GOODNOTES_YELLOW_RGBA, MAX_OCCURRENCES_PER_DOC,
     DELETE_ALL_FOLDERS_SQL, DELETE_DOC_PAGES_SQL, DELETE_DOC_SQL, INSERT_OR_REPLACE_DOC_SQL,
-    INSERT_OR_REPLACE_FOLDER_SQL, INSERT_PAGE_SQL,
+    INSERT_OR_REPLACE_FOLDER_SQL, INSERT_PAGE_SQL, UPSERT_DOC_META_SQL,
 };
 
 #[wasm_bindgen]
@@ -17,6 +17,11 @@ pub fn get_schema_sql() -> String {
 #[wasm_bindgen]
 pub fn get_insert_doc_sql() -> String {
     INSERT_OR_REPLACE_DOC_SQL.to_string()
+}
+
+#[wasm_bindgen]
+pub fn get_upsert_doc_meta_sql() -> String {
+    UPSERT_DOC_META_SQL.to_string()
 }
 
 #[wasm_bindgen]

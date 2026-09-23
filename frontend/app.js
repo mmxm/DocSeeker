@@ -2814,7 +2814,19 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         allFolders = cachedFolders || [];
 
-        // Filtrer les dossiers du niveau courant (currentFolderId ou root)
+        // Miroir complet : les documents non téléchargés ('meta-only') restent
+        // visibles dans l'arborescence, marqués comme indisponibles hors-ligne.
+        let knownDocs = [];
+        if (window.downloadQueueManager) {
+          knownDocs = await window.downloadQueueManager.getAllKnownDocs().catch(() => []);
+        }
+        if (!Array.isArray(knownDocs) || knownDocs.length === 0) {
+          knownDocs = cachedDocs || [];
+        }
+        const cachedIdSet = new Set((cachedDocs || []).map(d => Number(d.id)));
+        knownDocs = knownDocs.map(d => ({ ...d, offline_ready: cachedIdSet.has(Number(d.id)) }));
+
+        // Tous les dossiers connus du miroir (pas seulement ceux avec du cache)
         const currentLocalFolders = (cachedFolders || []).filter(f => {
           if (currentFolderId === null) {
             return f.parent_id === null || f.parent_id === undefined;
@@ -2822,17 +2834,12 @@ document.addEventListener("DOMContentLoaded", () => {
           return Number(f.parent_id) === Number(currentFolderId);
         });
 
-        // Filtrer les dossiers contenant au moins 1 document en cache
-        const visibleFolders = currentLocalFolders.filter(f => {
-          return window.downloadQueueManager ? window.downloadQueueManager.getCachedDocsCountForFolder(f.id) > 0 : true;
-        });
-
-        renderFolders(visibleFolders);
+        renderFolders(currentLocalFolders);
 
         if (currentFolderId !== null) {
-          currentLoadedDocs = (cachedDocs || []).filter(d => Number(d.folder_id) === Number(currentFolderId));
+          currentLoadedDocs = knownDocs.filter(d => Number(d.folder_id) === Number(currentFolderId));
         } else {
-          currentLoadedDocs = (cachedDocs || []).filter(d => d.folder_id === null || d.folder_id === undefined);
+          currentLoadedDocs = knownDocs.filter(d => d.folder_id === null || d.folder_id === undefined);
         }
         renderDocumentLibrary(currentLoadedDocs);
         return;
@@ -2890,6 +2897,24 @@ document.addEventListener("DOMContentLoaded", () => {
       // Synchronisation locale asynchrone non-bloquante
       if (window.downloadQueueManager && fetchedDocs.length > 0) {
         window.downloadQueueManager.syncDocFolders(fetchedDocs).catch(() => {});
+      }
+      // Miroir complet de la bibliothèque (dossiers + méta de TOUS les docs,
+      // y compris ceux des autres dossiers) : une seule requête par session,
+      // l'arborescence reste visible hors-ligne pour les docs non cachés.
+      if (window.downloadQueueManager && !window._libraryMirrorSynced) {
+        window._libraryMirrorSynced = true;
+        (async () => {
+          try {
+            const [allDocsRes, foldersRes] = await Promise.all([
+              fetch("/api/documents").then(r => r.ok ? r.json() : null).catch(() => null),
+              (allFolders && allFolders.length > 0) ? Promise.resolve(null) : fetch("/api/folders").then(r => r.ok ? r.json() : null).catch(() => null)
+            ]);
+            const mirrorFolders = (allFolders && allFolders.length > 0) ? allFolders : (foldersRes?.folders || null);
+            if (Array.isArray(allDocsRes?.documents)) {
+              await window.downloadQueueManager.syncLibraryMeta(allDocsRes.documents, mirrorFolders);
+            }
+          } catch (e) {}
+        })();
       }
 
       // Si le filtre "Hors-ligne uniquement" est coché, restreindre l'affichage
@@ -3391,6 +3416,7 @@ document.addEventListener("DOMContentLoaded", () => {
             <span>${isIndexing ? (doc.status === 'indexing' ? '⏳ Indexation...' : '⌛ En attente') : (isFailed ? '❌ Échec' : `${doc.total_pages || 1} page${(doc.total_pages || 1) > 1 ? 's' : ''}`)}</span>
             ${doc.file_size ? `<span>•</span><span>${formatBytes(doc.file_size)}</span>` : ''}
             ${doc.created_at ? `<span>•</span><span>${new Date(doc.created_at).toLocaleDateString('fr-FR')}</span>` : ''}
+            ${(doc.offline_ready === false) ? '<span class="meta-not-offline" title="Ce document nest pas téléchargé : connexion requise pour le consulter.">⚠ Non consultable hors-ligne</span>' : ''}
           </div>
         </div>
         <div class="goodnotes-row-actions">

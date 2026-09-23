@@ -33,6 +33,8 @@ export function get_shared_constants_wasm(): string;
 
 export function get_subfolder_ids_sql_wasm(): string;
 
+export function get_upsert_doc_meta_sql(): string;
+
 /**
  * Tri et pagination des occurrences au sein d'un document (Split View)
  */
@@ -65,6 +67,7 @@ export interface InitOutput {
     readonly get_schema_sql: () => [number, number];
     readonly get_shared_constants_wasm: () => [number, number];
     readonly get_subfolder_ids_sql_wasm: () => [number, number];
+    readonly get_upsert_doc_meta_sql: () => [number, number];
     readonly process_doc_search_results_wasm: (a: number, b: number, c: number, d: number) => [number, number];
     readonly process_search_results_wasm: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly sanitize_query_wasm: (a: number, b: number) => [number, number];

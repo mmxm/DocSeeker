@@ -17,6 +17,7 @@ export const get_insert_page_sql: () => [number, number];
 export const get_schema_sql: () => [number, number];
 export const get_shared_constants_wasm: () => [number, number];
 export const get_subfolder_ids_sql_wasm: () => [number, number];
+export const get_upsert_doc_meta_sql: () => [number, number];
 export const process_doc_search_results_wasm: (a: number, b: number, c: number, d: number) => [number, number];
 export const process_search_results_wasm: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
 export const sanitize_query_wasm: (a: number, b: number) => [number, number];

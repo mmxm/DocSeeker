@@ -15,6 +15,7 @@ import sqlite3InitModule from './wasm/sqlite/index.mjs';
 import initSearchWasm, {
   get_schema_sql,
   get_insert_doc_sql,
+  get_upsert_doc_meta_sql,
   get_delete_doc_pages_sql,
   get_insert_page_sql,
   get_delete_all_folders_sql,
@@ -184,6 +185,33 @@ function syncFolders(folders) {
   });
 }
 
+// Miroir de la bibliothèque complète : dossiers + métadonnées de TOUS les
+// documents (y compris non téléchargés). Un doc miroir est marqué
+// 'meta-only' : visible dans l'arborescence hors-ligne mais clairement non
+// consultable sans réseau. Les docs réellement indexés ('ready') ne sont
+// jamais rétrogradés par la synchro.
+function syncLibraryMeta(documents) {
+  if (!db) return;
+  const upsertMetaSql = get_upsert_doc_meta_sql();
+  db.transaction(() => {
+    for (const d of (documents || [])) {
+      if (!d || !d.id) continue;
+      db.exec({
+        sql: upsertMetaSql,
+        bind: [
+          d.id,
+          d.filename || `doc-${d.id}.pdf`,
+          d.title || d.filename || `Document ${d.id}`,
+          (d.folder_id === undefined ? null : d.folder_id),
+          d.total_pages || 0,
+          d.file_size || 0,
+          d.created_at || null
+        ]
+      });
+    }
+  });
+}
+
 // Synchronisation du rattachement des documents à leurs dossiers
 function updateDocFolders(docs) {
   if (!db || !Array.isArray(docs)) return;
@@ -271,7 +299,7 @@ function getAllCachedDocuments() {
   const docs = [];
   try {
     db.exec({
-      sql: `SELECT id, filename, title, folder_id, total_pages, file_size, created_at, updated_at FROM documents ORDER BY title ASC`,
+      sql: `SELECT id, filename, title, folder_id, total_pages, file_size, created_at, updated_at FROM documents WHERE status != 'meta-only' ORDER BY title ASC`,
       callback: (row) => {
         docs.push({
           id: row[0],
@@ -291,6 +319,37 @@ function getAllCachedDocuments() {
     });
   } catch (e) {
     console.error('[OfflineSearchWorker] Erreur getAllCachedDocuments:', e);
+  }
+  return docs;
+}
+
+// Tous les documents connus (indexés + miroir 'meta-only'), avec le statut
+// réel de chacun pour que l'UI distingue consultable hors-ligne / meta seule.
+function getAllKnownDocuments() {
+  if (!db) return [];
+  const docs = [];
+  try {
+    db.exec({
+      sql: `SELECT id, filename, title, folder_id, total_pages, file_size, created_at, updated_at, status FROM documents ORDER BY title ASC`,
+      callback: (row) => {
+        docs.push({
+          id: row[0],
+          filename: row[1],
+          title: row[2] || row[1],
+          folder_id: row[3],
+          total_pages: row[4] || 0,
+          file_size: row[5] || 0,
+          created_at: row[6],
+          updated_at: row[7],
+          status: row[8] === 'meta-only' ? 'meta-only' : 'ready',
+          cover_url: `/api/cover/${row[0]}`,
+          total_occurrences: 0,
+          vignettes: []
+        });
+      }
+    });
+  } catch (e) {
+    console.error('[OfflineSearchWorker] Erreur getAllKnownDocuments:', e);
   }
   return docs;
 }
@@ -515,6 +574,16 @@ self.onmessage = async (e) => {
         self.postMessage({ id, success: true });
         break;
       }
+      case 'SYNC_LIBRARY_META': {
+        try {
+          if (Array.isArray(payload.folders)) syncFolders(payload.folders);
+          syncLibraryMeta(payload.documents);
+          self.postMessage({ id, success: true });
+        } catch (e) {
+          self.postMessage({ id, success: false, error: String(e && e.message || e) });
+        }
+        break;
+      }
       case 'UPDATE_DOC_FOLDERS': {
         updateDocFolders(payload.docs);
         self.postMessage({ id, success: true });
@@ -543,6 +612,12 @@ self.onmessage = async (e) => {
       case 'GET_ALL_CACHED_FOLDERS': {
         const folders = getAllCachedFolders();
         self.postMessage({ id, success: true, data: folders });
+        break;
+      }
+      case 'GET_ALL_KNOWN_DOCS': {
+        // Tous les documents connus localement (indexés 'ready' + miroir 'meta-only')
+        const known = getAllKnownDocuments();
+        self.postMessage({ id, success: true, data: known });
         break;
       }
       case 'SEARCH': {

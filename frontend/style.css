@@ -2132,6 +2132,12 @@ body.light-theme {
   color: var(--danger);
   background-color: rgba(239, 68, 68, 0.1);
 }
+/* Mention "non consultable hors-ligne" (documents en miroir méta seule) */
+.meta-not-offline {
+  color: #b45309;
+  font-weight: 600;
+}
+
 /* Chevron d'accès */
 .folder-chevron {
   color: var(--text-dim);

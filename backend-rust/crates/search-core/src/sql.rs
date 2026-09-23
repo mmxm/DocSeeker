@@ -18,6 +18,22 @@ pub const DELETE_ALL_FOLDERS_SQL: &str =
 pub const INSERT_OR_REPLACE_FOLDER_SQL: &str = 
     "INSERT OR REPLACE INTO folders (id, name, parent_id, color) VALUES (?, ?, ?, ?)";
 
+/// Miroir léger de la bibliothèque : upsert des métadonnées document sans
+/// toucher aux pages (l'indexation FTS reste propre aux docs téléchargés).
+/// Ne met PAS status='ready' : un doc miroir sans pages locales ne doit pas
+/// passer pour consultable hors-ligne.
+pub const UPSERT_DOC_META_SQL: &str =
+    "INSERT INTO documents (id, filename, title, folder_id, status, total_pages, file_size, created_at, updated_at) \
+     VALUES (?, ?, ?, ?, 'meta-only', ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP) \
+     ON CONFLICT(id) DO UPDATE SET \
+       filename = excluded.filename, \
+       title = excluded.title, \
+       folder_id = excluded.folder_id, \
+       total_pages = excluded.total_pages, \
+       file_size = excluded.file_size, \
+       updated_at = CURRENT_TIMESTAMP \
+     WHERE documents.status = 'meta-only'";
+
 pub const DELETE_DOC_SQL: &str = 
     "DELETE FROM documents WHERE id = ?";
 
