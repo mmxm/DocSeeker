@@ -4759,24 +4759,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
-  // Cache dans le CacheStorage du navigateur pour réouverture instantanée et support hors-ligne
-  async function cacheDocumentPdf(docId) {
-    if (!("caches" in window)) return;
-    try {
-      const cache = await caches.open("docseeker-pdf-v1");
-      const url = `/api/pdf/${docId}`;
-      const match = await cache.match(url);
-      if (!match) {
-        fetch(url).then(res => {
-          if (res.ok) cache.put(url, res.clone());
-        }).catch(() => {});
-      }
-    } catch (e) {
-      console.warn("[CacheStorage]", e);
-    }
-  }
-
-  // =========================================================================
   // Gestionnaire Multi-Onglets Lecteur PDF Goodnotes (tabManager)
   // =========================================================================
   const tabManager = {
