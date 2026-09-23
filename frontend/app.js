@@ -2268,31 +2268,23 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function goToNextOccurrence() {
-    // F3 / stepper : piloter l'occurrence du document AFFICHÉ (onglet actif),
-    // jamais celles du dernier document recherché (bug sœur).
+    // F3 / stepper : piloter l'occurrence du document AFFICHÉ (onglet actif).
+    // On n'relance la recherche QUE si ses occurrences ne sont pas chargées :
+    // sinon chaque clic re-exécuterait la recherche et recalerait l'index sur
+    // l'occurrence la plus proche (flèches inopérantes, spam SQLite/F3).
     const tab = getActiveTab();
-    if (tab) {
-      if (tab.searchActive) {
-        performDocSearch(tab.searchQuery || "", true);
-        return;
-      }
-      if (tab.occurrences && tab.occurrences.length > 0) {
-        projectTabSearchToActive();
-      }
+    if (tab && (!Array.isArray(tab.occurrences) || tab.occurrences.length === 0) && tab.searchQuery) {
+      performDocSearch(tab.searchQuery, true);
+      return;
     }
     jumpToOccurrenceByIndex(currentActiveOccurrenceIndex + 1);
   }
 
   function goToPrevOccurrence() {
     const tab = getActiveTab();
-    if (tab) {
-      if (tab.searchActive) {
-        performDocSearch(tab.searchQuery || "", true);
-        return;
-      }
-      if (tab.occurrences && tab.occurrences.length > 0) {
-        projectTabSearchToActive();
-      }
+    if (tab && (!Array.isArray(tab.occurrences) || tab.occurrences.length === 0) && tab.searchQuery) {
+      performDocSearch(tab.searchQuery, true);
+      return;
     }
     jumpToOccurrenceByIndex(currentActiveOccurrenceIndex - 1);
   }
@@ -3204,6 +3196,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function highlightTitle(title, query) {
     if (!title) return "";
+    // Les titres provenant de fichiers macOS sont souvent en Unicode NFD (décomposé :
+    // « é » = « e » + U+0301). La requête est normalisée mais le titre doit l'être aussi,
+    // sinon les classes d'accents [eèéêë…] butent sur le combining mark → aucun surlignage.
+    title = String(title).normalize("NFC");
     if (!query || !query.trim()) return escapeHtml(title);
 
     try {
@@ -3348,7 +3344,11 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
 
-    const query = searchInput ? searchInput.value.trim() : "";
+    // Propriétaire de l'état : currentSearchQuery (la lecture de searchInput.value ici
+    // est fragile : le rendu asynchrone peut s'exécuter alors que le champ a été vidé/modifié).
+    const query = (isSearch && currentSearchQuery && currentSearchQuery.trim())
+      ? currentSearchQuery.trim()
+      : (searchInput ? searchInput.value.trim() : "");
     const displayTitle = (isSearch && query) 
       ? highlightTitle(doc.title, query) 
       : escapeHtml(doc.title);
