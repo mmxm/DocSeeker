@@ -11,6 +11,9 @@ htmlcov/
 data/
 !data/.gitkeep
 
+# Stamp de build wasm (backend-rust/build.rs)
+frontend/wasm/search_wasm/.build-stamp
+
 # IDE & Editeurs
 .vscode/
 .idea/
