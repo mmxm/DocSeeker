@@ -4246,6 +4246,22 @@ body.home-tab-active .results-pane,
   width: 100% !important;
 }
 
+/* Vue secondaire active (Réglages / Transferts) depuis le volet latéral,
+   même quand aucun onglet lecteur n'est ouvert : elle prend toute la place
+   à la place du panneau Documents. La classe .active est posée par
+   switchMainView() en JS. */
+body.home-tab-active .main-view-section.active:not(.results-pane),
+.app-layout.home-tab-active .main-view-section.active:not(.results-pane) {
+  display: flex !important;
+  flex: 1 1 100% !important;
+  width: 100% !important;
+}
+
+body.home-tab-active .main-view-section:not(.active),
+.app-layout.home-tab-active .main-view-section:not(.active) {
+  display: none !important;
+}
+
 body.home-tab-active .viewer-pane,
 .app-layout.home-tab-active .viewer-pane {
   display: none !important;

@@ -1130,6 +1130,13 @@ document.addEventListener("DOMContentLoaded", () => {
       if (b) b.classList.toggle("active", b.getAttribute("data-tab") === tabName);
     });
 
+    // La classe .active pilote l'affichage en CSS (règles home-tab-active) :
+    // elle garantit que Réglages / Transferts sont visibles depuis le volet
+    // même quand aucun onglet lecteur n'est ouvert.
+    [[viewDocuments, "documents"], [viewDownloads, "downloads"], [viewSettings, "settings"]].forEach(([el, name]) => {
+      if (el) el.classList.toggle("active", tabName === name);
+    });
+
     if (viewDocuments) viewDocuments.style.display = (tabName === "documents") ? "flex" : "none";
     if (viewDownloads) {
       viewDownloads.style.display = (tabName === "downloads") ? "flex" : "none";
