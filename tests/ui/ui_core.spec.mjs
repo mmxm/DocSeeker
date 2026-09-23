@@ -670,5 +670,65 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
     await expect.poll(() => page.evaluate(() => localStorage.getItem('docseeker_open_tabs_snapshot'))).toBe(null);
     console.log('✅ [Core-16] Persistance des onglets : restauration complète, purge correcte à la désactivation.');
   });
+
+  // =========================================================================
+  // Core-17 : Masquage de la barre d'onglets — gain de hauteur RÉEL
+  // (Régression du bug : translateY laissait un bandeau blanc de 40px — la
+  // barre doit être RETIRÉE DU FLUX et le workspace passer à hauteur pleine.)
+  // =========================================================================
+
+  test('Core-17 - Masquage Barre d Onglets : Workspace à Hauteur Pleine + Bouton de Rappel', async ({ page }) => {
+    // 1. Ouvrir un document (séquence Core-15 : la recherche globale alimente les vignettes)
+    await h.search('grossesse');
+    const docCard = page.locator('.doc-card[data-doc-id="1"]');
+    await expect(docCard).toBeVisible({ timeout: 10000 });
+    await docCard.locator('.vignette-item').first().click();
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('.reader-top-tab-bar')).toBeVisible({ timeout: 10000 });
+
+    // 2. Mesures AVANT masquage : la barre occupe ~40px dans le flux
+    const before = await page.evaluate(() => ({
+      vh: window.innerHeight,
+      ws: document.querySelector('.main-workspace')?.getBoundingClientRect().height ?? 0,
+      bar: document.querySelector('.reader-top-tab-bar')?.getBoundingClientRect().height ?? 0,
+      restoreVisible: getComputedStyle(document.getElementById('readerTabBarRestoreBtn')).display !== 'none',
+    }));
+    expect(before.vh).toBeGreaterThan(400);
+    expect(before.bar).toBeGreaterThan(30); // la barre occupe bien une ligne
+    expect(before.restoreVisible).toBe(false); // le rappel est caché tant que la barre est là
+
+    // 3. Masquer via le chevron de la barre lecteur
+    await page.locator('#toggleTabBarBtn').click();
+    const hidden = await page.evaluate(() => ({
+      bodyFlag: document.body.classList.contains('tabbar-hidden'),
+      barDisplay: getComputedStyle(document.querySelector('.reader-top-tab-bar')).display,
+      barRect: document.querySelector('.reader-top-tab-bar')?.getBoundingClientRect().height ?? 0,
+      ws: document.querySelector('.main-workspace')?.getBoundingClientRect().height ?? 0,
+      restoreVisible: getComputedStyle(document.getElementById('readerTabBarRestoreBtn')).display !== 'none',
+    }));
+    expect(hidden.bodyFlag).toBe(true);
+    expect(hidden.barDisplay).toBe('none'); // RETIRÉE DU FLUX (pas seulement translée)
+    expect(hidden.barRect).toBe(0); // aucune trace dans le layout
+    expect(hidden.restoreVisible).toBe(true); // le rappel est apparu
+    // Le gain doit être ~exactement la hauteur de la barre (±2px de subpixel) :
+    // c'est l'assertion qui aurait attrapé le bug du bandeau blanc (gain 0).
+    expect(hidden.ws - before.ws).toBeGreaterThanOrEqual(before.bar - 2);
+    expect(Math.abs(hidden.ws + 0 - before.vh)).toBeLessThanOrEqual(2); // workspace = plein écran
+
+    // 4. Restaurer via le petit bouton de rappel fixe
+    await page.locator('#readerTabBarRestoreBtn').click();
+    const restored = await page.evaluate(() => ({
+      bodyFlag: document.body.classList.contains('tabbar-hidden'),
+      barDisplay: getComputedStyle(document.querySelector('.reader-top-tab-bar')).display,
+      ws: document.querySelector('.main-workspace')?.getBoundingClientRect().height ?? 0,
+      restoreVisible: getComputedStyle(document.getElementById('readerTabBarRestoreBtn')).display !== 'none',
+    }));
+    expect(restored.bodyFlag).toBe(false);
+    expect(restored.barDisplay).not.toBe('none');
+    expect(restored.restoreVisible).toBe(false);
+    expect(Math.abs(restored.ws - before.ws)).toBeLessThanOrEqual(2); // hauteur d'origine retrouvée
+
+    console.log(`✅ [Core-17] Masquage barre : workspace ${Math.round(before.ws)}px → ${Math.round(hidden.ws)}px (+${Math.round(hidden.ws - before.ws)}px réels), rappel fonctionnel.`);
+  });
 });
 
