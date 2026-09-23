@@ -283,7 +283,20 @@ export class DocSeekerTestHarness {
 
   async downloadDocToComplete(docId, timeoutMs = 30000) {
     const id = Number(docId);
-    const isAlreadyDone = await this.page.evaluate(async (idNum) => {
+    // evaluate résilient : l'installation du service worker déclenche un
+    // controllerchange + auto-reload qui détruit le contexte d'exécution en
+    // plein evaluate (surtout WebKit, au premier chargement du contexte de
+    // test). On renvoie undefined pour laisser expect.poll retenter après la
+    // navigation au lieu de faire échouer le test.
+    const safeEval = async (fn, arg) => {
+      try {
+        return await this.page.evaluate(fn, arg);
+      } catch (e) {
+        if (/execution context|context was destroyed|target closed|navigation/i.test(String(e))) return undefined;
+        throw e;
+      }
+    };
+    const isAlreadyDone = await safeEval(async (idNum) => {
       const isIndexed  = window.downloadQueueManager?.isDocumentCached(idNum);
       if (!isIndexed) return false;
       // If pdfCacheManager missing, trust downloadQueueManager's isDocumentCached
@@ -293,7 +306,7 @@ export class DocSeekerTestHarness {
     }, id);
     if (isAlreadyDone) return;
 
-    await this.page.evaluate(async (idNum) => {
+    await safeEval(async (idNum) => {
       if (window.downloadQueueManager) {
         if (window.downloadQueueManager.isPaused) window.downloadQueueManager.resume();
         await window.downloadQueueManager.enqueueDocument(idNum);
@@ -305,12 +318,12 @@ export class DocSeekerTestHarness {
 
     await expect.poll(
       async () => {
-        return await this.page.evaluate(async (idNum) => {
+        const state = await safeEval(async (idNum) => {
           const dqm = window.downloadQueueManager;
           const isIndexed = dqm?.isDocumentCached(idNum);
           if (!isIndexed) {
             if (dqm && !dqm.activeTasks.has(idNum) && !dqm.queue.includes(idNum)) {
-              dqm.enqueueDocument(idNum);
+              await dqm.enqueueDocument(idNum);
             }
             return false;
           }
@@ -318,6 +331,7 @@ export class DocSeekerTestHarness {
           const isComplete = await window.pdfCacheManager.isComplete(idNum);
           return Boolean(isIndexed && isComplete);
         }, id);
+        return state === undefined ? false : state;
       },
       { timeout: timeoutMs, intervals: [300, 600, 1000] }
     ).toBe(true);
@@ -682,8 +696,18 @@ export class DocSeekerTestHarness {
   // ZERO-ERROR ASSERTIONS
   // ─────────────────────────────────────────────────────────────────────────────
 
-  assertZeroErrors() {
-    expect(this.capturedErrors).toHaveLength(0);
+  assertZeroErrors({ ignoreNetworkNoise = false } = {}) {
+    if (!ignoreNetworkNoise) {
+      expect(this.capturedErrors).toHaveLength(0);
+      return;
+    }
+    // En navigation offline, WebKit logge un bruit réseau inévitable (échecs de
+    // chargement de ressources, "access control checks", "internal error") même
+    // quand l'application se dégrade et fonctionne via le service worker. On
+    // filtre ces symptômes réseau tout en conservant les vraies erreurs JS.
+    const REAL_JS_ERROR = /access control checks|internal error|Failed to load resource|Importing a module script failed/i;
+    const real = this.capturedErrors.filter((msg) => !REAL_JS_ERROR.test(msg));
+    expect(real).toHaveLength(0);
   }
 
   getErrors() {
