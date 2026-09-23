@@ -43,18 +43,21 @@ function calculateCropBounds(x0, y0, x1, y1, pageWidth, pageHeight,
 let wasmReady = true; // Wasm supprimé de ce worker — flag toujours vrai pour compatibilité
 
 
-// Sémaphore / File d'attente (2 tâches concurrentes pour accélérer le débit de rendu mobile)
-const MAX_CONCURRENT_RENDERS = 2;
+// Sémaphore / File d'attente (concurrence adaptative selon les capacités du device)
+const MAX_CONCURRENT_RENDERS = (() => {
+  const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2;
+  return Math.max(2, Math.min(cores >= 8 ? 4 : (cores >= 4 ? 3 : 2), 4));
+})();
 let activeRenders = 0;
 const renderQueue = [];
 
-// Cache LRU de pages décodées (max 8 pages) pour réutilisation immédiate lors d'occurrences multiples sur la même page
+// Cache LRU de pages décodées — taille adaptée à la RAM disponible
 const pageCache = new Map(); // `${docId}_${pageNumber}` -> { page, docId, lastUsed }
-const PAGE_CACHE_MAX = 8;
+const PAGE_CACHE_MAX = (typeof navigator !== 'undefined' && navigator.deviceMemory && navigator.deviceMemory >= 8) ? 16 : 8;
 
-// Cache LRU de bitmaps de pages complètes rastérisées (max 8 pages) pour extraction instantanée par GPU
+// Cache LRU de bitmaps de pages complètes rastérisées — taille adaptée à la RAM disponible
 const pageBitmapCache = new Map(); // `${docId}_${pageNumber}` -> { bitmap, docId, lastUsed }
-const PAGE_BITMAP_CACHE_MAX = 8;
+const PAGE_BITMAP_CACHE_MAX = (typeof navigator !== 'undefined' && navigator.deviceMemory && navigator.deviceMemory >= 8) ? 16 : 8;
 const renderingBitmapPromises = new Map(); // `${docId}_${pageNumber}` -> Promise<ImageBitmap|OffscreenCanvas>
 
 async function getOrRenderPageBitmap(page, docId, pageNumber) {
@@ -170,8 +173,10 @@ function clearPageCache(docId = null) {
 
 // Cache LRU de documents PDF.js : la taille est adaptée à la RAM disponible.
 // Un PDF chargé en mémoire dans ce Worker peut peser 2× sa taille sur disque
-// (Uint8Array IndexedDB + copie interne PDF.js). 2 = équilibre performance/mémoire.
-const PDF_LRU_MAX = (typeof navigator !== 'undefined' && navigator.deviceMemory && navigator.deviceMemory <= 4) ? 1 : 2;
+// (Uint8Array IndexedDB + copie interne PDF.js). Augmenté sur desktop ≥ 8 Go RAM.
+const PDF_LRU_MAX = (typeof navigator !== 'undefined' && navigator.deviceMemory)
+  ? (navigator.deviceMemory >= 8 ? 4 : (navigator.deviceMemory >= 4 ? 2 : 1))
+  : 2;
 const pdfDocCache = new Map(); // docId -> { doc, lastUsed }
 const loadingPromises = new Map(); // docId -> Promise<doc>
 
@@ -527,7 +532,7 @@ async function executeCropRender(task) {
 
     let blob;
     try {
-      blob = await canvas.convertToBlob({ type: 'image/webp', quality: 0.80 });
+      blob = await canvas.convertToBlob({ type: 'image/webp', quality: 0.65 });
     } catch (e) {
       blob = await canvas.convertToBlob({ type: 'image/png' });
     }
