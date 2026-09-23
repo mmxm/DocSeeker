@@ -173,6 +173,50 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
+  // O12 : Miroir hors-ligne de l'arborescence (docs non téléchargés visibles)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  test('O12 - Miroir Hors-Ligne : Arborescence Complète avec Docs Méta-Seuls', async ({ page, context }) => {
+    // En ligne : le doc 2 est indexé mais NON téléchargé → méta-seule dans le
+    // miroir ; le doc 1 reste téléchargé. Le miroir global (syncLibraryMeta)
+    // absorbe toute la bibliothèque au premier chargement.
+    await page.evaluate(async () => {
+      await window.downloadQueueManager.ensureInitialized();
+      await window.downloadQueueManager.removeDocumentFromCache(2);
+      await window.downloadQueueManager.ensureDocumentIndexedLocally(2);
+      if (window.pdfCacheManager) await window.pdfCacheManager.invalidate(2);
+    });
+    await h.openFolder(130);
+    await h.ensureDocCached(1);
+    // Revenir à la racine pour déclencher le chargement global + miroir.
+    await h.navigateToBreadcrumbRoot();
+    await page.waitForTimeout(800);
+
+    const mirrorKnown = await page.evaluate(() => window.downloadQueueManager?.isDocumentKnown(2));
+    expect(mirrorKnown).toBe(true);
+
+    // Hors-ligne + reload : l'arborescence doit montrer le doc méta-seul.
+    // Comme un vrai utilisateur (SW actif depuis sa première visite), on attend
+    // que le service worker contrôle la page avant de couper le réseau — sinon
+    // le reload offline ne profite pas du cache SW et dégrade artificiellement.
+    await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 20000 });
+    await context.setOffline(true);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.evaluate(async () => {
+      if (window.downloadQueueManager) await window.downloadQueueManager.ensureInitialized();
+    });
+
+    // Le doc téléchargé reste consultable, le méta-seul est visible et marqué.
+    await expect(page.locator('.folder-card').first()).toBeVisible({ timeout: 15000 });
+    await h.openFolder(130);
+    const metaCard = page.locator('.doc-card[data-doc-id="2"]');
+    await expect(metaCard).toBeVisible({ timeout: 10000 });
+    await expect(metaCard.locator('.meta-not-offline')).toBeVisible();
+    expect(await page.evaluate(() => window.downloadQueueManager?.isDocumentCached(2))).toBeFalsy();
+    console.log('✅ [O12] Arborescence offline complète : doc méta-seul visible + marqué, doc caché intact.');
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
   // O2 : Exclusion doc sans binaire PDF (NetworkError = 0)
   // ─────────────────────────────────────────────────────────────────────────
 
