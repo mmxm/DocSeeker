@@ -1121,9 +1121,15 @@ document.addEventListener("DOMContentLoaded", () => {
   let tabBarHidden = false;
   function updateTabBarHiddenUI() {
     const barVisible = readerTopTabBar && readerTopTabBar.style.display !== "none";
-    document.body.classList.toggle("tabbar-hidden", tabBarHidden && barVisible);
+    const hidden = tabBarHidden && barVisible;
+    // La classe est posée sur body ET sur #app (app-layout) : certaines règles
+    // de hauteur concurrentes ciblent .app-layout et perdraient sinon le
+    // signal de masquage.
+    document.body.classList.toggle("tabbar-hidden", hidden);
+    const appEl = document.getElementById("app");
+    if (appEl) appEl.classList.toggle("tabbar-hidden", hidden);
     if (readerTabBarRestoreBtn) {
-      readerTabBarRestoreBtn.style.display = (tabBarHidden && barVisible) ? "flex" : "none";
+      readerTabBarRestoreBtn.style.display = hidden ? "flex" : "none";
     }
     if (toggleTabBarBtn) {
       toggleTabBarBtn.title = tabBarHidden ? "Afficher la barre d'onglets" : "Masquer la barre d'onglets (lecture plein écran)";

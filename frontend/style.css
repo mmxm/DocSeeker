@@ -4231,19 +4231,19 @@ body.home-tab-active .reader-top-tab-bar,
   display: flex !important;
 }
 
-/* Barre d'onglets masquée en lecture : elle glisse au-dessus de l'écran et
-   le contenu récupère la hauteur. Le petit bouton de rappel reste accessible. */
-body.tabbar-hidden .reader-top-tab-bar {
-  transform: translateY(-100%);
-  opacity: 0;
-  pointer-events: none;
+/* Barre d'onglets masquée en lecture : retirée du flux pour que le lecteur
+   gagne réellement sa hauteur. Le petit bouton de rappel reste accessible. */
+body.tabbar-hidden .reader-top-tab-bar,
+.app-layout.tabbar-hidden .reader-top-tab-bar {
+  display: none !important;
 }
 
-.reader-top-tab-bar {
-  transition: transform 0.25s ease, opacity 0.2s ease;
-}
-
-body.tabbar-hidden .main-workspace {
+body.tabbar-hidden .main-workspace,
+body.doc-open.tabbar-hidden .main-workspace,
+body.tabbar-hidden:not(.home-tab-active) .main-workspace,
+.app-layout.doc-open.tabbar-hidden:not(.home-tab-active) .main-workspace,
+.app-layout:has(.main-workspace.split-active).tabbar-hidden:not(.home-tab-active) .main-workspace,
+body:has(.main-workspace.split-active).tabbar-hidden:not(.home-tab-active) .main-workspace {
   height: 100vh !important;
   height: 100dvh !important;
   max-height: 100vh !important;
