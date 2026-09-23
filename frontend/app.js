@@ -390,7 +390,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const inDocDrawerOccurrencesList = document.getElementById("inDocDrawerOccurrencesList");
   const inDocSortByPageBtn = document.getElementById("inDocSortByPageBtn");
   const inDocSortByRelevanceBtn = document.getElementById("inDocSortByRelevanceBtn");
-  const inDocDrawerCloseBtn = document.getElementById("inDocDrawerCloseBtn");
   const tabDocInfoPopover = document.getElementById("tabDocInfoPopover");
   const closePopoverDocBtn = document.getElementById("closePopoverDocBtn");
   const networkStatusPill = document.getElementById("networkStatusPill");
@@ -2113,13 +2112,6 @@ document.addEventListener("DOMContentLoaded", () => {
     inDocDrawerClearBtn.addEventListener("click", () => {
       syncDocSearchInputs("");
       performDocSearch("", true);
-    });
-  }
-
-  if (inDocDrawerCloseBtn) {
-    inDocDrawerCloseBtn.addEventListener("click", () => {
-      if (inDocSearchDrawer) inDocSearchDrawer.style.display = "none";
-      if (readerSidebarToggleBtn) readerSidebarToggleBtn.classList.remove("active");
     });
   }
 
