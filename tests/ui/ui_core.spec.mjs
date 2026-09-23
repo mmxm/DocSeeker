@@ -615,5 +615,60 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
 
     console.log('✅ [Core-15] Recherche intra-doc isolée par onglet : A vierge, recherche relancée OK, B restauré avec « complication ».');
   });
+
+  // =========================================================================
+  // Core-16 : Persistance des onglets ouverts (opt-in, localStorage)
+  // Rouvrir la page → mêmes onglets, même recherche, même position.
+  // =========================================================================
+
+  test('Core-16 - Persistance des Onglets Ouverts : Recherche et Position Restaurées', async ({ page }) => {
+    // L'opt-in est piloté par la checkbox des Réglages ; on l'actionne par
+    // clic JS (en mode lecture, la vue Réglages est à largeur nulle côté CSS —
+    // hors sujet ici : le test vise la persistance, pas le layout du volet).
+    const togglePersist = () => page.evaluate(() => document.getElementById('settingsPersistTabs')?.click());
+
+    // 1. Activer l'opt-in
+    await togglePersist();
+    await expect
+      .poll(() => page.evaluate(() => localStorage.getItem('docseeker_persist_tabs_enabled')), { timeout: 5000 })
+      .toBe('1');
+
+    // 2. Ouvrir un document (séquence Core-15 : la recherche globale alimente
+    // les vignettes de la carte) et lancer une recherche intra-doc
+    await h.search('grossesse');
+    const docCard = page.locator('.doc-card[data-doc-id="1"]');
+    await expect(docCard).toBeVisible({ timeout: 10000 });
+    await docCard.locator('.vignette-item').first().click();
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    const drawerInput = page.locator('#inDocDrawerSearchInput');
+    await drawerInput.fill('grossesse');
+    await drawerInput.press('Enter');
+    await expect(page.locator('#viewerDocSearchResultCount')).toContainText('résultat', { timeout: 10000 });
+
+    // 3. Recharger : le snapshot doit exister et l'onglet doit être restauré
+    await expect.poll(() => page.evaluate(() => !!localStorage.getItem('docseeker_open_tabs_snapshot')), { timeout: 10000 }).toBe(true);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 20000 });
+
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.reader-tab-item')).toHaveCount(1);
+    await expect(page.locator('#inDocDrawerSearchInput')).toHaveValue('grossesse', { timeout: 15000 });
+    await expect(page.locator('#viewerDocSearchResultCount')).toContainText('résultat', { timeout: 15000 });
+    // La recherche relancée produit de vraies occurrences + surbrillance PDF.js
+    // (poll : le dispatch « find » suit la restauration de quelques centaines de ms)
+    await expect
+      .poll(() => page.evaluate(() => {
+        try { return document.getElementById('pdfFrame').contentWindow.PDFViewerApplication.findController?.state?.query?.[0] || null; } catch { return null; }
+      }), { timeout: 15000 })
+      .toBe('grossesse');
+
+    // 4. Désactiver l'opt-in → snapshot purgé, pas de restauration au prochain chargement
+    await togglePersist();
+    await expect
+      .poll(() => page.evaluate(() => localStorage.getItem('docseeker_persist_tabs_enabled')), { timeout: 5000 })
+      .toBe(null);
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('docseeker_open_tabs_snapshot'))).toBe(null);
+    console.log('✅ [Core-16] Persistance des onglets : restauration complète, purge correcte à la désactivation.');
+  });
 });
 

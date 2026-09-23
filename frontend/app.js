@@ -1148,6 +1148,183 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // =========================================================================
+  // Persistance des onglets ouverts (opt-in, STRICTEMENT locale au navigateur)
+  // =========================================================================
+  // L'utilisateur l'active dans Réglages. Le snapshot vit en localStorage
+  // (jamais côté serveur ni compte) : changer de navigateur ou de machine ne
+  // restaure rien. Une recherche restaurée est RELANCÉE sur le document (pas
+  // d'injection d'occurrences sérialisées), la position PDF reste la source
+  // de vérité de la position restaurée.
+  const PERSIST_TABS_KEY = "docseeker_persist_tabs_enabled";
+  const PERSIST_SNAPSHOT_KEY = "docseeker_open_tabs_snapshot";
+  const persistTabsCheckbox = document.getElementById("settingsPersistTabs");
+
+  function isPersistTabsEnabled() {
+    try { return localStorage.getItem(PERSIST_TABS_KEY) === "1"; } catch (e) { return false; }
+  }
+
+  function setPersistTabsEnabled(enabled) {
+    try {
+      if (enabled) {
+        localStorage.setItem(PERSIST_TABS_KEY, "1");
+      } else {
+        localStorage.removeItem(PERSIST_TABS_KEY);
+        localStorage.removeItem(PERSIST_SNAPSHOT_KEY);
+      }
+    } catch (e) {}
+  }
+
+  function serializeOpenTabs() {
+    return {
+      v: 1,
+      savedAt: Date.now(),
+      activeTabId: tabManager.activeTabId,
+      tabs: tabManager.openTabs.map(t => ({
+        id: t.id,
+        docId: t.docId,
+        title: t.title,
+        page: t.page || 1,
+        scrollTop: t.scrollTop ?? null,
+        scrollLeft: t.scrollLeft ?? null,
+        searchQuery: t.searchQuery || "",
+        searchActive: Boolean(t.searchActive),
+        activeOccurrenceIndex: t.activeOccurrenceIndex || 0
+      }))
+    };
+  }
+
+  function persistOpenTabs() {
+    if (!isPersistTabsEnabled()) return;
+    try {
+      const snapshot = serializeOpenTabs();
+      if (snapshot.tabs.length === 0) {
+        localStorage.removeItem(PERSIST_SNAPSHOT_KEY);
+      } else {
+        localStorage.setItem(PERSIST_SNAPSHOT_KEY, JSON.stringify(snapshot));
+      }
+    } catch (e) {
+      // Quota ou mode privé : la persistance est un confort, jamais une exigence.
+    }
+  }
+
+  function takePersistedTabsSnapshot() {
+    if (!isPersistTabsEnabled()) return null;
+    try {
+      const raw = localStorage.getItem(PERSIST_SNAPSHOT_KEY);
+      if (!raw) return null;
+      const snap = JSON.parse(raw);
+      if (!snap || snap.v !== 1 || !Array.isArray(snap.tabs) || snap.tabs.length === 0) return null;
+      return snap;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Restauration pilotée par l'événement docseeker_pdf_meta (iframe prête) :
+  // chaque onglet restauré porte ses propres actions différées — relance de sa
+  // recherche (_restoreRerunSearch) et re-calage du scroll (_restoreScroll) —
+  // exécutées quand SON document est affiché. robuste quel que soit l'ordre
+  // de sélection des onglets après réouverture.
+  function restorePersistedTabsIfReady(docId) {
+    if (!window._pendingTabsSnapshot) return;
+    const tab = tabManager.openTabs.find(t => Number(t.docId) === Number(docId));
+    if (!tab) return;
+
+    if (tab._restoreRerunSearch) {
+      tab._restoreRerunSearch = false;
+      if (tab.searchQuery && Number(currentActiveDocId) === Number(docId)) {
+        performDocSearch(tab.searchQuery, true).then(() => {
+          if (Number.isInteger(tab.activeOccurrenceIndex) && tab.activeOccurrenceIndex > 0) {
+            setTimeout(() => jumpToOccurrenceByIndex(tab.activeOccurrenceIndex), 120);
+          }
+        }).catch(() => {});
+      }
+    }
+
+    if (Number.isFinite(tab._restoreScroll)) {
+      const scrollTarget = tab._restoreScroll;
+      tab._restoreScroll = null;
+      setTimeout(() => {
+        try {
+          const win = pdfFrame?.contentWindow;
+          const container = win?.document?.getElementById("viewerContainer");
+          if (container) container.scrollTop = scrollTarget;
+        } catch (e) {}
+      }, 250);
+    }
+
+    // Snapshot consommé : toutes les actions différées ont été exécutées.
+    if (!tabManager.openTabs.some(t => t._restoreRerunSearch || t._restoreScroll != null)) {
+      window._pendingTabsSnapshot = null;
+    }
+  }
+
+  async function restorePersistedTabs() {
+    const snap = takePersistedTabsSnapshot();
+    if (!snap) return false;
+    const restored = [];
+    for (const st of snap.tabs) {
+      if (!st || !Number.isFinite(Number(st.docId))) continue;
+      restored.push({
+        id: st.id || `tab_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        docId: Number(st.docId),
+        title: st.title || `Document #${st.docId}`,
+        page: st.page || 1,
+        rect: null,
+        yRatio: 0,
+        occId: null,
+        searchQuery: st.searchQuery || "",
+        searchActive: Boolean(st.searchActive),
+        occurrences: [],
+        activeOccurrenceIndex: st.activeOccurrenceIndex || 0,
+        scrollTop: null,
+        restoredScrollTop: st.scrollTop ?? null
+      });
+    }
+    if (restored.length === 0) return false;
+
+    const activeSnap = snap.tabs.find(t => t.id === snap.activeTabId) || restored[0];
+    const activeRestored = restored.find(t => t.id === activeSnap.id) || restored[0];
+
+    // Actions différées par onglet : relance de recherche + re-calage scroll,
+    // exécutées quand le document de l'onglet est effectivement affiché.
+    for (const t of restored) {
+      if (t.searchQuery) t._restoreRerunSearch = true;
+      if (t.restoredScrollTop != null) t._restoreScroll = t.restoredScrollTop;
+    }
+    window._pendingTabsSnapshot = { activeTabId: activeRestored.id, tabs: restored };
+
+    tabManager.openTabs = restored;
+    tabManager.activeTabId = activeRestored.id;
+    tabManager.renderTabsUI();
+
+    document.body.classList.add("doc-open");
+    document.documentElement.classList.add("doc-open");
+    const appEl0 = document.getElementById("app");
+    if (appEl0) appEl0.classList.add("doc-open");
+
+    await _executeLoadDocumentInViewer(
+      activeRestored.docId,
+      activeRestored.title,
+      activeRestored.page,
+      [],
+      null,
+      0,
+      null,
+      activeRestored.restoredScrollTop
+    );
+    return true;
+  }
+
+  if (persistTabsCheckbox) {
+    persistTabsCheckbox.checked = isPersistTabsEnabled();
+    persistTabsCheckbox.addEventListener("change", () => {
+      setPersistTabsEnabled(persistTabsCheckbox.checked);
+      if (persistTabsCheckbox.checked) persistOpenTabs();
+    });
+  }
+
   if (mainSidebarToggleBtn) {
     mainSidebarToggleBtn.addEventListener("click", () => toggleMainSidebar());
   }
@@ -1412,6 +1589,7 @@ document.addEventListener("DOMContentLoaded", () => {
       console.log('[Auth] Mode hors-ligne actif avec session locale valide');
       hideLoginModal();
       loadFoldersAndDocuments();
+      restorePersistedTabs().catch(() => {});
       return;
     }
 
@@ -1423,17 +1601,20 @@ document.addEventListener("DOMContentLoaded", () => {
           localStorage.setItem('docseeker_session_valid_until', String(Date.now() + 30 * 24 * 3600 * 1000));
           hideLoginModal();
           loadFoldersAndDocuments();
+          restorePersistedTabs().catch(() => {});
           return;
         }
       } else if (res.status === 503 && isLocallyValid) {
         console.log('[Auth] Réseau indisponible (503 Service Worker) : session locale valide acceptée');
         hideLoginModal();
         loadFoldersAndDocuments();
+        restorePersistedTabs().catch(() => {});
         return;
       }
       if ((!navigator.onLine || res.status === 503) && isLocallyValid) {
         hideLoginModal();
         loadFoldersAndDocuments();
+        restorePersistedTabs().catch(() => {});
         return;
       }
       showLoginModal();
@@ -1441,6 +1622,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (isLocallyValid) {
         hideLoginModal();
         loadFoldersAndDocuments();
+        restorePersistedTabs().catch(() => {});
         return;
       }
       showLoginModal();
@@ -4851,6 +5033,21 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   };
 
+  // Sauvegarde continue du snapshot d'onglets (après définition de tabManager) :
+  // chaque changement structurel + périodicité (la position de lecture avance
+  // pendant la lecture sans événement structurant).
+  const _origRenderTabsUI = tabManager.renderTabsUI.bind(tabManager);
+  tabManager.renderTabsUI = function () {
+    _origRenderTabsUI();
+    persistOpenTabs();
+  };
+  const _origSaveCurrentTabState = tabManager.saveCurrentTabState.bind(tabManager);
+  tabManager.saveCurrentTabState = function () {
+    _origSaveCurrentTabState();
+    persistOpenTabs();
+  };
+  setInterval(persistOpenTabs, 5000);
+
   function showTabDocInfoPopover(tab, anchorEl) {
     if (!tabDocInfoPopover) return;
     const rect = anchorEl.getBoundingClientRect();
@@ -5315,6 +5512,11 @@ document.addEventListener("DOMContentLoaded", () => {
             if (window.downloadQueueManager?.updateDocTotalPages) {
               window.downloadQueueManager.updateDocTotalPages(targetId, numPages);
             }
+          }
+          // Restauration de session (opt-in) : l'iframe vient d'annoncer son
+          // document, elle est prête pour la relance de recherche + scroll.
+          if (targetId && typeof restorePersistedTabsIfReady === "function") {
+            restorePersistedTabsIfReady(targetId);
           }
         } else if (evt.data.type === "docseeker_chunk_saved") {
           const { chunkSize, totalBytes } = evt.data;
