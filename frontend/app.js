@@ -2963,13 +2963,6 @@ document.addEventListener("DOMContentLoaded", () => {
       const isFolderComplete = totalDocsInFolder > 0 && cachedDocsInFolder >= totalDocsInFolder;
       const isFolderPartial = cachedDocsInFolder > 0 && (!totalDocsInFolder || cachedDocsInFolder < totalDocsInFolder);
 
-      let folderCacheBadgeHtml = "";
-      if (isFolderComplete) {
-        folderCacheBadgeHtml = `<span class="folder-cache-badge complete" title="Tous les documents (${totalDocsInFolder}) sont disponibles hors-ligne" style="display: inline-flex; min-width: 18px; justify-content: center;">✓</span>`;
-      } else if (isFolderPartial) {
-        folderCacheBadgeHtml = `<span class="folder-cache-badge partial" title="${cachedDocsInFolder}/${totalDocsInFolder} document(s) disponible(s) hors-ligne" style="display: inline-flex;">✓ ${cachedDocsInFolder}/${totalDocsInFolder}</span>`;
-      }
-
       let folderSyncHtml = "";
       if (isFolderComplete) {
         folderSyncHtml = `
@@ -3001,7 +2994,6 @@ document.addEventListener("DOMContentLoaded", () => {
           <div class="goodnotes-row-title" title="${escapeHtml(folder.name)}">${escapeHtml(folder.name)}</div>
           <div class="goodnotes-row-meta folder-meta">
             <span>${totalDocsInFolder > 0 ? `${totalDocsInFolder} document${totalDocsInFolder > 1 ? 's' : ''}` : '0 document'}</span>
-            ${folderCacheBadgeHtml}
           </div>
         </div>
         <div class="goodnotes-row-actions">
@@ -6275,35 +6267,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const cachedCount = window.downloadQueueManager.getCachedDocsCountForFolder(folderId);
     const isComplete = totalDocs > 0 && cachedCount >= totalDocs;
     const isPartial = cachedCount > 0 && (!totalDocs || cachedCount < totalDocs);
-
-    let badge = folderEl.querySelector(".folder-cache-badge");
-    if (isComplete) {
-      if (!badge) {
-        badge = document.createElement("span");
-        const metaEl = folderEl.querySelector(".folder-meta, .goodnotes-row-meta");
-        if (metaEl) metaEl.appendChild(badge);
-        else folderEl.appendChild(badge);
-      }
-      badge.className = "folder-cache-badge complete";
-      badge.style.display = "inline-flex";
-      badge.style.minWidth = "18px";
-      badge.style.justifyContent = "center";
-      badge.title = `Tous les documents (${totalDocs}) sont disponibles hors-ligne`;
-      badge.textContent = "✓";
-    } else if (isPartial) {
-      if (!badge) {
-        badge = document.createElement("span");
-        const metaEl = folderEl.querySelector(".folder-meta, .goodnotes-row-meta");
-        if (metaEl) metaEl.appendChild(badge);
-        else folderEl.appendChild(badge);
-      }
-      badge.className = "folder-cache-badge partial";
-      badge.style.display = "inline-flex";
-      badge.title = `${cachedCount}${totalDocs ? '/' + totalDocs : ''} document(s) disponible(s) hors-ligne`;
-      badge.textContent = `✓ ${cachedCount}${totalDocs ? '/' + totalDocs : ''}`;
-    } else if (badge) {
-      badge.style.display = "none";
-    }
 
     const actionBtn = folderEl.querySelector(".folder-btn-action.btn-download-folder, .folder-btn-action.btn-delete-folder-cache, .sync-action-btn");
     if (actionBtn) {

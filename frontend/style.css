@@ -2132,36 +2132,6 @@ body.light-theme {
   color: var(--danger);
   background-color: rgba(239, 68, 68, 0.1);
 }
-
-/* Badges de statut cache pour dossiers */
-.folder-cache-badge {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 1px 5px;
-  min-width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.folder-cache-badge.complete {
-  background: rgba(16, 185, 129, 0.12);
-  border: 1px solid rgba(16, 185, 129, 0.35);
-  color: #059669;
-}
-
-.folder-cache-badge.partial {
-  background: rgba(245, 158, 11, 0.12);
-  border: 1px solid rgba(245, 158, 11, 0.35);
-  color: #d97706;
-}
-
 /* Chevron d'accès */
 .folder-chevron {
   color: var(--text-dim);

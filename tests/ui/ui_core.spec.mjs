@@ -148,9 +148,8 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
     const martingaleFolder = page.locator('.folder-card[data-folder-id="130"]');
     await expect(martingaleFolder).toBeVisible({ timeout: 6000 });
 
-    const badge = martingaleFolder.locator('.folder-cache-badge');
-    await expect(badge).toBeVisible();
-    await expect(badge).toHaveText(/✓ 1/);
+    // Le badge de cache de dossier a été supprimé (redondant) : la carte ne doit plus l'afficher
+    await expect(martingaleFolder.locator('.folder-cache-badge')).toHaveCount(0);
 
     await martingaleFolder.click();
     const doc1Card = page.locator('.doc-card[data-doc-id="1"]');
@@ -258,14 +257,8 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
     await h.navigateToBreadcrumbRoot();
     await expect(folderMartingale).toBeVisible();
 
-    // Badge ✓ complet non tronqué
-    const badge = folderMartingale.locator('.folder-cache-badge');
-    await expect(badge).toBeVisible({ timeout: 6000 });
-    await expect(badge).toHaveClass(/complete/);
-    await expect(badge).toHaveText('✓');
-    const badgeBox = await badge.boundingBox();
-    expect(badgeBox).not.toBeNull();
-    expect(badgeBox.width).toBeGreaterThan(15);
+    // Badge de dossier supprimé : la carte ne doit plus l'afficher
+    await expect(folderMartingale.locator('.folder-cache-badge')).toHaveCount(0);
 
     // Bouton d'action dossier → supprimer du cache
     await expect(folderMartingale.locator('.folder-btn-action.btn-delete-folder-cache')).toBeVisible();
