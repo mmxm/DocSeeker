@@ -36,20 +36,57 @@ fn main() {
     }
 
     let hash = hash_sources(&watched);
-    if let Ok(previous) = fs::read_to_string(&stamp_path) {
-        if previous.trim() == hash && out_dir.join("search_wasm_bg.wasm").exists() {
-            // Sources inchangées : le wasm embarqué est à jour.
-            return;
-        }
+    let stamp_matches = fs::read_to_string(&stamp_path)
+        .map(|s| s.trim() == hash)
+        .unwrap_or(false);
+    if stamp_matches && out_dir.join("search_wasm_bg.wasm").exists() {
+        // Sources inchangées : le wasm embarqué est à jour.
+        return;
     }
 
-    rebuild_wasm(&wasm_crate, &out_dir);
-    fs::create_dir_all(&out_dir).expect("création du répertoire wasm");
-    fs::write(&stamp_path, hash).expect("écriture du stamp wasm");
-    println!("cargo:warning=wasm de recherche locale reconstruit (sources modifiées)");
+    if !wasm_crate.exists() {
+        // Contexte partiel (ex. pré-compilation des dépendances Docker sans les
+        // sources du wasm) : rien à vérifier ni reconstruire ici, le build
+        // applicatif s'en charge.
+        println!("cargo:warning=build.rs : sources search-wasm absentes du contexte, vérification du wasm ignorée");
+        return;
+    }
+
+    if wasm_pack_available() {
+        rebuild_wasm(&wasm_crate, &out_dir);
+        fs::create_dir_all(&out_dir).expect("création du répertoire wasm");
+        fs::write(&stamp_path, hash).expect("écriture du stamp wasm");
+        println!("cargo:warning=wasm de recherche locale reconstruit (sources modifiées)");
+    } else {
+        // Environnements sans wasm-pack (CI, Docker, checkout frais) : le wasm
+        // généré est COMMITÉ dans frontend/wasm/search_wasm précisément pour
+        // que ces builds fonctionnent sans outil. On dégrade avec un
+        // avertissement plutôt que de casser le build. Le stamp n'est PAS
+        // écrit : sans reconstruction, on ne marque rien comme à jour.
+        if out_dir.join("search_wasm_bg.wasm").exists() {
+            println!(
+                "cargo:warning=wasm-pack absent : utilisation du wasm commité (installez wasm-pack pour vérifier la synchro des sources)"
+            );
+        } else {
+            println!(
+                "cargo:warning=wasm-pack absent et aucun wasm dans {} : installez wasm-pack (cargo install wasm-pack)",
+                out_dir.display()
+            );
+        }
+    }
+}
+
+/// wasm-pack est-il utilisable dans cet environnement ?
+fn wasm_pack_available() -> bool {
+    Command::new("wasm-pack")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// Exécute wasm-pack sur la crate search-wasm, sortie directe dans frontend/.
+/// Précondition : wasm_pack_available() == true.
 fn rebuild_wasm(wasm_crate: &Path, out_dir: &Path) {
     let status = Command::new("wasm-pack")
         .current_dir(wasm_crate)

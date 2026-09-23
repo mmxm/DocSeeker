@@ -21,8 +21,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libc6-dev-amd64-cross \
     && rm -rf /var/lib/apt/lists/*
 
-# Ajout des cibles de compilation croisée Rust
-RUN rustup target add aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu
+# Ajout des cibles de compilation croisée Rust (wasm32 : build.rs reconstruit
+# le module de recherche locale via wasm-pack lors du cargo build)
+RUN rustup target add aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu wasm32-unknown-unknown
+
+# wasm-pack (outil hôte) : le build.rs vérifie la synchro du wasm de recherche
+# locale commité et le reconstruit si les sources ont changé.
+RUN ARCH=$(uname -m) && \
+    case "$ARCH" in \
+        x86_64) WP_ARCH=x86_64-unknown-linux-musl ;; \
+        aarch64|arm64) WP_ARCH=aarch64-unknown-linux-musl ;; \
+        *) echo "Arch hôte non supportée pour wasm-pack: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -sL "https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-${WP_ARCH}.tar.gz" \
+        | tar -xz -C /usr/local/bin --strip-components=1 "wasm-pack-v0.13.1-${WP_ARCH}/wasm-pack" && \
+    wasm-pack --version
 
 # Configuration des linkers et compilateurs C croisés pour Cargo et cc-rs
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \

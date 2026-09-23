@@ -22,6 +22,12 @@ jobs:
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install wasm-pack (vérifie la synchro du wasm de recherche locale commité)
+        run: |
+          curl -sL https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz \
+            | tar -xz -C /usr/local/bin --strip-components=1 wasm-pack-v0.13.1-x86_64-unknown-linux-musl/wasm-pack
+          wasm-pack --version
+
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
         with:
