@@ -4225,6 +4225,68 @@ body.home-tab-active .reader-top-tab-bar,
   display: flex !important;
 }
 
+/* Barre d'onglets masquée en lecture : elle glisse au-dessus de l'écran et
+   le contenu récupère la hauteur. Le petit bouton de rappel reste accessible. */
+body.tabbar-hidden .reader-top-tab-bar {
+  transform: translateY(-100%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.reader-top-tab-bar {
+  transition: transform 0.25s ease, opacity 0.2s ease;
+}
+
+body.tabbar-hidden .main-workspace {
+  height: 100vh !important;
+  height: 100dvh !important;
+  max-height: 100vh !important;
+  max-height: 100dvh !important;
+}
+
+#toggleTabBarBtn.reader-tabbar-toggle {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin: 0 6px 0 auto;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+#toggleTabBarBtn.reader-tabbar-toggle:hover {
+  background: var(--bg-subtle);
+  color: var(--text-main);
+}
+
+#readerTabBarRestoreBtn {
+  position: fixed;
+  top: 4px;
+  right: 10px;
+  z-index: 60;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 20px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+#readerTabBarRestoreBtn:hover {
+  color: var(--text-main);
+  background: var(--bg-subtle);
+}
+
 body.home-tab-active .app-header,
 .app-layout.home-tab-active .app-header {
   display: flex !important;

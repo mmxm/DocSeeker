@@ -377,6 +377,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Reader Goodnotes
   const readerTopTabBar = document.getElementById("readerTopTabBar");
+  const toggleTabBarBtn = document.getElementById("toggleTabBarBtn");
+  const readerTabBarRestoreBtn = document.getElementById("readerTabBarRestoreBtn");
   const readerHomeBtn = document.getElementById("readerHomeBtn");
   const readerTabsStrip = document.getElementById("readerTabsStrip");
   const readerSidebarToggleBtn = document.getElementById("readerSidebarToggleBtn");
@@ -1112,6 +1114,32 @@ document.addEventListener("DOMContentLoaded", () => {
     const willShow = (show !== undefined) ? show : !mainSidebarDrawer.classList.contains("open");
     mainSidebarDrawer.classList.toggle("open", willShow);
     mainSidebarOverlay.style.display = willShow ? "block" : "none";
+  }
+
+  // Masquage de la barre d'onglets (lecture dégagée). État par session :
+  // la barre revient au rechargement, comportement prévisible.
+  let tabBarHidden = false;
+  function updateTabBarHiddenUI() {
+    const barVisible = readerTopTabBar && readerTopTabBar.style.display !== "none";
+    document.body.classList.toggle("tabbar-hidden", tabBarHidden && barVisible);
+    if (readerTabBarRestoreBtn) {
+      readerTabBarRestoreBtn.style.display = (tabBarHidden && barVisible) ? "flex" : "none";
+    }
+    if (toggleTabBarBtn) {
+      toggleTabBarBtn.title = tabBarHidden ? "Afficher la barre d'onglets" : "Masquer la barre d'onglets (lecture plein écran)";
+    }
+  }
+  if (toggleTabBarBtn) {
+    toggleTabBarBtn.addEventListener("click", () => {
+      tabBarHidden = !tabBarHidden;
+      updateTabBarHiddenUI();
+    });
+  }
+  if (readerTabBarRestoreBtn) {
+    readerTabBarRestoreBtn.addEventListener("click", () => {
+      tabBarHidden = false;
+      updateTabBarHiddenUI();
+    });
   }
 
   if (mainSidebarToggleBtn) {
@@ -4742,6 +4770,7 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
       readerTopTabBar.style.display = "flex";
+      updateTabBarHiddenUI();
 
       if (readerHomeBtn) {
         readerHomeBtn.classList.toggle("active", this.activeTabId === 'home');

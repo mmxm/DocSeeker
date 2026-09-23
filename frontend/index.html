@@ -113,7 +113,21 @@
           <!-- Onglets dynamiques générés par app.js -->
         </div>
       </div>
+
+      <!-- Masquer la barre d'onglets pour gagner de la place en lecture -->
+      <button id="toggleTabBarBtn" class="reader-tabbar-toggle" title="Masquer la barre d'onglets (lecture plein écran)" aria-label="Masquer la barre d'onglets">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="18 15 12 9 6 15"></polyline>
+        </svg>
+      </button>
     </div>
+
+    <!-- Bouton de réaffichage de la barre d'onglets (visible seulement quand elle est masquée) -->
+    <button id="readerTabBarRestoreBtn" title="Afficher la barre d'onglets" aria-label="Afficher la barre d'onglets">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="6 9 12 15 18 9"></polyline>
+      </svg>
+    </button>
 
     <!-- Barre de navigation supérieure Mode Épuré Goodnotes -->
     <header class="app-header" id="appHeader">
