@@ -10,6 +10,10 @@ htmlcov/
 # Données locales & Cache
 data/
 !data/.gitkeep
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
 
 # Stamp de build wasm (backend-rust/build.rs)
 frontend/wasm/search_wasm/.build-stamp

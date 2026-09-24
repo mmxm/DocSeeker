@@ -524,4 +524,60 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
     await expect(badge).toHaveClass(/downloading|complete/, { timeout: 10000 });
     console.log('✅ [O15] Zéro téléchargement intempestif aux ouvertures successives.');
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // O16 : Ouverture & Fermeture Rapide Avant Fin de Téléchargement : Zéro 401, Zéro Exception Non Gérée
+  // ─────────────────────────────────────────────────────────────────────────
+
+  test('O16 - Ouverture & Fermeture Rapide : Zéro 401 et Zéro Exception Non Gérée', async ({ page, context }) => {
+    const h = new DocSeekerTestHarness(page, context);
+    await h.authenticate();
+    await h.goto('/');
+
+    const unhandledErrors = [];
+    const authFailures = [];
+
+    page.on('pageerror', err => {
+      unhandledErrors.push(err.message);
+    });
+
+    page.on('response', res => {
+      if (res.status() === 401 && res.url().includes('/api/pdf/')) {
+        authFailures.push(res.url());
+      }
+    });
+
+    await h.ensureDocNotCached(1);
+    await h.openFolder(130);
+
+    // 1. Ouvrir le document 1
+    const card = await h.getDocCard(1);
+    await card.locator('.doc-title-main').click();
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+
+    // 2. Fermeture rapide (immédiate) avant fin du streaming
+    await page.waitForTimeout(100);
+    await page.locator('#readerHomeBtn').click();
+    await expect(page.locator('body')).toHaveClass(/home-tab-active/);
+    await expect(page.locator('#viewerPane')).not.toBeVisible();
+
+    // 3. Attente passive pour vérifier qu'aucun callback asynchrone zombie ne plante
+    await page.waitForTimeout(2000);
+
+    // 4. Vérification zéro erreur 401 et zéro uncaught exception
+    expect(authFailures).toEqual([]);
+    expect(unhandledErrors.filter(msg => !msg.includes('ResizeObserver'))).toEqual([]);
+
+    // 5. Réouverture sereine du document
+    const reopenedCard = await h.getDocCard(1);
+    await reopenedCard.locator('.doc-title-main').click();
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('#viewerCacheBadge')).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(1000);
+
+    expect(authFailures).toEqual([]);
+    expect(unhandledErrors.filter(msg => !msg.includes('ResizeObserver'))).toEqual([]);
+    console.log('✅ [O16] Zéro erreur 401 et zéro exception non gérée lors d une fermeture rapide validés.');
+  });
 });
+

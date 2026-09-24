@@ -261,7 +261,12 @@ class DownloadQueueManager {
     if (!id || this.cachedDocIds.has(id) || this._indexingDocIds.has(id)) return;
     this._indexingDocIds.add(id);
     try {
-      const bundleRes = await fetch(`/api/documents/${id}/offline-bundle`, { credentials: 'include' });
+      let url = `/api/documents/${id}/offline-bundle`;
+      const token = (typeof window !== 'undefined' && (window._sessionToken || localStorage.getItem('docseeker_session_token')));
+      if (token) {
+        url += `?token=${encodeURIComponent(token)}`;
+      }
+      const bundleRes = await fetch(url, { credentials: 'include' });
       if (bundleRes.ok) {
         const bundle = await bundleRes.json();
         await this.sendToWorker('INSERT_BUNDLE', { bundle }, 120000);

@@ -5,6 +5,17 @@ document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
   // Helper Réseau Sécurisé (Immunité WHATWG contre URL credentials)
   // =========================================================================
+  let currentSessionToken = localStorage.getItem('docseeker_session_token') || null;
+
+  function buildPdfUrl(docId) {
+    const token = currentSessionToken || localStorage.getItem('docseeker_session_token');
+    if (token) {
+      return `/api/pdf/${docId}?token=${encodeURIComponent(token)}`;
+    }
+    return `/api/pdf/${docId}`;
+  }
+  window.buildPdfUrl = buildPdfUrl;
+
   function cleanOrigin() {
     return window.location.protocol + "//" + window.location.host;
   }
@@ -14,7 +25,17 @@ document.addEventListener("DOMContentLoaded", () => {
     if (typeof input === "string" && input.startsWith("/")) {
       cleanInput = cleanOrigin() + input;
     }
-    const res = await fetch(cleanInput, init);
+    const reqInit = init ? { ...init } : {};
+    const token = currentSessionToken || localStorage.getItem('docseeker_session_token');
+    if (token) {
+      reqInit.headers = reqInit.headers || {};
+      if (reqInit.headers instanceof Headers) {
+        if (!reqInit.headers.has('Authorization')) reqInit.headers.set('Authorization', `Bearer ${token}`);
+      } else if (!reqInit.headers['Authorization']) {
+        reqInit.headers['Authorization'] = `Bearer ${token}`;
+      }
+    }
+    const res = await fetch(cleanInput, reqInit);
     if (res.status === 401 && !cleanInput.includes("/api/auth/")) {
       showLoginModal("Session expirée. Veuillez vous reconnecter.");
     }
@@ -1776,6 +1797,10 @@ document.addEventListener("DOMContentLoaded", () => {
       if (res.ok) {
         const data = await res.json();
         if (data.authenticated) {
+          if (data.token) {
+            currentSessionToken = data.token;
+            localStorage.setItem('docseeker_session_token', data.token);
+          }
           localStorage.setItem('docseeker_session_valid_until', String(Date.now() + 30 * 24 * 3600 * 1000));
           hideLoginModal();
           loadFoldersAndDocuments();
@@ -1828,6 +1853,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
+          if (data.token) {
+            currentSessionToken = data.token;
+            localStorage.setItem('docseeker_session_token', data.token);
+          }
           localStorage.setItem('docseeker_session_valid_until', String(Date.now() + 30 * 24 * 3600 * 1000));
           hideLoginModal();
           showToast("Connexion réussie", "success");
@@ -1859,6 +1888,8 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         await fetch(cleanOrigin() + "/api/auth/logout", { method: "POST" });
       } catch (_) {}
+      currentSessionToken = null;
+      localStorage.removeItem('docseeker_session_token');
       showToast("Vous avez été déconnecté", "info");
       showLoginModal();
     });
@@ -5121,6 +5152,14 @@ document.addEventListener("DOMContentLoaded", () => {
     },
 
     returnToHome() {
+      currentViewerLoadSeq++;
+      try {
+        const win = pdfFrame?.contentWindow;
+        if (win && win.PDFViewerApplication && typeof win.PDFViewerApplication.close === 'function') {
+          win.PDFViewerApplication.close();
+        }
+      } catch (e) {}
+
       this.saveCurrentTabState();
       // Geler l'état de l'onglet courant AVANT de détacher activeTabId,
       // sinon saveCurrentTabState ne trouve plus l'onglet.
@@ -5340,7 +5379,7 @@ document.addEventListener("DOMContentLoaded", () => {
     readerShareBtn.addEventListener("click", () => {
       if (!currentActiveDocId) return;
       const a = document.createElement("a");
-      a.href = `/api/pdf/${currentActiveDocId}`;
+      a.href = buildPdfUrl(currentActiveDocId);
       a.download = `${currentActiveDocTitle || "document"}.pdf`;
       document.body.appendChild(a);
       a.click();
@@ -5382,7 +5421,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (knownSize > 0) {
         window.pdfCacheManager.setDocumentTotalBytes(numericDocId, knownSize);
       } else {
-        fetch(`/api/pdf/${numericDocId}`, { method: 'HEAD', credentials: 'include' }).then(res => {
+        fetch(buildPdfUrl(numericDocId), { method: 'HEAD', credentials: 'include' }).then(res => {
           const cl = res.headers.get("Content-Length");
           if (cl && Number(cl) > 0 && window.pdfCacheManager) {
             window.pdfCacheManager.setDocumentTotalBytes(numericDocId, Number(cl));
@@ -5391,9 +5430,13 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    // Indexation locale immédiate dans SQLite-Wasm si connecté et non encore indexé
+    // Indexation locale dans SQLite-Wasm différée (1500ms) pour ne pas saturer SQLite et la bande passante lors du premier rendu
     if (window.downloadQueueManager) {
-      window.downloadQueueManager.ensureDocumentIndexedLocally(numericDocId);
+      setTimeout(() => {
+        if (Number(currentActiveDocId) === numericDocId && window.downloadQueueManager) {
+          window.downloadQueueManager.ensureDocumentIndexedLocally(numericDocId);
+        }
+      }, 1500);
     }
 
     // Support de l'historique de navigation pour le bouton retour mobile
@@ -5787,7 +5830,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     } else {
       (async () => {
-        let pdfTargetUrl = `/api/pdf/${numericDocId}`;
+        let pdfTargetUrl = buildPdfUrl(numericDocId);
 
         if (window.pdfCacheManager) {
           const complete = await window.pdfCacheManager.isComplete(numericDocId);
@@ -5933,7 +5976,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 try { URL.revokeObjectURL(window._currentPdfBlobUrl); } catch (e) {}
                 window._currentPdfBlobUrl = null;
               }
-              pdfTargetUrl = `/api/pdf/${numericDocId}`;
+              pdfTargetUrl = buildPdfUrl(numericDocId);
               viewerUrl = `/pdfjs/web/viewer.html?v=5.9&verbosity=0&file=${encodeURIComponent(pdfTargetUrl)}#pagemode=none&page=${targetPage}`;
               if (effectiveSearchQuery) {
                 viewerUrl += `&search=${encodeURIComponent(effectiveSearchQuery)}`;

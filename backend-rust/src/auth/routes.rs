@@ -20,6 +20,8 @@ pub const COOKIE_NAME_FALLBACK: &str = "docseeker_session";
 pub struct AuthStatusResponse {
     pub authenticated: bool,
     pub initialized: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -131,6 +133,7 @@ pub async fn status_handler(
             return Json(AuthStatusResponse {
                 authenticated: false,
                 initialized: false,
+                token: None,
             })
         }
     };
@@ -145,15 +148,20 @@ pub async fn status_handler(
         .map(|count| count > 0)
         .unwrap_or(false);
 
-    let authenticated = if let Some(token) = extract_session_token(&headers) {
-        SessionManager::validate_session(&conn, &token).unwrap_or(false)
+    let (authenticated, token_opt) = if let Some(token) = extract_session_token(&headers) {
+        if SessionManager::validate_session(&conn, &token).unwrap_or(false) {
+            (true, Some(token))
+        } else {
+            (false, None)
+        }
     } else {
-        false
+        (false, None)
     };
 
     Json(AuthStatusResponse {
         authenticated,
         initialized: has_credentials,
+        token: token_opt,
     })
 }
 

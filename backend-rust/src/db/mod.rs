@@ -18,6 +18,7 @@ impl r2d2::CustomizeConnection<Connection, rusqlite::Error> for SqlitePragmaCust
             "PRAGMA foreign_keys = ON;
              PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
+             PRAGMA busy_timeout = 5000;
              PRAGMA mmap_size = 268435456;
              PRAGMA temp_store = MEMORY;
              PRAGMA cache_size = -16000;"
@@ -48,6 +49,7 @@ pub fn open_connection(db_path: &Path) -> Result<Connection> {
     let _: String = conn.query_row("PRAGMA foreign_keys = ON;", [], |r| r.get(0)).unwrap_or_default();
     let _: String = conn.query_row("PRAGMA journal_mode = WAL;", [], |r| r.get(0)).unwrap_or_default();
     let _: String = conn.query_row("PRAGMA synchronous = NORMAL;", [], |r| r.get(0)).unwrap_or_default();
+    let _: i64 = conn.query_row("PRAGMA busy_timeout = 5000;", [], |r| r.get(0)).unwrap_or(0);
     let _: i64 = conn.query_row("PRAGMA mmap_size = 268435456;", [], |r| r.get(0)).unwrap_or(0);
     let _: i64 = conn.query_row("PRAGMA temp_store = MEMORY;", [], |r| r.get(0)).unwrap_or(0);
     let _: i64 = conn.query_row("PRAGMA cache_size = -16000;", [], |r| r.get(0)).unwrap_or(0);

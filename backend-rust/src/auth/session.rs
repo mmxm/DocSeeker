@@ -54,21 +54,22 @@ impl SessionManager {
         Ok(token)
     }
 
-    /// Valide une session existante et rafraîchit son horodatage `last_seen`.
+    /// Valide une session existante et rafraîchit son horodatage `last_seen` (throttlé et non-fatal).
     pub fn validate_session(conn: &Connection, token: &str) -> Result<bool> {
         let now_str = Utc::now().to_rfc3339();
 
         let mut stmt = conn.prepare(
-            "SELECT id, expires_at FROM sessions WHERE id = ?1 AND expires_at > ?2",
+            "SELECT id FROM sessions WHERE id = ?1 AND expires_at > ?2",
         )?;
 
-        let mut rows = stmt.query(params![token, now_str])?;
-        if rows.next()?.is_some() {
-            // Mettre à jour last_seen
-            conn.execute(
-                "UPDATE sessions SET last_seen = CURRENT_TIMESTAMP WHERE id = ?1",
+        let exists = stmt.query_row(params![token, now_str], |_| Ok(())).is_ok();
+        if exists {
+            // Mettre à jour last_seen de manière non-bloquante et throttlée (au max une fois toutes les 60s)
+            // Ne doit JAMAIS invalider la session si SQLite est sous forte charge de lecture/écriture
+            let _ = conn.execute(
+                "UPDATE sessions SET last_seen = CURRENT_TIMESTAMP WHERE id = ?1 AND (last_seen IS NULL OR (strftime('%s', 'now') - strftime('%s', last_seen)) > 60)",
                 params![token],
-            )?;
+            );
             Ok(true)
         } else {
             Ok(false)

@@ -35,9 +35,26 @@ pub async fn require_auth_middleware(
         }
     };
 
-    let is_valid = match state.db.get() {
-        Ok(conn) => SessionManager::validate_session(&conn, &token).unwrap_or(false),
-        Err(_) => false,
+    let conn = match state.db.get() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[Auth] Erreur acquisition connexion DB: {:?}", e);
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "Service temporairement indisponible, veuillez réessayer",
+                    "authenticated": false
+                })),
+            ).into_response();
+        }
+    };
+
+    let is_valid = match SessionManager::validate_session(&conn, &token) {
+        Ok(valid) => valid,
+        Err(e) => {
+            eprintln!("[Auth] Erreur validation session: {:?}", e);
+            false
+        }
     };
 
     if !is_valid {
