@@ -1,6 +1,12 @@
 /* tslint:disable */
 /* eslint-disable */
 
+/**
+ * Traite en lot plusieurs pages d'un document pour extraire les occurrences
+ * Évite N allers-retours JS↔WASM avec parsing/sérialisation JSON répété
+ */
+export function batch_find_and_process_doc_occurrences_wasm(pages_json: string, terms_json: string, query_hash: string, doc_id: bigint, page_height: number, offset?: number | null, limit?: number | null): string;
+
 export function build_doc_search_sql_wasm(doc_id: bigint, query: string): string;
 
 export function build_search_sql_wasm(query: string, folder_id: bigint | null | undefined, limit: number, offset: number): string;
@@ -51,6 +57,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly batch_find_and_process_doc_occurrences_wasm: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: number, i: number, j: number) => [number, number];
     readonly build_doc_search_sql_wasm: (a: bigint, b: number, c: number) => [number, number];
     readonly build_search_sql_wasm: (a: number, b: number, c: number, d: bigint, e: number, f: number) => [number, number];
     readonly build_title_search_sql_wasm: (a: number, b: number, c: number, d: bigint, e: number, f: number) => [number, number];

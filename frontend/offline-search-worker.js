@@ -26,6 +26,7 @@ import initSearchWasm, {
   build_title_search_sql_wasm,
   build_doc_search_sql_wasm,
   find_occurrences_wasm,
+  batch_find_and_process_doc_occurrences_wasm,
   process_search_results_wasm,
   process_doc_search_results_wasm,
   get_shared_constants_wasm,
@@ -515,25 +516,14 @@ function executeDocSearch(docId, queryStr) {
 
   const { sql, terms, query_hash: queryHash } = docSqlData;
   const termsJson = JSON.stringify(terms);
-  const allOccurrences = [];
+  const rows = [];
 
   try {
     db.exec({
       sql,
       callback: (row) => {
-        const [pageNumber, wordsJson, pageBm25] = row;
-        if (wordsJson) {
-          const occsRaw = find_occurrences_wasm(
-            wordsJson,
-            termsJson,
-            queryHash,
-            BigInt(docId),
-            BigInt(pageNumber),
-            pageBm25,
-            842.0
-          );
-          const pageOccs = JSON.parse(occsRaw);
-          allOccurrences.push(...pageOccs);
+        if (row && row[1]) {
+          rows.push([Number(row[0]), row[1], Number(row[2]) || 0.0]);
         }
       }
     });
@@ -541,9 +531,17 @@ function executeDocSearch(docId, queryStr) {
     console.error('[OfflineSearchWorker] Erreur doc_search:', err);
   }
 
-  // Tri unifié par search-core Wasm
-  const docResult = JSON.parse(process_doc_search_results_wasm(
-    JSON.stringify(allOccurrences),
+  if (rows.length === 0) {
+    return { doc_id: docId, query: queryStr, total_occurrences: 0, occurrences: [] };
+  }
+
+  // Traitement en un seul appel Wasm optimisé (élimine N sérialisations/désérialisations JSON)
+  const docResult = JSON.parse(batch_find_and_process_doc_occurrences_wasm(
+    JSON.stringify(rows),
+    termsJson,
+    queryHash,
+    BigInt(docId),
+    842.0,
     null,
     null
   ));
