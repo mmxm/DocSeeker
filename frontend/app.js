@@ -5615,7 +5615,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (thisLoadSeq !== currentViewerLoadSeq) return;
 
-        let viewerUrl = `/pdfjs/web/viewer.html?v=5.9&verbosity=0&file=${encodeURIComponent(pdfTargetUrl)}#page=${targetPage}`;
+        let viewerUrl = `/pdfjs/web/viewer.html?v=5.9&verbosity=0&file=${encodeURIComponent(pdfTargetUrl)}#pagemode=none&page=${targetPage}`;
         // CANAL 4 : le hash ne porte QUE la recherche de l'onglet cible.
         // Jamais la requête d'un autre document (le global).
         if (effectiveSearchQuery) {
@@ -5627,6 +5627,14 @@ document.addEventListener("DOMContentLoaded", () => {
         const win = pdfFrame.contentWindow;
         if (win) {
           win._suppressPdfJsFindScroll = true;
+          try {
+            if (win.PDFViewerApplicationOptions) {
+              win.PDFViewerApplicationOptions.set("sidebarViewOnLoad", 0);
+            }
+            if (win.PDFViewerApplication?.pdfSidebar?.isOpen) {
+              win.PDFViewerApplication.pdfSidebar.close();
+            }
+          } catch (e) {}
         }
         const isWarm = Boolean(
           win &&
@@ -5645,10 +5653,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
           try {
             const app = win.PDFViewerApplication;
+            try {
+              if (win.PDFViewerApplicationOptions) {
+                win.PDFViewerApplicationOptions.set("sidebarViewOnLoad", 0);
+              }
+              if (app.pdfSidebar?.isOpen) {
+                app.pdfSidebar.close();
+              }
+            } catch (e) {}
 
             const onDocReady = () => {
               if (thisLoadSeq !== currentViewerLoadSeq || Number(currentActiveDocId) !== numericDocId) return;
               try {
+                if (app.pdfSidebar?.isOpen) {
+                  app.pdfSidebar.close();
+                }
                 const maxPages = app.pagesCount || (app.pdfDocument ? app.pdfDocument.numPages : 0);
                 const safePage = (maxPages > 0 && targetPage > maxPages) ? maxPages : Math.max(1, targetPage || 1);
                 if (app.page !== safePage) {
@@ -5657,6 +5676,11 @@ document.addEventListener("DOMContentLoaded", () => {
               } catch (e) {}
               setTimeout(() => {
                 if (thisLoadSeq !== currentViewerLoadSeq || Number(currentActiveDocId) !== numericDocId) return;
+                try {
+                  if (app.pdfSidebar?.isOpen) {
+                    app.pdfSidebar.close();
+                  }
+                } catch (e) {}
                 goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio, targetScrollTop);
                 hookIframePinchZoomIsolation();
                 hookIframeScrollAutoHide();
@@ -5675,6 +5699,9 @@ document.addEventListener("DOMContentLoaded", () => {
             setTimeout(() => {
               if (thisLoadSeq !== currentViewerLoadSeq || Number(currentActiveDocId) !== numericDocId) return;
               try {
+                if (app.pdfSidebar?.isOpen) {
+                  app.pdfSidebar.close();
+                }
                 const maxPages = app.pagesCount || (app.pdfDocument ? app.pdfDocument.numPages : 0);
                 const safePage = (maxPages > 0 && targetPage > maxPages) ? maxPages : Math.max(1, targetPage || 1);
                 if (app.page !== safePage) {
@@ -5700,7 +5727,15 @@ document.addEventListener("DOMContentLoaded", () => {
           pdfFrame.onload = () => {
             if (thisLoadSeq !== currentViewerLoadSeq || Number(currentActiveDocId) !== numericDocId) return;
             try {
-              if (pdfFrame.contentWindow) pdfFrame.contentWindow._suppressPdfJsFindScroll = true;
+              if (pdfFrame.contentWindow) {
+                pdfFrame.contentWindow._suppressPdfJsFindScroll = true;
+                if (pdfFrame.contentWindow.PDFViewerApplicationOptions) {
+                  pdfFrame.contentWindow.PDFViewerApplicationOptions.set("sidebarViewOnLoad", 0);
+                }
+                if (pdfFrame.contentWindow.PDFViewerApplication?.pdfSidebar?.isOpen) {
+                  pdfFrame.contentWindow.PDFViewerApplication.pdfSidebar.close();
+                }
+              }
             } catch (e) {}
             hookIframePinchZoomIsolation();
             hookIframeScrollAutoHide();

@@ -817,5 +817,70 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
 
     console.log('✅ [Core-18] Statut ouvert/fermé du volet latéral persisté avec succès indépendamment par onglet.');
   });
+
+  // =========================================================================
+  // Core-19 : Le panneau latéral de PDF.js (miniatures) ne s'ouvre pas lors du clic sur un onglet
+  // =========================================================================
+
+  test('Core-19 : Le volet latéral interne de PDF.js (miniatures) reste fermé lors des clics sur les onglets', async ({ page }) => {
+    // 1. Ouvrir le document 1 dans l'onglet A
+    await page.evaluate(() => {
+      window.tabManager.openTab(1, 'Document 1', 1);
+    });
+    await expect(page.locator('#workspace')).toHaveClass(/split-active/, { timeout: 10000 });
+    await h.assertPdfViewerRendered();
+
+    // Vérifier que la sidebar interne PDF.js est fermée
+    const isSidebarOpenA1 = await page.evaluate(() => {
+      const win = document.getElementById('pdfFrame')?.contentWindow;
+      return Boolean(win?.PDFViewerApplication?.pdfSidebar?.isOpen);
+    });
+    expect(isSidebarOpenA1).toBe(false);
+
+    // 2. Ouvrir le document 2 dans l'onglet B
+    await page.evaluate(() => {
+      window.tabManager.openTab(2, 'Document 2', 1);
+    });
+    await expect(page.locator('.reader-tab-item')).toHaveCount(2);
+    await page.waitForTimeout(1000);
+
+    const isSidebarOpenB = await page.evaluate(() => {
+      const win = document.getElementById('pdfFrame')?.contentWindow;
+      return Boolean(win?.PDFViewerApplication?.pdfSidebar?.isOpen);
+    });
+    expect(isSidebarOpenB).toBe(false);
+
+    // 3. Cliquer sur l'onglet A déjà ouvert
+    const tabA = page.locator('.reader-tab-item').first();
+    await tabA.click();
+    await page.waitForTimeout(1000);
+
+    const isSidebarOpenA2 = await page.evaluate(() => {
+      const win = document.getElementById('pdfFrame')?.contentWindow;
+      return Boolean(win?.PDFViewerApplication?.pdfSidebar?.isOpen);
+    });
+    expect(isSidebarOpenA2).toBe(false);
+
+    // Vérifier également dans le DOM de l'iframe que outerContainer n'a pas la classe sidebarOpen
+    const hasSidebarOpenClass = await page.evaluate(() => {
+      const win = document.getElementById('pdfFrame')?.contentWindow;
+      const outer = win?.document?.getElementById('outerContainer');
+      return Boolean(outer?.classList?.contains('sidebarOpen'));
+    });
+    expect(hasSidebarOpenClass).toBe(false);
+
+    // 4. Recliquer sur l'onglet B
+    const tabB = page.locator('.reader-tab-item').nth(1);
+    await tabB.click();
+    await page.waitForTimeout(1000);
+
+    const isSidebarOpenB2 = await page.evaluate(() => {
+      const win = document.getElementById('pdfFrame')?.contentWindow;
+      return Boolean(win?.PDFViewerApplication?.pdfSidebar?.isOpen);
+    });
+    expect(isSidebarOpenB2).toBe(false);
+
+    console.log('✅ [Core-19] Volet de miniatures interne PDF.js reste fermé sur tous les onglets.');
+  });
 });
 

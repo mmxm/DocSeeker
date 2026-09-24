@@ -737,7 +737,7 @@ const defaultOptions = {
     kind: OptionKind.VIEWER
   },
   sidebarViewOnLoad: {
-    value: -1,
+    value: 0,
     kind: OptionKind.VIEWER + OptionKind.PREFERENCE
   },
   scrollModeOnLoad: {
@@ -1495,7 +1495,7 @@ class BasePreferences {
     pageColorsBackground: "Canvas",
     pageColorsForeground: "CanvasText",
     pdfBugEnabled: false,
-    sidebarViewOnLoad: -1,
+    sidebarViewOnLoad: 0,
     scrollModeOnLoad: -1,
     spreadModeOnLoad: -1,
     textLayerMode: 1,
@@ -8257,6 +8257,7 @@ class PDFSidebar {
     this.isInitialViewSet = false;
     this.isInitialEventDispatched = false;
     this.#hideUINotification(true);
+    this.close();
     this.switchView(SidebarView.THUMBS);
     this.outlineButton.disabled = false;
     this.attachmentsButton.disabled = false;
