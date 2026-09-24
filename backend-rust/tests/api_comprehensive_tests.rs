@@ -10,7 +10,6 @@ use docseeker_backend::{
     auth::password::hash_password,
     auth::rate_limit::LoginRateLimiter,
     config::Config,
-    db::DbPool,
     pdf::engine::PdfEngine,
     pipeline::IndexingPipeline,
     routes::create_api_router,

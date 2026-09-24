@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use rusqlite::{params, Connection, Result};
 
 use crate::db::text_norm::normalize_text;
@@ -71,17 +70,47 @@ pub fn search_titles(
         });
     }
 
-    let allowed_folder_ids: Option<HashSet<i64>> = folder_id.map(|fid| {
-        get_folder_and_subfolder_ids(conn, fid).into_iter().collect()
+    let allowed_folder_ids: Option<Vec<i64>> = folder_id.map(|fid| {
+        get_folder_and_subfolder_ids(conn, fid)
     });
 
-    let mut stmt = conn.prepare(
-        "SELECT id, filename, title, folder_id, total_pages, created_at, COALESCE(updated_at, created_at) AS updated_at \
-         FROM documents WHERE COALESCE(status, 'ready') = 'ready'",
-    )?;
+    let where_clause = terms
+        .iter()
+        .map(|t| {
+            let esc = normalize_text(t).replace('\'', "''");
+            format!("(LOWER(filename) LIKE '%{esc}%' OR LOWER(title) LIKE '%{esc}%')")
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ");
 
+    let folder_filter = if let Some(ref ids) = allowed_folder_ids {
+        if ids.is_empty() {
+            "AND 0".to_string()
+        } else if ids.len() == 1 {
+            format!("AND folder_id = {}", ids[0])
+        } else {
+            let id_strs: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+            format!("AND folder_id IN ({})", id_strs.join(","))
+        }
+    } else {
+        String::new()
+    };
+
+    // Nombre total de documents correspondants via COUNT SQL indexé
+    let count_sql = format!(
+        "SELECT count(*) FROM documents WHERE ({where_clause}) AND COALESCE(status, 'ready') = 'ready' {folder_filter}"
+    );
+    let total_documents: usize = conn.query_row(&count_sql, [], |r| r.get(0)).unwrap_or(0);
+
+    let query_sql = format!(
+        "SELECT id, filename, title, folder_id, total_pages, created_at, COALESCE(updated_at, created_at) AS updated_at \
+         FROM documents \
+         WHERE ({where_clause}) AND COALESCE(status, 'ready') = 'ready' {folder_filter} \
+         ORDER BY title ASC LIMIT {page_size} OFFSET {current_offset}"
+    );
+
+    let mut stmt = conn.prepare(&query_sql)?;
     let norm_terms: Vec<String> = terms.iter().map(|t| normalize_text(t)).collect();
-    let mut results = Vec::new();
 
     let rows = stmt.query_map([], |row| {
         Ok((
@@ -95,52 +124,28 @@ pub fn search_titles(
         ))
     })?;
 
+    let mut results = Vec::new();
     for r in rows.flatten() {
         let (id, filename, title, doc_folder_id, total_pages, created_at, updated_at) = r;
-
-        if let Some(ref allowed) = allowed_folder_ids {
-            if let Some(fid) = doc_folder_id {
-                if !allowed.contains(&fid) {
-                    continue;
-                }
-            } else {
-                continue;
-            }
-        }
-
         let title_norm = normalize_text(&title);
-        let filename_norm = normalize_text(&filename);
-
-        let mut matched_count = 0;
-        for t in &norm_terms {
-            if term_matches_text(t, &title_norm) || term_matches_text(t, &filename_norm) {
-                matched_count += 1;
-            }
-        }
-
-        if matched_count == norm_terms.len() {
-            let bonus = if norm_terms.iter().any(|t| t == &title_norm) { 100.0 } else { 0.0 };
-            results.push(DocumentSearchResult {
-                id,
-                filename,
-                title,
-                folder_id: doc_folder_id,
-                total_pages,
-                created_at,
-                updated_at,
-                cover_url: format!("/api/cover/{}", id),
-                vignettes: Vec::new(),
-                occurrences_by_page: Vec::new(),
-                total_occurrences: 0,
-                relevance_score: 5000.0 + bonus,
-                matched_all_terms: true,
-            });
-        }
+        let bonus = if norm_terms.iter().any(|t| t == &title_norm) { 100.0 } else { 0.0 };
+        results.push(DocumentSearchResult {
+            id,
+            filename,
+            title,
+            folder_id: doc_folder_id,
+            total_pages,
+            created_at,
+            updated_at,
+            cover_url: format!("/api/cover/{}", id),
+            vignettes: Vec::new(),
+            occurrences_by_page: Vec::new(),
+            total_occurrences: 0,
+            relevance_score: 5000.0 + bonus,
+            matched_all_terms: true,
+        });
     }
 
-    results.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap_or(std::cmp::Ordering::Equal));
-
-    let total_documents = results.len();
     let total_pages = if total_documents > 0 && page_size > 0 {
         total_documents.div_ceil(page_size)
     } else {
@@ -149,18 +154,12 @@ pub fn search_titles(
     let has_more = current_offset + page_size < total_documents;
     let page = if page_size > 0 { (current_offset / page_size) + 1 } else { 1 };
 
-    let paged_results = if current_offset < total_documents {
-        results.into_iter().skip(current_offset).take(page_size).collect()
-    } else {
-        Vec::new()
-    };
-
     Ok(SearchResponse {
         query: query.to_string(),
         query_hash: get_query_hash(&terms),
         total_documents,
         total_occurrences: 0,
-        results: paged_results,
+        results,
         page,
         limit: page_size,
         total_pages,
