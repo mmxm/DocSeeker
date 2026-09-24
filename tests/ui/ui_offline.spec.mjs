@@ -413,6 +413,7 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
     await page.locator('#readerHomeBtn').click();
     await expect(page.locator('body')).toHaveClass(/home-tab-active/);
     await expect(page.locator('#viewerPane')).not.toBeVisible();
+    await page.waitForTimeout(500);
 
     // 3. Dans l'arborescence, relancer la mise en cache directement depuis le bouton du document
     const homeCard = await h.getDocCard(1);
@@ -421,8 +422,10 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
 
     // Si pas déjà complété par le premier transfert, cliquer pour continuer
     const isAlreadyCached = await cacheBtn.evaluate(el => el.classList.contains('cached'));
+    console.log(`[TEST O13] isAlreadyCached: ${isAlreadyCached}`);
     if (!isAlreadyCached) {
       await cacheBtn.click();
+      console.log('[TEST O13] cacheBtn clicked');
     }
 
     // 4. Vérifier que la mise en cache se termine avec succès (100%)
@@ -579,5 +582,104 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
     expect(unhandledErrors.filter(msg => !msg.includes('ResizeObserver'))).toEqual([]);
     console.log('✅ [O16] Zéro erreur 401 et zéro exception non gérée lors d une fermeture rapide validés.');
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // O17 : Cycle Hybride : Consultation partielle → Arborescence → Reprise → Réouverture onglet
+  // ─────────────────────────────────────────────────────────────────────────
+
+  test('O17 - Cycle Hybride : Consultation partielle → Arborescence → Reprise → Réouverture onglet', async ({ page, context }) => {
+    const h = new DocSeekerTestHarness(page, context);
+    await h.authenticate();
+    await h.goto('/');
+
+    await h.ensureDocNotCached(2);
+    await h.openFolder(130);
+
+    // 1. Ouvrir le document 2 dans le viewer
+    const card = await h.getDocCard(2);
+    await card.locator('.doc-title-main').click();
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    const badge = page.locator('#viewerCacheBadge');
+    await expect(badge).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(500);
+
+    // 2. Retour à l'accueil
+    await page.locator('#readerHomeBtn').click();
+    await expect(page.locator('body')).toHaveClass(/home-tab-active/);
+    await expect(page.locator('#viewerPane')).not.toBeVisible();
+
+    // 3. Dans l'arborescence, lancer la mise en cache complète
+    const homeCard = await h.getDocCard(2);
+    const cacheBtn = homeCard.locator('.doc-cache-btn');
+    await cacheBtn.click();
+    await expect(cacheBtn).toHaveClass(/downloading|cached/, { timeout: 10000 });
+
+    // 4. Rebasculer immédiatement sur l'onglet ouvert du document 2
+    const tabItem = page.locator('.reader-tab-item').first();
+    await expect(tabItem).toBeVisible({ timeout: 10000 });
+    await tabItem.click();
+
+    // 5. Le viewer s'affiche, le badge reflète l'avancement et se termine à 100%
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    await expect(badge).toHaveClass(/complete/, { timeout: 45000 });
+
+    const isComplete = await page.evaluate(async () => {
+      return window.pdfCacheManager ? await window.pdfCacheManager.isComplete(2) : false;
+    });
+    expect(isComplete).toBe(true);
+    console.log('✅ [O17] Cycle hybride arborescence + réouverture onglet validé avec succès.');
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // O18 : Interruption non destructrice : Clic Stop → Préservation octets → Reprise 100%
+  // ─────────────────────────────────────────────────────────────────────────
+
+  test('O18 - Interruption Non Destructrice : Clic Stop → Préservation Octets → Reprise 100%', async ({ page, context }) => {
+    const h = new DocSeekerTestHarness(page, context);
+    await h.authenticate();
+    await h.goto('/');
+
+    // 1. Démarrer avec un cache partiel déterministe (30%)
+    await h.injectPartialCache(1, 30);
+    await h.openFolder(130);
+
+    const card = await h.getDocCard(1);
+    const cacheBtn = card.locator('.doc-cache-btn');
+    await expect(cacheBtn).toBeVisible({ timeout: 10000 });
+
+    // Vérifier les fragments initiaux
+    const statsInit = await page.evaluate(async () => {
+      return window.pdfCacheManager ? await window.pdfCacheManager.getCachedStats(1) : null;
+    });
+    expect(statsInit).not.toBeNull();
+    expect(statsInit.downloadedBytes).toBeGreaterThan(0);
+    const initialBytes = statsInit.downloadedBytes;
+
+    // 2. Simuler une mise en pause explicite
+    await page.evaluate(async () => {
+      if (window.downloadQueueManager) window.downloadQueueManager.pauseDownload(1);
+    });
+
+    // 3. Vérifier que la pause n'a absolument PAS détruit les fragments existants
+    const statsPaused = await page.evaluate(async () => {
+      return window.pdfCacheManager ? await window.pdfCacheManager.getCachedStats(1) : null;
+    });
+    expect(statsPaused.downloadedBytes).toBeGreaterThanOrEqual(initialBytes);
+    expect(statsPaused.status).toBe('paused');
+    console.log(`[O18] Statut après pause : ${statsPaused.status}, octets conservés : ${statsPaused.downloadedBytes}/${statsPaused.totalBytes}`);
+
+    // 4. Reprendre le téléchargement en cliquant sur le bouton de l'arborescence
+    await cacheBtn.click();
+
+    // 5. Vérifier que la mise en cache continue et se termine à 100%
+    await expect(cacheBtn).toHaveClass(/cached/, { timeout: 45000 });
+
+    const isComplete = await page.evaluate(async () => {
+      return window.pdfCacheManager ? await window.pdfCacheManager.isComplete(1) : false;
+    });
+    expect(isComplete).toBe(true);
+    console.log('✅ [O18] Interruption non destructrice et reprise complète validées.');
+  });
 });
+
 

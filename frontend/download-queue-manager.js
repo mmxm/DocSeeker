@@ -441,6 +441,7 @@ class DownloadQueueManager {
       return;
     }
 
+    this.isPaused = false;
     this.queue.push(id);
     this._notify();
     this._processNext();
@@ -494,11 +495,12 @@ class DownloadQueueManager {
   }
 
   /**
-   * Pause globale ou individuelle
+   * Pause globale ou individuelle (conserve 100% des données en cache)
    */
   pauseDownload(docId) {
     if (docId) {
-      const task = this.activeTasks.get(Number(docId));
+      const id = Number(docId);
+      const task = this.activeTasks.get(id);
       if (task) {
         task.status = 'paused';
         if (task.controller) {
@@ -507,12 +509,25 @@ class DownloadQueueManager {
         if (task.pdfTask) {
           try { task.pdfTask.destroy(); } catch (e) {}
         }
-        this.activeTasks.delete(Number(docId));
-        this.queue.unshift(Number(docId)); // Remettre en tête de file
-        this._notify();
+        this.activeTasks.delete(id);
       }
+      this.queue = this.queue.filter(qId => qId !== id);
+      if (window.pdfCacheManager) {
+        window.pdfCacheManager.pauseDownload(id);
+      }
+      this._notify();
     } else {
       this.isPaused = true;
+      for (const [id, task] of this.activeTasks) {
+        task.status = 'paused';
+        if (task.controller) {
+          try { task.controller.abort(); } catch (e) {}
+        }
+        if (window.pdfCacheManager) {
+          window.pdfCacheManager.pauseDownload(id);
+        }
+      }
+      this.activeTasks.clear();
       this._notify();
     }
   }
@@ -605,7 +620,11 @@ class DownloadQueueManager {
       }
 
       // 1. Télécharger le offline-bundle (Index textuel et spatial) et l'injecter dans SQLite-Wasm
-      const bundleRes = await fetch(`/api/documents/${docId}/offline-bundle`, { credentials: 'include' });
+      const token = (typeof window !== "undefined" && (window._sessionToken || localStorage.getItem('docseeker_session_token')));
+      let bundleUrl = `/api/documents/${docId}/offline-bundle`;
+      if (token) bundleUrl += `?token=${encodeURIComponent(token)}`;
+
+      const bundleRes = await fetch(bundleUrl, { credentials: 'include' });
       if (bundleRes.ok) {
         const bundle = await bundleRes.json();
         await this.sendToWorker('INSERT_BUNDLE', { bundle }, 120000);
@@ -614,7 +633,9 @@ class DownloadQueueManager {
 
       // 2. Mettre en cache l'image de couverture dans CacheStorage
       if (typeof caches !== 'undefined') {
-        const coverRes = await fetch(`/api/cover/${docId}`, { credentials: 'include' }).catch(() => null);
+        let coverUrl = `/api/cover/${docId}`;
+        if (token) coverUrl += `?token=${encodeURIComponent(token)}`;
+        const coverRes = await fetch(coverUrl, { credentials: 'include' }).catch(() => null);
         if (coverRes && coverRes.ok) {
           const cache = await caches.open('docseeker_covers');
           await cache.put(`/api/cover/${docId}`, coverRes);
@@ -667,7 +688,12 @@ class DownloadQueueManager {
           });
         }
 
-        const pdfRes = await fetch(`/api/pdf/${docId}`, { credentials: 'include', signal: controller.signal });
+        let pdfUrl = `/api/pdf/${docId}`;
+        if (token) {
+          pdfUrl += `?token=${encodeURIComponent(token)}`;
+        }
+
+        const pdfRes = await fetch(pdfUrl, { credentials: 'include', signal: controller.signal });
         if (pdfRes.ok) {
           const contentLength = Number(pdfRes.headers.get('content-length')) || 0;
           task.totalBytes = contentLength;
@@ -708,6 +734,9 @@ class DownloadQueueManager {
                     const tx = db.transaction('chunks', 'readwrite');
                     tx.objectStore('chunks').put(chunkData.buffer, chunkKey);
                     existingChunks.add(chunkKey);
+                    if (window.pdfCacheManager) {
+                      window.pdfCacheManager.recordChunkDownloaded(docId, CHUNK_SIZE, contentLength);
+                    }
                   } catch (e) {}
                 }
 
@@ -732,6 +761,9 @@ class DownloadQueueManager {
                   const tx = db.transaction('chunks', 'readwrite');
                   tx.objectStore('chunks').put(chunkData.buffer, chunkKey);
                   existingChunks.add(chunkKey);
+                  if (window.pdfCacheManager) {
+                    window.pdfCacheManager.recordChunkDownloaded(docId, accumulatorLen, contentLength);
+                  }
                 } catch (e) {}
               }
             }

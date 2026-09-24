@@ -3934,15 +3934,16 @@ document.addEventListener("DOMContentLoaded", () => {
     let lastCacheActionTime = 0;
     const handleDeleteDocCache = async (e) => {
       e.stopPropagation();
+      const numericId = Number(doc.id);
       if (!window.downloadQueueManager) return;
       const now = Date.now();
       if (now - lastCacheActionTime < 60) return;
       lastCacheActionTime = now;
 
-      const isCached = window.downloadQueueManager.isDocumentCached(doc.id);
-      const isTaskActive = window.downloadQueueManager.activeTasks.has(doc.id);
-      const isTaskQueued = window.downloadQueueManager.queue.includes(doc.id);
-      const stats = window.pdfCacheManager ? window.pdfCacheManager.progressCache.get(doc.id) : null;
+      const isCached = window.downloadQueueManager.isDocumentCached(numericId);
+      const isTaskActive = window.downloadQueueManager.activeTasks.has(numericId);
+      const isTaskQueued = window.downloadQueueManager.queue.includes(numericId);
+      const stats = window.pdfCacheManager ? window.pdfCacheManager.progressCache.get(numericId) : null;
       const hasChunks = Boolean(stats && stats.downloadedBytes > 0);
       const canDelete = isCached || isTaskActive || isTaskQueued || hasChunks;
 
@@ -3953,9 +3954,9 @@ document.addEventListener("DOMContentLoaded", () => {
         cacheBtn.style.pointerEvents = "none";
         setTimeout(() => { if (cacheBtn) cacheBtn.style.pointerEvents = ""; }, 60);
       }
-      await window.downloadQueueManager.removeDocumentFromCache(doc.id);
-      updateDocCardCacheUI(doc.id);
-      if (Number(currentActiveDocId) === Number(doc.id)) {
+      await window.downloadQueueManager.removeDocumentFromCache(numericId);
+      updateDocCardCacheUI(numericId);
+      if (Number(currentActiveDocId) === numericId) {
         const badge = document.getElementById("viewerCacheBadge");
         if (badge) {
           badge.className = "viewer-doc-badge viewer-cache-badge cloud";
@@ -3973,38 +3974,42 @@ document.addEventListener("DOMContentLoaded", () => {
     // Clic bouton cache hors-ligne
     const cacheBtn = card.querySelector(".doc-cache-btn");
     if (cacheBtn) {
+      const numericId = Number(doc.id);
       if (window.pdfCacheManager) {
-        window.pdfCacheManager.isComplete(doc.id).then(complete => {
-          if (complete && window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id)) {
-            updateDocCardCacheUI(doc.id);
+        window.pdfCacheManager.isComplete(numericId).then(complete => {
+          if (complete && window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(numericId)) {
+            updateDocCardCacheUI(numericId);
           }
         });
       }
 
       cacheBtn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        if (!window.downloadQueueManager) return;
-        const now = Date.now();
-        if (now - lastCacheActionTime < 60 || e.detail > 1) {
-          // Ignorer le clic fantôme consécutif à une suppression (double-clic décalé sous la souris)
-          return;
-        }
-        await window.downloadQueueManager.ensureInitialized(1500).catch(() => {});
-        const isCurrentlyCached = window.downloadQueueManager.isDocumentCached(doc.id);
-        const isTaskActive = window.downloadQueueManager.activeTasks.has(doc.id);
-        const isTaskQueued = window.downloadQueueManager.queue.includes(doc.id);
-        const stats = window.pdfCacheManager ? window.pdfCacheManager.progressCache.get(doc.id) : null;
-        if (isCurrentlyCached) {
-          await handleDeleteDocCache(e);
-        } else if (isTaskActive || isTaskQueued) {
-          await window.downloadQueueManager.cancelDownload(doc.id);
-          showToast(`Téléchargement interrompu pour "${doc.title || doc.filename}"`, "info");
-          updateDocCardCacheUI(doc.id);
-        } else {
-          lastCacheActionTime = now;
-          await window.downloadQueueManager.enqueueDocument(doc.id);
-          updateDocCardCacheUI(doc.id);
-          showToast(`Document "${doc.title || doc.filename}" ajouté à la file de téléchargement`, "info");
+        try {
+          e.stopPropagation();
+          const numericId = Number(doc.id);
+          if (!window.downloadQueueManager) return;
+          const now = Date.now();
+          if (now - lastCacheActionTime < 60) {
+            return;
+          }
+          await window.downloadQueueManager.ensureInitialized(1500).catch(() => {});
+          const isCurrentlyCached = window.downloadQueueManager.isDocumentCached(numericId);
+          const isTaskActive = window.downloadQueueManager.activeTasks.has(numericId);
+          const isTaskQueued = window.downloadQueueManager.queue.includes(numericId);
+          if (isCurrentlyCached) {
+            await handleDeleteDocCache(e);
+          } else if (isTaskActive || isTaskQueued) {
+            window.downloadQueueManager.pauseDownload(numericId);
+            showToast(`Téléchargement mis en pause pour "${doc.title || doc.filename}"`, "info");
+            updateDocCardCacheUI(numericId);
+          } else {
+            lastCacheActionTime = now;
+            await window.downloadQueueManager.enqueueDocument(numericId);
+            updateDocCardCacheUI(numericId);
+            showToast(`Document "${doc.title || doc.filename}" ajouté à la file de téléchargement`, "info");
+          }
+        } catch (err) {
+          console.error("[cacheBtn ERROR]", err);
         }
       });
     }
@@ -5716,16 +5721,26 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const isBadgeComplete = viewerCacheBadge.classList.contains("complete");
         const isBadgeDownloading = viewerCacheBadge.classList.contains("downloading");
-        if (isBadgeComplete || isBadgeDownloading) {
+
+        if (isBadgeDownloading) {
           if (window.downloadQueueManager) {
-            await window.downloadQueueManager.cancelDownload(currentActiveDocId);
-            await window.downloadQueueManager.removeDocumentFromCache(currentActiveDocId);
+            window.downloadQueueManager.pauseDownload(currentActiveDocId);
           } else if (window.pdfCacheManager) {
-            await window.pdfCacheManager.invalidate(currentActiveDocId);
+            window.pdfCacheManager.pauseDownload(currentActiveDocId);
           }
-          if (typeof currentViewerUpdateCacheUI === "function") currentViewerUpdateCacheUI("none", 0);
+          showToast("Téléchargement mis en pause (cache partiel conservé)", "info");
           updateDocCardCacheUI(currentActiveDocId);
-          showToast("Cache local supprimé pour ce document", "info");
+        } else if (isBadgeComplete) {
+          if (confirm("Voulez-vous supprimer ce document du cache hors-ligne ?")) {
+            if (window.downloadQueueManager) {
+              await window.downloadQueueManager.removeDocumentFromCache(currentActiveDocId);
+            } else if (window.pdfCacheManager) {
+              await window.pdfCacheManager.invalidate(currentActiveDocId);
+            }
+            if (typeof currentViewerUpdateCacheUI === "function") currentViewerUpdateCacheUI("none", 0);
+            updateDocCardCacheUI(currentActiveDocId);
+            showToast("Cache local supprimé pour ce document", "info");
+          }
         } else {
           if (window.downloadQueueManager) {
             if (typeof currentViewerUpdateCacheUI === "function") currentViewerUpdateCacheUI("force-downloading", 0);
@@ -6844,7 +6859,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const offset = (circumference * (1 - progress / 100)).toFixed(2);
 
         btn.className = "doc-cache-btn downloading";
-        btn.title = `Téléchargement en cours : ${progress}% (cliquer pour interrompre)`;
+        btn.title = `Téléchargement en cours : ${progress}% (cliquer pour mettre en pause)`;
         btn.innerHTML = `
           <svg class="progress-ring" viewBox="0 0 26 26">
             <circle cx="13" cy="13" r="10" stroke="rgba(37, 99, 235, 0.18)" stroke-width="2.2" fill="none" />
@@ -6877,7 +6892,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const offset = (circumference * (1 - progress / 100)).toFixed(2);
 
         btn.className = "doc-cache-btn";
-        btn.title = `Cache partiel (${progress}%) - Cliquer pour compléter le téléchargement`;
+        btn.title = `Cache partiel (${progress}%) - Cliquer pour reprendre le téléchargement`;
         btn.innerHTML = `
           <svg class="progress-ring" viewBox="0 0 26 26">
             <circle cx="13" cy="13" r="10" stroke="rgba(100, 116, 139, 0.2)" stroke-width="2" fill="none" />

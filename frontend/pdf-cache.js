@@ -177,12 +177,12 @@ class PdfCacheManager {
               cursor.continue();
             } else {
               const totalBytes = meta?.totalBytes || 0;
-              // Vérification stricte : le document n'est "complete" que si la somme des fragments réels couvre la totalité
               const isTrulyComplete = totalBytes > 0 && downloadedBytes >= totalBytes;
               const progress = totalBytes > 0 
                 ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100))
                 : (isTrulyComplete ? 100 : 0);
-              const status = isTrulyComplete ? "complete" : (downloadedBytes > 0 ? "downloading" : "none");
+              const isTaskActive = Boolean(typeof window !== "undefined" && window.downloadQueueManager && window.downloadQueueManager.activeTasks.has(id));
+              const status = isTrulyComplete ? "complete" : (downloadedBytes > 0 ? (isTaskActive ? "downloading" : "paused") : "none");
 
               // Auto-réparation si meta.completed était incohérent avec les fragments réels
               if (meta && meta.completed !== isTrulyComplete && totalBytes > 0) {
@@ -348,21 +348,33 @@ class PdfCacheManager {
   }
 
   pauseDownload(docId) {
-    // No-op : géré par le cycle de vie de l'iframe PDF.js
+    const id = Number(docId);
+    if (!id) return;
+    const prev = this.progressCache.get(id);
+    if (prev && prev.status !== "complete") {
+      const updated = { ...prev, status: "paused" };
+      this.progressCache.set(id, updated);
+      this._notifyProgress(id, updated);
+    }
   }
 
   /**
    * Libère les écouteurs de progression et le cache en mémoire pour un document fermé.
    * À appeler quand l'utilisateur ferme le viewer pour éviter l'accumulation d'entrées zombie.
+   * Conserve l'état 'paused' ou 'complete' pour que l'arborescence affiche la progression réelle.
    */
   cleanup(docId) {
     const id = Number(docId);
     if (!id) return;
     this.progressListeners.delete(id);
-    // Conserver progressCache si le doc est complet (utile pour le prochain affichage)
     const cached = this.progressCache.get(id);
-    if (!cached || cached.status !== 'complete') {
-      this.progressCache.delete(id);
+    if (cached) {
+      if (cached.status === "downloading") {
+        cached.status = "paused";
+        this._notifyProgress(id, cached);
+      } else if (cached.status !== "complete" && (!cached.downloadedBytes || cached.downloadedBytes === 0)) {
+        this.progressCache.delete(id);
+      }
     }
   }
 
