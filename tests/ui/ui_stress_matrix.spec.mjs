@@ -80,11 +80,20 @@ test.describe('Matrice de Résistance Agressive & Garde-fous Performance / RAM',
       console.log(`[${tc.name}] État de la file après spam: Queue=${queueState.queueCount}, Active=${queueState.activeCount}`);
       expect(queueState.queueCount + queueState.activeCount).toBeLessThanOrEqual(1);
 
-      // Vérifier que le bouton est en téléchargement ou déjà complet sans crash
-      await expect(cacheBtn).toHaveClass(/downloading|cached/, { timeout: 8000 });
+      // Vérifier que le bouton est en téléchargement, en cache ou en pause/partiel suite au spam sans crash
+      await expect.poll(async () => {
+        const cls = (await cacheBtn.getAttribute('class')) || '';
+        const title = (await cacheBtn.getAttribute('title')) || '';
+        return /downloading|cached/.test(cls) || /partiel/i.test(title);
+      }, { timeout: 8000 }).toBe(true);
 
       // Attendre la complétion pour le document léger, ou nettoyer le document massif
       if (tc.doc.id === ARCHETYPES.LIGHT.id) {
+        const isCached = await cacheBtn.evaluate(el => el.classList.contains('cached'));
+        if (!isCached) {
+          const isDownloading = await cacheBtn.evaluate(el => el.classList.contains('downloading'));
+          if (!isDownloading) await cacheBtn.click();
+        }
         await expect(cacheBtn).toHaveClass(/cached/, { timeout: 15000 });
       } else {
         await harness.cleanDocCache(tc.doc.id);
