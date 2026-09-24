@@ -274,16 +274,32 @@ pub async fn get_pdf(
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
 
     if let Some(range_str) = range_header {
-        // Ex: "bytes=0-1024" ou "bytes=500-"
+        // Ex: "bytes=0-1024", "bytes=500-" ou "bytes=-1024" (suffix byte range)
         if let Some(spec) = range_str.strip_prefix("bytes=") {
-            let parts: Vec<&str> = spec.split('-').collect();
-            let start = parts.first().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-            let end = parts
-                .get(1)
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(file_size - 1);
+            let spec = spec.trim();
+            let (start, end) = if let Some(suffix_str) = spec.strip_prefix('-') {
+                // Suffix byte range: "bytes=-500" => derniers 500 octets du fichier (XRef/Trailer PDF.js)
+                if let Ok(suffix_len) = suffix_str.parse::<u64>() {
+                    let len = suffix_len.min(file_size);
+                    (file_size.saturating_sub(len), file_size.saturating_sub(1))
+                } else {
+                    (0, file_size.saturating_sub(1))
+                }
+            } else if let Some(dash_idx) = spec.find('-') {
+                let start_part = &spec[..dash_idx];
+                let end_part = &spec[dash_idx + 1..];
+                let start = start_part.parse::<u64>().unwrap_or(0);
+                let end = if end_part.is_empty() {
+                    file_size.saturating_sub(1)
+                } else {
+                    end_part.parse::<u64>().unwrap_or(file_size.saturating_sub(1))
+                };
+                (start, end)
+            } else {
+                (0, file_size.saturating_sub(1))
+            };
 
-            let end = end.min(file_size - 1);
+            let end = end.min(file_size.saturating_sub(1));
             if start <= end && start < file_size {
                 let length = end - start + 1;
 

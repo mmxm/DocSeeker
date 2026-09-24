@@ -403,10 +403,10 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
     await h.ensureDocNotCached(1);
     await h.openFolder(130);
 
-    // 1. Ouvrir le document 1 dans le viewer
+    // 1. Ouvrir le document 1 dans le viewer et vérifier le rendu effectif du canvas PDF
     const card = await h.getDocCard(1);
     await card.locator('.doc-title-main').click();
-    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    await h.assertPdfViewerRendered();
     await expect(page.locator('#viewerCacheBadge')).toBeVisible({ timeout: 10000 });
 
     // 2. Quitter l'onglet en revenant à l'accueil
@@ -445,10 +445,10 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
     await h.ensureDocNotCached(1);
     await h.openFolder(130);
 
-    // 1. Ouvrir le document 1 dans le viewer
+    // 1. Ouvrir le document 1 dans le viewer et vérifier le rendu effectif du canvas
     const card = await h.getDocCard(1);
     await card.locator('.doc-title-main').click();
-    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    await h.assertPdfViewerRendered();
     const badge = page.locator('#viewerCacheBadge');
     await expect(badge).toBeVisible({ timeout: 10000 });
 
@@ -469,8 +469,8 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
     await expect(tabItem).toBeVisible({ timeout: 10000 });
     await tabItem.click();
 
-    // 4. Le viewer se réaffiche et la mise en cache doit reprendre jusqu'à complétion
-    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    // 4. Le viewer se réaffiche, rend le PDF et la mise en cache doit reprendre jusqu'à complétion
+    await h.assertPdfViewerRendered();
     await expect(badge).toHaveClass(/complete/, { timeout: 45000 });
     const isComplete = await page.evaluate(async () => {
       return window.pdfCacheManager ? await window.pdfCacheManager.isComplete(1) : false;
@@ -595,10 +595,10 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
     await h.ensureDocNotCached(2);
     await h.openFolder(130);
 
-    // 1. Ouvrir le document 2 dans le viewer
+    // 1. Ouvrir le document 2 dans le viewer et vérifier le rendu effectif du canvas
     const card = await h.getDocCard(2);
     await card.locator('.doc-title-main').click();
-    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    await h.assertPdfViewerRendered();
     const badge = page.locator('#viewerCacheBadge');
     await expect(badge).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(500);
@@ -619,8 +619,8 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
     await expect(tabItem).toBeVisible({ timeout: 10000 });
     await tabItem.click();
 
-    // 5. Le viewer s'affiche, le badge reflète l'avancement et se termine à 100%
-    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    // 5. Le viewer s'affiche, le canvas PDF est rendu, le badge reflète l'avancement et se termine à 100%
+    await h.assertPdfViewerRendered();
     await expect(badge).toHaveClass(/complete/, { timeout: 45000 });
 
     const isComplete = await page.evaluate(async () => {

@@ -392,88 +392,103 @@ async function createIndexedDbPdfResponse(docId, request) {
 
             // ─── CAS A : Range Request (HTTP 206 Partial Content) ───
             if (rangeHeader) {
-              const match = rangeHeader.match(/bytes=(\d+)-(\d+)?/);
-              if (match) {
-                const reqStart = parseInt(match[1], 10);
-                const reqEnd = (match[2] !== undefined && match[2] !== '') ? parseInt(match[2], 10) : (totalBytes - 1);
+              let reqStart = 0;
+              let reqEnd = totalBytes - 1;
+              let isValidRange = false;
 
-                if (isNaN(reqStart) || reqStart >= totalBytes || reqStart < 0) {
+              const suffixMatch = rangeHeader.match(/bytes=-(\d+)/);
+              const standardMatch = rangeHeader.match(/bytes=(\d+)-(\d+)?/);
+
+              if (suffixMatch) {
+                const suffixLen = parseInt(suffixMatch[1], 10);
+                if (!isNaN(suffixLen) && suffixLen > 0) {
+                  const len = Math.min(suffixLen, totalBytes);
+                  reqStart = totalBytes - len;
+                  reqEnd = totalBytes - 1;
+                  isValidRange = true;
+                }
+              } else if (standardMatch) {
+                reqStart = parseInt(standardMatch[1], 10);
+                reqEnd = (standardMatch[2] !== undefined && standardMatch[2] !== '') ? parseInt(standardMatch[2], 10) : (totalBytes - 1);
+                isValidRange = !isNaN(reqStart) && reqStart < totalBytes && reqStart >= 0;
+              }
+
+              if (!isValidRange) {
+                try { db.close(); } catch (e) {}
+                return resolve(new Response(null, {
+                  status: 416,
+                  statusText: 'Range Not Satisfiable',
+                  headers: {
+                    'Content-Range': `bytes */${totalBytes}`,
+                    'Accept-Ranges': 'bytes',
+                  }
+                }));
+              }
+
+              const targetStart = reqStart;
+              const targetEnd = Math.min(reqEnd, totalBytes - 1);
+              const sliceLength = targetEnd - targetStart + 1;
+
+              let sliceBuffer;
+              try {
+                sliceBuffer = new Uint8Array(sliceLength);
+              } catch (allocErr) {
+                try { db.close(); } catch (e) {}
+                return resolve(null);
+              }
+
+              const chunkTx = db.transaction('chunks', 'readonly');
+              const chunkStore = chunkTx.objectStore('chunks');
+              const range = IDBKeyRange.bound(prefix, prefix + '\uffff');
+              const cursorReq = chunkStore.openCursor(range);
+
+              let bytesCopied = 0;
+              cursorReq.onerror = () => { try { db.close(); } catch (e) {} resolve(null); };
+              cursorReq.onsuccess = (e) => {
+                const cursor = e.target.result;
+                if (cursor) {
+                  const key = String(cursor.key);
+                  const parts = key.slice(prefix.length).split('_');
+                  if (parts.length === 2) {
+                    const b = parseInt(parts[0], 10);
+                    const endExclusive = parseInt(parts[1], 10);
+                    // Vérifier le chevauchement avec [targetStart, targetEnd]
+                    if (endExclusive > targetStart && b <= targetEnd) {
+                      const chunkBuf = cursor.value;
+                      if (chunkBuf && chunkBuf.byteLength) {
+                        const overlapStart = Math.max(b, targetStart);
+                        const overlapEnd = Math.min(endExclusive - 1, targetEnd);
+                        const copyLen = overlapEnd - overlapStart + 1;
+                        const chunkOffset = overlapStart - b;
+                        const destOffset = overlapStart - targetStart;
+
+                        sliceBuffer.set(new Uint8Array(chunkBuf, chunkOffset, copyLen), destOffset);
+                        bytesCopied += copyLen;
+                      }
+                    }
+                  }
+                  cursor.continue();
+                } else {
                   try { db.close(); } catch (e) {}
-                  return resolve(new Response(null, {
-                    status: 416,
-                    statusText: 'Range Not Satisfiable',
+                  if (bytesCopied < sliceLength) {
+                    // Les fragments en cache ne couvrent pas toute la plage demandée :
+                    // On retourne null pour que le navigateur charge les vrais octets via le réseau
+                    // et n'injecte JAMAIS de zéros qui corrompent la table XRef de PDF.js.
+                    return resolve(null);
+                  }
+                  resolve(new Response(sliceBuffer.buffer, {
+                    status: 206,
+                    statusText: 'Partial Content',
                     headers: {
-                      'Content-Range': `bytes */${totalBytes}`,
+                      'Content-Type': 'application/pdf',
+                      'Content-Range': `bytes ${targetStart}-${targetEnd}/${totalBytes}`,
+                      'Content-Length': String(sliceLength),
                       'Accept-Ranges': 'bytes',
                     }
                   }));
                 }
-
-                const targetStart = reqStart;
-                const targetEnd = Math.min(reqEnd, totalBytes - 1);
-                const sliceLength = targetEnd - targetStart + 1;
-
-                let sliceBuffer;
-                try {
-                  sliceBuffer = new Uint8Array(sliceLength);
-                } catch (allocErr) {
-                  try { db.close(); } catch (e) {}
-                  return resolve(null);
-                }
-
-                const chunkTx = db.transaction('chunks', 'readonly');
-                const chunkStore = chunkTx.objectStore('chunks');
-                const range = IDBKeyRange.bound(prefix, prefix + '\uffff');
-                const cursorReq = chunkStore.openCursor(range);
-
-                let bytesCopied = 0;
-                cursorReq.onerror = () => { try { db.close(); } catch (e) {} resolve(null); };
-                cursorReq.onsuccess = (e) => {
-                  const cursor = e.target.result;
-                  if (cursor) {
-                    const key = String(cursor.key);
-                    const parts = key.slice(prefix.length).split('_');
-                    if (parts.length === 2) {
-                      const b = parseInt(parts[0], 10);
-                      const endExclusive = parseInt(parts[1], 10);
-                      // Vérifier le chevauchement avec [targetStart, targetEnd]
-                      if (endExclusive > targetStart && b <= targetEnd) {
-                        const chunkBuf = cursor.value;
-                        if (chunkBuf && chunkBuf.byteLength) {
-                          const overlapStart = Math.max(b, targetStart);
-                          const overlapEnd = Math.min(endExclusive - 1, targetEnd);
-                          const copyLen = overlapEnd - overlapStart + 1;
-                          const chunkOffset = overlapStart - b;
-                          const destOffset = overlapStart - targetStart;
-
-                          sliceBuffer.set(new Uint8Array(chunkBuf, chunkOffset, copyLen), destOffset);
-                          bytesCopied += copyLen;
-                        }
-                      }
-                    }
-                    cursor.continue();
-                  } else {
-                    try { db.close(); } catch (e) {}
-                    if (bytesCopied < sliceLength) {
-                      // Les fragments en cache ne couvrent pas toute la plage demandée :
-                      // On retourne null pour que le navigateur charge les vrais octets via le réseau
-                      // et n'injecte JAMAIS de zéros qui corrompent la table XRef de PDF.js.
-                      return resolve(null);
-                    }
-                    resolve(new Response(sliceBuffer.buffer, {
-                      status: 206,
-                      statusText: 'Partial Content',
-                      headers: {
-                        'Content-Type': 'application/pdf',
-                        'Content-Range': `bytes ${targetStart}-${targetEnd}/${totalBytes}`,
-                        'Content-Length': String(sliceLength),
-                        'Accept-Ranges': 'bytes',
-                      }
-                    }));
-                  }
-                };
-                return;
-              }
+              };
+              return;
             }
 
             // ─── CAS B : Requête intégrale (HTTP 200) ───
