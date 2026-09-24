@@ -5111,6 +5111,7 @@ document.addEventListener("DOMContentLoaded", () => {
       drawerEl.style.display = isHidden ? "flex" : "none";
       readerSidebarToggleBtn.classList.toggle("active", isHidden);
       if (isHidden) {
+        if (typeof syncInDocDrawerIfNeeded === "function") syncInDocDrawerIfNeeded();
         const tabTerm = getActiveDocSearchTerm();
         if (inDocDrawerSearchInput && !inDocDrawerSearchInput.value && tabTerm) {
           inDocDrawerSearchInput.value = tabTerm;
@@ -5741,6 +5742,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Empreinte du dernier rendu pour éviter un rebuild DOM complet inutile (C2)
   let _lastVerticalRenderHash = '';
+  let _inDocDrawerNeedsSync = false;
+
+  function syncInDocDrawerIfNeeded() {
+    if (_inDocDrawerNeedsSync && inDocDrawerOccurrencesList && docOccurrencesList) {
+      inDocDrawerOccurrencesList.innerHTML = docOccurrencesList.innerHTML;
+      inDocDrawerOccurrencesList.querySelectorAll(".dynamic-crop").forEach(img => verticalCropManager.observe(img));
+      _inDocDrawerNeedsSync = false;
+      const activeCard = inDocDrawerOccurrencesList.querySelector(".vertical-occ-card.active");
+      if (activeCard) scrollActiveCardIntoView(activeCard);
+    }
+  }
 
   function renderVerticalOccurrences(docId, docTitle, occurrences, activePage, activeOccId = null) {
     // Calculer une empreinte légère de la liste pour détecter un render identique
@@ -5760,7 +5772,7 @@ document.addEventListener("DOMContentLoaded", () => {
         card.classList.toggle('active', isActive);
         if (isActive) scrollActiveCardIntoView(card);
       });
-      if (inDocDrawerOccurrencesList) {
+      if (inDocDrawerOccurrencesList && inDocDrawerOccurrencesList.children.length > 0) {
         const drawerCards = inDocDrawerOccurrencesList.querySelectorAll('.vertical-occ-card');
         drawerCards.forEach((card, idx) => {
           const isActive = idx === activeIdx;
@@ -5784,9 +5796,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (!occurrences || occurrences.length === 0) {
-      docOccurrencesList.innerHTML = `<div style="color:var(--text-muted); font-size:12.5px; padding:10px;">Aucun extrait trouvé pour ce terme dans ce document.</div>`;
+      const emptyHtml = `<div style="color:var(--text-muted); font-size:12.5px; padding:10px;">Aucun extrait trouvé pour ce terme dans ce document.</div>`;
+      docOccurrencesList.innerHTML = emptyHtml;
       if (inDocDrawerOccurrencesList) {
-        inDocDrawerOccurrencesList.innerHTML = `<div style="color:var(--text-muted); font-size:12.5px; padding:10px;">Aucun extrait trouvé pour ce terme dans ce document.</div>`;
+        inDocDrawerOccurrencesList.innerHTML = emptyHtml;
       }
       return;
     }
@@ -5810,72 +5823,77 @@ document.addEventListener("DOMContentLoaded", () => {
     // Terme de surbrillance : la recherche intra-doc de l'onglet actif (jamais le global)
     const activeDocSearchTerm = getActiveDocSearchTerm();
 
+    // Construction unique du HTML de toutes les cartes (batch DOM au lieu de N créations/insertions)
+    let cardsHtml = "";
     occurrences.forEach((occ, index) => {
-      const card = document.createElement("div");
       const isActive = (index === activeTargetIndex);
-      card.className = `vertical-occ-card ${isActive ? 'active' : ''}`;
-      card.setAttribute("data-doc-id", docId);
-      card.setAttribute("data-page", occ.page_number);
-      card.setAttribute("data-occ-id", occ.occ_id || '');
-      card.setAttribute("data-rect", JSON.stringify(occ.rect || []));
-      card.setAttribute("data-hl-rects", JSON.stringify(occ.highlight_rects || (occ.rect ? [occ.rect] : [])));
+      const rectAttr = escapeHtml(JSON.stringify(occ.rect || []));
+      const hlRectAttr = escapeHtml(JSON.stringify(occ.highlight_rects || (occ.rect ? [occ.rect] : [])));
+      const snippet = activeDocSearchTerm ? highlightTitle(occ.text_snippet || '', activeDocSearchTerm) : escapeHtml(occ.text_snippet || '');
 
-      card.innerHTML = `
-        <div class="vertical-occ-img-wrapper">
-          <img src="${placeholderSvg}" data-src="${occ.crop_url}" class="vertical-occ-img dynamic-crop" alt="Extrait p. ${occ.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
-        </div>
-        <div class="vertical-occ-footer">
-          <span class="vertical-occ-page">Page ${occ.page_number}</span>
-          <span class="vertical-occ-snippet" title="${escapeHtml(occ.text_snippet || '')}">${activeDocSearchTerm ? highlightTitle(occ.text_snippet || '', activeDocSearchTerm) : escapeHtml(occ.text_snippet || '')}</span>
-        </div>
-      `;
-
-      card.addEventListener("click", () => {
-        document.querySelectorAll(".vertical-occ-card.active").forEach(el => el.classList.remove("active"));
-        card.classList.add("active");
-        currentActiveOccurrenceIndex = index;
-        updateOccurrenceStepperUI();
-        viewerPageBadge.textContent = `Page ${occ.page_number}`;
-        const targetRect = (occ.highlight_rects && occ.highlight_rects.length > 0) ? occ.highlight_rects[0] : occ.rect;
-        goToPageAndScrollToOccurrence(occ.page_number, targetRect, occ.y_ratio);
-      });
-
-      docOccurrencesList.appendChild(card);
-      const img = card.querySelector(".dynamic-crop");
-      if (img) verticalCropManager.observe(img);
-
-      if (inDocDrawerOccurrencesList) {
-        const drawerCard = document.createElement("div");
-        drawerCard.className = `vertical-occ-card ${isActive ? 'active' : ''}`;
-        drawerCard.setAttribute("data-doc-id", docId);
-        drawerCard.setAttribute("data-page", occ.page_number);
-        drawerCard.setAttribute("data-occ-id", occ.occ_id || '');
-        drawerCard.setAttribute("data-rect", JSON.stringify(occ.rect || []));
-        drawerCard.setAttribute("data-hl-rects", JSON.stringify(occ.highlight_rects || (occ.rect ? [occ.rect] : [])));
-        drawerCard.setAttribute("data-yratio", occ.y_ratio || 0);
-        drawerCard.innerHTML = `
+      cardsHtml += `
+        <div class="vertical-occ-card ${isActive ? 'active' : ''}"
+             data-index="${index}"
+             data-doc-id="${docId}"
+             data-page="${occ.page_number}"
+             data-occ-id="${escapeHtml(String(occ.occ_id || ''))}"
+             data-rect="${rectAttr}"
+             data-hl-rects="${hlRectAttr}"
+             data-yratio="${occ.y_ratio || 0}">
           <div class="vertical-occ-img-wrapper">
-            <img src="${placeholderSvg}" data-src="${occ.crop_url}" class="vertical-occ-img dynamic-crop" alt="Extrait p. ${occ.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
+            <img src="${placeholderSvg}" data-src="${escapeHtml(occ.crop_url || '')}" class="vertical-occ-img dynamic-crop" alt="Extrait p. ${occ.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
           </div>
           <div class="vertical-occ-footer">
             <span class="vertical-occ-page">Page ${occ.page_number}</span>
-            <span class="vertical-occ-snippet" title="${escapeHtml(occ.text_snippet || '')}">${activeDocSearchTerm ? highlightTitle(occ.text_snippet || '', activeDocSearchTerm) : escapeHtml(occ.text_snippet || '')}</span>
+            <span class="vertical-occ-snippet" title="${escapeHtml(occ.text_snippet || '')}">${snippet}</span>
           </div>
-        `;
-        drawerCard.addEventListener("click", () => {
-          jumpToOccurrenceByIndex(index);
-        });
-        inDocDrawerOccurrencesList.appendChild(drawerCard);
-        const drawerImg = drawerCard.querySelector(".dynamic-crop");
-        if (drawerImg) verticalCropManager.observe(drawerImg);
-      }
+        </div>
+      `;
     });
+
+    docOccurrencesList.innerHTML = cardsHtml;
+    docOccurrencesList.querySelectorAll(".dynamic-crop").forEach(img => verticalCropManager.observe(img));
+
+    // Délégation d'événement click unique pour la liste principale
+    if (!docOccurrencesList._hasDelegatedListener) {
+      docOccurrencesList._hasDelegatedListener = true;
+      docOccurrencesList.addEventListener("click", (e) => {
+        const card = e.target.closest(".vertical-occ-card");
+        if (!card) return;
+        const index = parseInt(card.dataset.index, 10);
+        if (!isNaN(index)) jumpToOccurrenceByIndex(index);
+      });
+    }
+
+    // Optimisation : rendu paresseux du tiroir (évite duplication 2x du DOM et requêtes crops inutiles quand fermé)
+    const isDrawerOpen = inDocSearchDrawer && inDocSearchDrawer.style.display === "flex";
+    if (inDocDrawerOccurrencesList) {
+      // Délégation d'événement click unique pour le tiroir
+      if (!inDocDrawerOccurrencesList._hasDelegatedListener) {
+        inDocDrawerOccurrencesList._hasDelegatedListener = true;
+        inDocDrawerOccurrencesList.addEventListener("click", (e) => {
+          const card = e.target.closest(".vertical-occ-card");
+          if (!card) return;
+          const index = parseInt(card.dataset.index, 10);
+          if (!isNaN(index)) jumpToOccurrenceByIndex(index);
+        });
+      }
+
+      if (isDrawerOpen) {
+        inDocDrawerOccurrencesList.innerHTML = cardsHtml;
+        inDocDrawerOccurrencesList.querySelectorAll(".dynamic-crop").forEach(img => verticalCropManager.observe(img));
+        _inDocDrawerNeedsSync = false;
+      } else {
+        inDocDrawerOccurrencesList.innerHTML = "";
+        _inDocDrawerNeedsSync = true;
+      }
+    }
 
     const activeCard = docOccurrencesList.querySelector(".vertical-occ-card.active");
     if (activeCard) {
       scrollActiveCardIntoView(activeCard);
     }
-    if (inDocDrawerOccurrencesList) {
+    if (inDocDrawerOccurrencesList && isDrawerOpen) {
       const activeDrawerCard = inDocDrawerOccurrencesList.querySelector(".vertical-occ-card.active");
       if (activeDrawerCard) {
         scrollActiveCardIntoView(activeDrawerCard);
