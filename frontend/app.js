@@ -2358,6 +2358,7 @@ document.addEventListener("DOMContentLoaded", () => {
       window._currentPdfBlobUrl = null;
     }
     currentActiveDocId = null;
+    window.currentActiveDocId = null;
     showGeneralResultsView();
   }
 
@@ -5128,6 +5129,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (currentActiveDocId && window.pdfCacheManager) {
         window.pdfCacheManager.pauseDownload(currentActiveDocId);
       }
+      currentActiveDocId = null;
+      window.currentActiveDocId = null;
 
       // Appliquer le mode onglet accueil
       document.body.classList.add("home-tab-active");
@@ -5358,6 +5361,7 @@ document.addEventListener("DOMContentLoaded", () => {
       window.pdfCacheManager.pauseDownload(currentActiveDocId);
     }
     currentActiveDocId = numericDocId;
+    window.currentActiveDocId = numericDocId;
     currentActiveDocTitle = docTitle;
 
     // CANAL 2 : la requête intra-doc vient de l'ONGLET cible, jamais du global.
@@ -5642,6 +5646,25 @@ document.addEventListener("DOMContentLoaded", () => {
       viewerCacheBadge.addEventListener("click", async (e) => {
         e.stopPropagation();
         if (!currentActiveDocId) return;
+        const isError = viewerCacheBadge.classList.contains("paused") || viewerCacheBadge.textContent.includes("Erreur");
+        if (isError) {
+          if (window.pdfCacheManager) {
+            await window.pdfCacheManager.invalidate(currentActiveDocId);
+          }
+          if (window.downloadQueueManager) {
+            await window.downloadQueueManager.removeDocumentFromCache(currentActiveDocId);
+          }
+          if (window._currentPdfBlobUrl) {
+            try { URL.revokeObjectURL(window._currentPdfBlobUrl); } catch (e) {}
+            window._currentPdfBlobUrl = null;
+          }
+          updateCacheUI("none", 0);
+          updateDocCardCacheUI(currentActiveDocId);
+          showToast("Cache réparé, rechargement du document...", "info");
+          _executeLoadDocumentInViewer(currentActiveDocId, currentActiveDocTitle, 1, currentActiveOccurrences);
+          return;
+        }
+
         const isComplete = window.downloadQueueManager ? window.downloadQueueManager.isDocumentCached(currentActiveDocId) : false;
         const isTaskActive = window.downloadQueueManager && window.downloadQueueManager.activeTasks.has(Number(currentActiveDocId));
         if (isComplete || isTaskActive) {
@@ -5668,6 +5691,12 @@ document.addEventListener("DOMContentLoaded", () => {
       window.pdfCacheManager.getProgress(numericDocId).then(p => {
         if (thisLoadSeq === currentViewerLoadSeq && Number(currentActiveDocId) === numericDocId && p) {
           updateCacheUI(p.status, p.progress, p.downloadedBytes, p.totalBytes);
+          const isComplete = p.status === 'complete' || p.progress >= 100;
+          if (!isComplete && (p.status === 'downloading' || (window.downloadQueueManager && (window.downloadQueueManager.activeTasks.has(numericDocId) || window.downloadQueueManager.queue.includes(numericDocId))))) {
+            if (window.downloadQueueManager && !window.downloadQueueManager.activeTasks.has(numericDocId) && !window.downloadQueueManager.queue.includes(numericDocId)) {
+              window.downloadQueueManager.enqueueDocument(numericDocId);
+            }
+          }
         }
       }).catch(() => {});
 
@@ -5891,6 +5920,23 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
           } catch (warmErr) {
             console.warn("[DocSeeker] Réouverture à chaud échouée, repli vers rechargement complet :", warmErr);
+            const errStr = String(warmErr?.message || warmErr || '');
+            if (errStr.includes("Invalid") || errStr.includes("corrupt") || errStr.includes("Root") || warmErr?.name === 'InvalidPDFException') {
+              if (window.pdfCacheManager) {
+                await window.pdfCacheManager.invalidate(numericDocId).catch(() => {});
+              }
+              if (window._currentPdfBlobUrl) {
+                try { URL.revokeObjectURL(window._currentPdfBlobUrl); } catch (e) {}
+                window._currentPdfBlobUrl = null;
+              }
+              pdfTargetUrl = `/api/pdf/${numericDocId}`;
+              viewerUrl = `/pdfjs/web/viewer.html?v=5.9&verbosity=0&file=${encodeURIComponent(pdfTargetUrl)}#pagemode=none&page=${targetPage}`;
+              if (effectiveSearchQuery) {
+                viewerUrl += `&search=${encodeURIComponent(effectiveSearchQuery)}`;
+              } else {
+                viewerUrl += `&search=`;
+              }
+            }
           }
         }
 
@@ -6840,6 +6886,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (window.downloadQueueManager) {
     window.downloadQueueManager.onUpdate((state) => {
+      if (currentActiveDocId && typeof updateCacheUI === "function") {
+        const activeTask = (state.activeTasks || []).find(t => Number(t.docId) === Number(currentActiveDocId));
+        if (activeTask) {
+          updateCacheUI(activeTask.status || "downloading", activeTask.progress || 0, activeTask.downloadedBytes, activeTask.totalBytes);
+        }
+      }
       document.querySelectorAll(".doc-card[data-doc-id], .doc-card[data-id]").forEach(card => {
         const id = Number(card.getAttribute("data-doc-id") || card.getAttribute("data-id"));
         if (id) updateDocCardCacheUI(id);

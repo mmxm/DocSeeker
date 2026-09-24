@@ -10069,7 +10069,7 @@ function createFetchOptions(headers, withCredentials, abortController) {
     method: "GET",
     headers,
     signal: abortController.signal,
-    credentials: withCredentials ? "include" : "same-origin",
+    credentials: "include",
     redirect: "follow"
   };
 }

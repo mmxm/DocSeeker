@@ -153,12 +153,26 @@ function insertDocumentBundle(bundle) {
 
     // 3. Insertion par lot des pages et de leurs coordonnées spatiales words
     const insertPageSql = get_insert_page_sql();
-    for (const p of pages) {
-      const wordsJsonStr = typeof p.words === 'string' ? p.words : JSON.stringify(p.words || []);
-      db.exec({
-        sql: insertPageSql,
-        bind: [doc.id, p.page_number, p.text_content || '', wordsJsonStr]
-      });
+    if (typeof db.prepare === 'function') {
+      const stmt = db.prepare(insertPageSql);
+      try {
+        for (const p of pages) {
+          const wordsJsonStr = typeof p.words === 'string' ? p.words : JSON.stringify(p.words || []);
+          stmt.bind([doc.id, p.page_number, p.text_content || '', wordsJsonStr]);
+          stmt.step();
+          stmt.reset();
+        }
+      } finally {
+        stmt.finalize();
+      }
+    } else {
+      for (const p of pages) {
+        const wordsJsonStr = typeof p.words === 'string' ? p.words : JSON.stringify(p.words || []);
+        db.exec({
+          sql: insertPageSql,
+          bind: [doc.id, p.page_number, p.text_content || '', wordsJsonStr]
+        });
+      }
     }
   });
 

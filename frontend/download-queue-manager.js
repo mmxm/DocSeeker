@@ -264,7 +264,7 @@ class DownloadQueueManager {
       const bundleRes = await fetch(`/api/documents/${id}/offline-bundle`);
       if (bundleRes.ok) {
         const bundle = await bundleRes.json();
-        await this.sendToWorker('INSERT_BUNDLE', { bundle }, 60000);
+        await this.sendToWorker('INSERT_BUNDLE', { bundle }, 120000);
         const isComplete = window.pdfCacheManager ? await window.pdfCacheManager.isComplete(id) : false;
         if (isComplete) {
           this.cachedDocIds.add(id);
@@ -602,7 +602,7 @@ class DownloadQueueManager {
       const bundleRes = await fetch(`/api/documents/${docId}/offline-bundle`);
       if (bundleRes.ok) {
         const bundle = await bundleRes.json();
-        await this.sendToWorker('INSERT_BUNDLE', { bundle });
+        await this.sendToWorker('INSERT_BUNDLE', { bundle }, 120000);
         // NOTE: Ne pas ajouter à cachedDocIds ici : le document n'est disponible qu'une fois son binaire 100% complet !
       }
 
@@ -628,46 +628,12 @@ class DownloadQueueManager {
         }
       }
 
-      // Si le document est actuellement ouvert dans le viewer, PDF.js le télécharge déjà avec priorité
-      if (typeof window !== "undefined" && window.currentActiveDocId && Number(window.currentActiveDocId) === Number(docId)) {
-        console.log(`[DownloadQueueManager] Doc ${docId} est ouvert dans le viewer, coordination avec PDF.js`);
-        await new Promise((resolve) => {
-          let resolved = false;
-          const check = async () => {
-            if (resolved) return;
-            const complete = window.pdfCacheManager ? await window.pdfCacheManager.isComplete(docId) : false;
-            if (complete) {
-              resolved = true;
-              resolve();
-            }
-          };
-          const interval = setInterval(check, 300);
-          const unbind = window.pdfCacheManager?.onProgress(docId, (info) => {
-            if (info.status === 'complete' || info.progress >= 100) {
-              if (!resolved) {
-                resolved = true;
-                clearInterval(interval);
-                unbind?.();
-                resolve();
-              }
-            }
-          });
-          setTimeout(() => {
-            if (!resolved) {
-              resolved = true;
-              clearInterval(interval);
-              unbind?.();
-              resolve();
-            }
-          }, 120000);
-        });
-      } else {
-        const controller = new AbortController();
-        task.controller = controller;
+      const controller = new AbortController();
+      task.controller = controller;
 
-        const CHUNK_SIZE = 256 * 1024;
-        const normUrl = `/api/pdf/${docId}`;
-        const prefix = `${normUrl}#`;
+      const CHUNK_SIZE = 256 * 1024;
+      const normUrl = `/api/pdf/${docId}`;
+      const prefix = `${normUrl}#`;
 
         // Scanner les clés de chunks déjà existants pour éviter les écritures redondantes
         const db = window.pdfCacheManager ? await window.pdfCacheManager.init() : null;
@@ -810,17 +776,18 @@ class DownloadQueueManager {
             }
           }
         }
-      }
 
-      this.cachedDocIds.add(docId);
-      const allDocs = await this.getAllCachedDocs().catch(() => []);
-      if (Array.isArray(allDocs)) {
-        this._cachedDocsList = allDocs;
-      }
-
-      task.status = 'complete';
-      task.progress = 100;
-      this._notify();
+        const isComplete = window.pdfCacheManager ? await window.pdfCacheManager.isComplete(docId) : true;
+        if (isComplete) {
+          this.cachedDocIds.add(docId);
+          task.status = 'complete';
+          task.progress = 100;
+        }
+        const allDocs = await this.getAllCachedDocs().catch(() => []);
+        if (Array.isArray(allDocs)) {
+          this._cachedDocsList = allDocs;
+        }
+        this._notify();
     } catch (err) {
       console.warn(`[DownloadQueueManager] Erreur ou interruption pour le doc ${docId}:`, err);
       if (err && err.message && err.message.includes("Worker réinitialisé")) {

@@ -393,4 +393,86 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
     await expect(page.locator('#viewerPane')).not.toBeVisible();
     console.log('✅ [O11] Parité absolue Néphrologie offline validée.');
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // O13 : Cache interrompu par changement d'onglet → Poursuite depuis l'arborescence
+  // ─────────────────────────────────────────────────────────────────────────
+
+  test('O13 - Cache Interrompu par Changement d Onglet : Poursuite depuis l Arborescence', async ({ page }) => {
+    await h.ensureDocNotCached(1);
+    await h.openFolder(130);
+
+    // 1. Ouvrir le document 1 dans le viewer
+    const card = await h.getDocCard(1);
+    await card.locator('.doc-title-main').click();
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('#viewerCacheBadge')).toBeVisible({ timeout: 10000 });
+
+    // 2. Quitter l'onglet en revenant à l'accueil
+    await page.locator('#readerHomeBtn').click();
+    await expect(page.locator('body')).toHaveClass(/home-tab-active/);
+    await expect(page.locator('#viewerPane')).not.toBeVisible();
+
+    // 3. Dans l'arborescence, relancer la mise en cache directement depuis le bouton du document
+    const homeCard = await h.getDocCard(1);
+    const cacheBtn = homeCard.locator('.doc-cache-btn');
+    await expect(cacheBtn).toBeVisible({ timeout: 10000 });
+
+    // Si pas déjà complété par le premier transfert, cliquer pour continuer
+    const isAlreadyCached = await cacheBtn.evaluate(el => el.classList.contains('cached'));
+    if (!isAlreadyCached) {
+      await cacheBtn.click();
+    }
+
+    // 4. Vérifier que la mise en cache se termine avec succès (100%)
+    await expect(cacheBtn).toHaveClass(/cached/, { timeout: 45000 });
+    const isComplete = await page.evaluate(async () => {
+      return window.pdfCacheManager ? await window.pdfCacheManager.isComplete(1) : false;
+    });
+    expect(isComplete).toBe(true);
+    console.log('✅ [O13] Mise en cache continuée et complétée avec succès depuis l arborescence.');
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // O14 : Cache interrompu par changement d'onglet → Reprise automatique au retour
+  // ─────────────────────────────────────────────────────────────────────────
+
+  test('O14 - Cache Interrompu par Changement d Onglet : Reprise Automatique au Retour', async ({ page }) => {
+    await h.ensureDocNotCached(1);
+    await h.openFolder(130);
+
+    // 1. Ouvrir le document 1 dans le viewer
+    const card = await h.getDocCard(1);
+    await card.locator('.doc-title-main').click();
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    const badge = page.locator('#viewerCacheBadge');
+    await expect(badge).toBeVisible({ timeout: 10000 });
+
+    // Lancer la mise en cache si non démarrée
+    const isCachedInitial = await badge.evaluate(el => el.classList.contains('complete'));
+    if (!isCachedInitial) {
+      await badge.click();
+    }
+
+    // 2. Quitter l'onglet en revenant à l'accueil
+    await page.locator('#readerHomeBtn').click();
+    await expect(page.locator('body')).toHaveClass(/home-tab-active/);
+    await expect(page.locator('#viewerPane')).not.toBeVisible();
+    await page.waitForTimeout(600);
+
+    // 3. Retourner sur l'onglet du document 1
+    const tabItem = page.locator('.reader-tab-item').first();
+    await expect(tabItem).toBeVisible({ timeout: 10000 });
+    await tabItem.click();
+
+    // 4. Le viewer se réaffiche et la mise en cache doit reprendre jusqu'à complétion
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    await expect(badge).toHaveClass(/complete/, { timeout: 45000 });
+    const isComplete = await page.evaluate(async () => {
+      return window.pdfCacheManager ? await window.pdfCacheManager.isComplete(1) : false;
+    });
+    expect(isComplete).toBe(true);
+    console.log('✅ [O14] Reprise automatique de la mise en cache au retour sur l onglet validée.');
+  });
 });

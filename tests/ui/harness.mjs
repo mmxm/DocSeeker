@@ -217,6 +217,14 @@ export class DocSeekerTestHarness {
 
   async openFolder(folderId) {
     const folder = this.page.locator(`.folder-card[data-folder-id="${folderId}"]`);
+    if (await folder.isVisible().catch(() => false)) {
+      await folder.click();
+      return;
+    }
+    const alreadyInside = await this.page.evaluate((id) => {
+      return window.currentFolderId === Number(id) || document.querySelector(`.doc-card[data-folder-id="${id}"]`) !== null;
+    }, folderId).catch(() => false);
+    if (alreadyInside) return;
     await folder.waitFor({ state: 'visible', timeout: 10000 });
     await folder.click();
   }
