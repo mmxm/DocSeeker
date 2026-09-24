@@ -59,6 +59,10 @@ test.describe('DocSeeker - Edge Cases (EC)', () => {
       console.log(`[EC-2] URL actuelle après expiration : ${url}`);
     }
     console.log(`✅ [EC-2] Redirection login propre après expiration token (isLoginPage=${isLoginPage}).`);
+    await h.authenticate();
+    await page.evaluate(() => {
+      localStorage.setItem('docseeker_session_valid_until', String(Date.now() + 30 * 24 * 3600 * 1000));
+    });
   });
 
   // ─────────────────────────────────────────────────────────────────────────

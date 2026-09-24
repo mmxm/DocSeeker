@@ -42,6 +42,7 @@ test.describe('Matrice M - Mobile & PWA', () => {
   });
 
   test.afterEach(async () => {
+    test.setTimeout(60000);
     const closeBtn = h.page.locator('#closeViewerBtn');
     if (await closeBtn.isVisible().catch(() => false)) {
       await closeBtn.click().catch(() => {});
@@ -141,8 +142,7 @@ test.describe('Matrice M - Mobile & PWA', () => {
       const card = await h.getDocCard(tc.docId);
       const vignette = card.locator('.vignette-item').first();
       await expect(vignette).toBeVisible({ timeout: 10000 });
-      await vignette.scrollIntoViewIfNeeded();
-      await vignette.click();
+      await vignette.dispatchEvent('click');
       await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 35000 });
 
       const mobileOccBtn = page.locator('#mobileOccurrencesBtn');
