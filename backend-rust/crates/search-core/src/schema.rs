@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE INDEX IF NOT EXISTS idx_documents_file_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_documents_folder_id ON documents(folder_id);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
+CREATE INDEX IF NOT EXISTS idx_documents_title ON documents(title);
+CREATE INDEX IF NOT EXISTS idx_documents_filename ON documents(filename);
+CREATE INDEX IF NOT EXISTS idx_documents_title_lower ON documents(LOWER(title));
+CREATE INDEX IF NOT EXISTS idx_documents_filename_lower ON documents(LOWER(filename));
 "#;
 
 pub const CREATE_PAGES_TABLE: &str = r#"

@@ -190,3 +190,45 @@ pub fn process_doc_search_results_wasm(
     }).to_string()
 }
 
+/// Traite en lot plusieurs pages d'un document pour extraire les occurrences
+/// Évite N allers-retours JS↔WASM avec parsing/sérialisation JSON répété
+#[wasm_bindgen]
+pub fn batch_find_and_process_doc_occurrences_wasm(
+    pages_json: &str,
+    terms_json: &str,
+    query_hash: &str,
+    doc_id: i64,
+    page_height: f64,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> String {
+    let pages: Vec<(i64, String, f64)> = serde_json::from_str(pages_json).unwrap_or_default();
+    let query_terms: Vec<String> = serde_json::from_str(terms_json).unwrap_or_default();
+    let encoded_terms = urlencoding::encode(&query_terms.join(",")).to_string();
+
+    let mut all_occurrences = Vec::new();
+    for (page_number, words_json, page_bm25) in pages {
+        if words_json.is_empty() || words_json == "[]" {
+            continue;
+        }
+        let words_data: Vec<WordEntry> = serde_json::from_str(&words_json).unwrap_or_default();
+        let occs = find_occurrences_on_page(
+            &words_data,
+            &query_terms,
+            query_hash,
+            doc_id,
+            page_number,
+            page_bm25,
+            &encoded_terms,
+            page_height,
+        );
+        all_occurrences.extend(occs);
+    }
+
+    let (total, paged) = process_doc_search_results(all_occurrences, offset, limit);
+    serde_json::json!({
+        "total_occurrences": total,
+        "occurrences": paged,
+    }).to_string()
+}
+

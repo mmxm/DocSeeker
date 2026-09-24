@@ -1,6 +1,37 @@
 /* @ts-self-types="./search_wasm.d.ts" */
 
 /**
+ * Traite en lot plusieurs pages d'un document pour extraire les occurrences
+ * Évite N allers-retours JS↔WASM avec parsing/sérialisation JSON répété
+ * @param {string} pages_json
+ * @param {string} terms_json
+ * @param {string} query_hash
+ * @param {bigint} doc_id
+ * @param {number} page_height
+ * @param {number | null} [offset]
+ * @param {number | null} [limit]
+ * @returns {string}
+ */
+export function batch_find_and_process_doc_occurrences_wasm(pages_json, terms_json, query_hash, doc_id, page_height, offset, limit) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(pages_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(terms_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(query_hash, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.batch_find_and_process_doc_occurrences_wasm(ptr0, len0, ptr1, len1, ptr2, len2, doc_id, page_height, isLikeNone(offset) ? Number.MAX_SAFE_INTEGER : (offset) >>> 0, isLikeNone(limit) ? Number.MAX_SAFE_INTEGER : (limit) >>> 0);
+        deferred4_0 = ret[0];
+        deferred4_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
  * @param {bigint} doc_id
  * @param {string} query
  * @returns {string}

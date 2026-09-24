@@ -67,7 +67,7 @@ pub async fn get_cover(
     let cover_webp = state.config.covers_dir.join(format!("{}.webp", doc_id));
     if !cover_webp.exists() {
         let filename: Option<String> = {
-            let conn = match state.db.lock() {
+            let conn = match state.db.get() {
                 Ok(c) => c,
                 Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur DB").into_response(),
             };
@@ -168,7 +168,7 @@ pub async fn get_crop(
 
     // 3. Récupération des données en base avec libération IMMÉDIATE du verrou SQLite
     let (words_json, filename) = {
-        let conn = match state.db.lock() {
+        let conn = match state.db.get() {
             Ok(c) => c,
             Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur DB").into_response(),
         };
@@ -236,7 +236,7 @@ pub async fn get_pdf(
     headers: HeaderMap,
 ) -> Response {
     let filename: Option<String> = {
-        let conn = match state.db.lock() {
+        let conn = match state.db.get() {
             Ok(c) => c,
             Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur DB").into_response(),
         };

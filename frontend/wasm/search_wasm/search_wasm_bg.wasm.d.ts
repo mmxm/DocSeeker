@@ -1,6 +1,7 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
+export const batch_find_and_process_doc_occurrences_wasm: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: number, i: number, j: number) => [number, number];
 export const build_doc_search_sql_wasm: (a: bigint, b: number, c: number) => [number, number];
 export const build_search_sql_wasm: (a: number, b: number, c: number, d: bigint, e: number, f: number) => [number, number];
 export const build_title_search_sql_wasm: (a: number, b: number, c: number, d: bigint, e: number, f: number) => [number, number];

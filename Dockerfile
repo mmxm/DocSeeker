@@ -1,7 +1,18 @@
-# ==============================================================================
-# DocSeeker v2.0 - Dockerfile Multi-Stage Haute Performance (Rust & Sécurité Native)
-# Cross-compilation native directe (sans émulation QEMU) via Docker Buildx
-# ==============================================================================
+# Stage 0 : Minification des assets frontend (JS/CSS) — image Node.js Alpine ultra-légère
+FROM node:20-alpine AS minifier
+WORKDIR /minify
+COPY frontend/ ./frontend/
+RUN npm install -g terser clean-css-cli && \
+    for f in frontend/app.js frontend/sw.js frontend/crop-worker.js \
+             frontend/offline-search-worker.js frontend/download-queue-manager.js \
+             frontend/pdf-cache.js frontend/worker-setup.js; do \
+      if [ -f "$f" ]; then \
+        terser "$f" --compress --mangle --output "$f.min" && mv "$f.min" "$f"; \
+      fi; \
+    done && \
+    if [ -f frontend/style.css ]; then \
+      cleancss -o frontend/style.min.css frontend/style.css && mv frontend/style.min.css frontend/style.css; \
+    fi
 
 # Stage 1 : Compilation croisée native sur la plateforme hôte du builder
 FROM --platform=$BUILDPLATFORM rust:slim-bookworm AS builder
@@ -69,11 +80,11 @@ RUN mkdir -p src && echo "fn main() {}" > src/main.rs && \
     cargo build --release --target "$RUST_TARGET" && \
     rm -rf src target/"$RUST_TARGET"/release/deps/docseeker_backend* target/"$RUST_TARGET"/release/docseeker-backend*
 
-# 4. Copie du code source applicatif réel, des crates internes et du frontend
+# 4. Copie du code source applicatif réel, des crates internes et du frontend MINIFIÉ
 COPY backend-rust/src/ ./src/
 COPY backend-rust/tests/ ./tests/
 COPY backend-rust/crates/ ./crates/
-COPY frontend/ /build/frontend/
+COPY --from=minifier /minify/frontend/ /build/frontend/
 
 # 5. Compilation applicative ultra-rapide et copie vers un chemin fixe
 RUN ARCH="${TARGETARCH:-$(case $(uname -m) in aarch64|arm64) echo arm64;; *) echo amd64;; esac)}" && \
@@ -93,7 +104,7 @@ WORKDIR /app
 # Copie du binaire compilé, de la bibliothèque pdfium et des fichiers frontend
 COPY --from=builder /build/docseeker-backend /usr/local/bin/docseeker
 COPY --from=builder /build/backend-rust/lib/libpdfium.so /usr/lib/libpdfium.so
-COPY frontend/ /app/frontend/
+COPY --from=minifier /minify/frontend/ /app/frontend/
 
 ARG DOCSEEKER_VERSION=2.0.0
 ARG GIT_COMMIT=unknown

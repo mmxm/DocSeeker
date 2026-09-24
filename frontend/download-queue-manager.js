@@ -21,6 +21,8 @@ class DownloadQueueManager {
     this._workerCallbacks = new Map();
     this._workerFailed = false;
     this._indexingDocIds = new Set();
+    this._syncedDocMetaMap = new Map();
+    this._lastSyncedFoldersHash = '';
 
     this._initWorker();
   }
@@ -34,6 +36,8 @@ class DownloadQueueManager {
       try { reject(new Error("Worker réinitialisé suite à une mise à jour")); } catch (e) {}
     }
     this._workerCallbacks.clear();
+    this._syncedDocMetaMap.clear();
+    this._lastSyncedFoldersHash = '';
     this._workerFailed = false;
     this._initWorker();
   }
@@ -153,7 +157,34 @@ class DownloadQueueManager {
       updated_at: d.updated_at
     }));
     if (Array.isArray(folders)) this._allFolders = folders;
-    await this.sendToWorker('SYNC_LIBRARY_META', { documents: this._libraryDocsList, folders: folders || null }).catch(() => {});
+
+    // Delta sync : détecter uniquement les documents et dossiers modifiés
+    const deltaDocs = [];
+    const currentMetaMap = new Map();
+    for (const d of this._libraryDocsList) {
+      const sig = `${d.title}|${d.folder_id}|${d.total_pages}|${d.file_size}|${d.updated_at || d.created_at || ''}`;
+      currentMetaMap.set(d.id, sig);
+      if (this._syncedDocMetaMap.get(d.id) !== sig) {
+        deltaDocs.push(d);
+      }
+    }
+
+    let foldersToSync = null;
+    if (Array.isArray(folders)) {
+      const foldersHash = folders.map(f => `${f.id}:${f.name}:${f.parent_id}:${f.color}`).join(';');
+      if (foldersHash !== this._lastSyncedFoldersHash) {
+        foldersToSync = folders;
+        this._lastSyncedFoldersHash = foldersHash;
+      }
+    }
+
+    // Si aucun document n'a changé et les dossiers sont identiques, skip le message worker
+    if (deltaDocs.length === 0 && !foldersToSync) {
+      return;
+    }
+
+    this._syncedDocMetaMap = currentMetaMap;
+    await this.sendToWorker('SYNC_LIBRARY_META', { documents: deltaDocs, folders: foldersToSync }).catch(() => {});
   }
 
   // Tous les documents connus (cache + miroir) — pour l'arborescence hors-ligne.

@@ -18,7 +18,7 @@ pub async fn get_annotations(
     State(state): State<Arc<AppState>>,
     Path(doc_id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let conn = state.db.lock().map_err(|_| {
+    let conn = state.db.get().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
@@ -42,7 +42,7 @@ pub async fn save_annotations(
     Path(doc_id): Path<i64>,
     Json(payload): Json<AnnotationsPayload>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let conn = state.db.lock().map_err(|_| {
+    let conn = state.db.get().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
@@ -64,7 +64,7 @@ pub async fn save_pdf(
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, Response> {
     let filename: Option<String> = {
-        let conn = state.db.lock().map_err(|_| {
+        let conn = state.db.get().map_err(|_| {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
         })?;
         conn.query_row("SELECT filename FROM documents WHERE id = ?1", params![doc_id], |r| r.get(0)).ok()

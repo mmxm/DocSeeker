@@ -10,6 +10,7 @@ import init, {
   build_doc_search_sql_wasm,
   calculate_crop_bounds_wasm,
   find_occurrences_wasm,
+  batch_find_and_process_doc_occurrences_wasm,
   process_search_results_wasm,
   get_shared_constants_wasm,
 } from "../frontend/wasm/search_wasm/search_wasm.js";
@@ -225,6 +226,23 @@ const docSearchJson = build_doc_search_sql_wasm(BigInt(docResults[0].id), "gross
 const docSearchData = JSON.parse(docSearchJson);
 const docMatches = clientDb.prepare(docSearchData.sql).all();
 assert.ok(docMatches.length > 0, "Doit trouver des pages pour ce document");
+
+// Test de traitement en lot Wasm (batch_find_and_process_doc_occurrences_wasm)
+const batchRows = docMatches.map(r => [Number(r.page_number), r.words_json, Number(r.page_bm25) || 0.0]);
+const batchResultJson = batch_find_and_process_doc_occurrences_wasm(
+  JSON.stringify(batchRows),
+  JSON.stringify(docSearchData.terms),
+  docSearchData.query_hash,
+  BigInt(docResults[0].id),
+  842.0,
+  null,
+  null
+);
+const batchResult = JSON.parse(batchResultJson);
+assert.ok(batchResult.total_occurrences > 0, "Le traitement batch Wasm doit trouver des occurrences");
+assert.ok(batchResult.occurrences.length > 0, "Le traitement batch Wasm doit retourner des occurrences");
+console.log(`✅ Traitement batch Wasm intra-document validé : ${batchResult.total_occurrences} occurrence(s) extraite(s) en 1 seul appel.`);
+
 // 10. Test de non-régression & Parité Absolue : 'insuffisance rénale aigue' dans Néphrologie (doc #544)
 console.log("\n--- TEST PARITÉ STRICTE HORS-LIGNE : 'insuffisance rénale aigue' DANS NÉPHROLOGIE (#544) ---");
 const nephroDoc = realDb.prepare("SELECT id, filename, title, file_hash, folder_id, total_pages, file_size, created_at, updated_at FROM documents WHERE id = 544").get();

@@ -5,6 +5,38 @@ use std::path::Path;
 use rusqlite::{Connection, Result};
 use tracing::info;
 
+/// Type alias pour le pool de connexions SQLite r2d2
+pub type DbPool = r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>;
+
+/// Initialisation des PRAGMAs de performance sur chaque connexion du pool
+#[derive(Debug)]
+struct SqlitePragmaCustomizer;
+
+impl r2d2::CustomizeConnection<Connection, rusqlite::Error> for SqlitePragmaCustomizer {
+    fn on_acquire(&self, conn: &mut Connection) -> std::result::Result<(), rusqlite::Error> {
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA mmap_size = 268435456;
+             PRAGMA temp_store = MEMORY;
+             PRAGMA cache_size = -16000;"
+        )?;
+        Ok(())
+    }
+}
+
+/// Crée un pool de connexions SQLite (max 8 connections concurrentes)
+pub fn create_pool(db_path: &Path) -> std::result::Result<DbPool, Box<dyn std::error::Error>> {
+    let manager = r2d2_sqlite::SqliteConnectionManager::file(db_path);
+    let pool = r2d2::Pool::builder()
+        .max_size(8)
+        .min_idle(Some(2))
+        .connection_customizer(Box::new(SqlitePragmaCustomizer))
+        .build(manager)?;
+    Ok(pool)
+}
+
 pub fn open_connection(db_path: &Path) -> Result<Connection> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).ok();

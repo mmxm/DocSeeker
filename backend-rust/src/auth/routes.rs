@@ -125,7 +125,7 @@ pub async fn status_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Json<AuthStatusResponse> {
-    let conn = match state.db.lock() {
+    let conn = match state.db.get() {
         Ok(c) => c,
         Err(_) => {
             return Json(AuthStatusResponse {
@@ -177,7 +177,7 @@ pub async fn login_handler(
         ).into_response();
     }
 
-    let conn = match state.db.lock() {
+    let conn = match state.db.get() {
         Ok(c) => c,
         Err(_) => {
             return (
@@ -258,7 +258,7 @@ pub async fn logout_handler(
     headers: HeaderMap,
 ) -> Response {
     if let Some(token) = extract_session_token(&headers) {
-        if let Ok(conn) = state.db.lock() {
+        if let Ok(conn) = state.db.get() {
             let _ = SessionManager::revoke_session(&conn, &token);
         }
     }
@@ -296,7 +296,7 @@ pub async fn change_password_handler(
         None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Non authentifié"}))).into_response(),
     };
 
-    let conn = match state.db.lock() {
+    let conn = match state.db.get() {
         Ok(c) => c,
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Erreur DB"}))).into_response(),
     };
@@ -351,7 +351,7 @@ pub async fn setup_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<SetupPayload>,
 ) -> Response {
-    let conn = match state.db.lock() {
+    let conn = match state.db.get() {
         Ok(c) => c,
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Erreur DB"}))).into_response(),
     };

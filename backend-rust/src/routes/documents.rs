@@ -55,7 +55,7 @@ pub async fn list_documents(
     State(state): State<Arc<AppState>>,
     Query(query): Query<DocumentListQuery>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let conn = state.db.lock().map_err(|_| {
+    let conn = state.db.get().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
@@ -125,7 +125,7 @@ pub async fn get_document_status(
     State(state): State<Arc<AppState>>,
     Path(doc_id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let conn = state.db.lock().map_err(|_| {
+    let conn = state.db.get().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
@@ -155,7 +155,7 @@ pub async fn update_document(
     Path(doc_id): Path<i64>,
     Json(payload): Json<UpdateDocumentPayload>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let conn = state.db.lock().map_err(|_| {
+    let conn = state.db.get().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
@@ -185,7 +185,7 @@ pub async fn move_document(
     Path(doc_id): Path<i64>,
     Json(payload): Json<MoveDocumentPayload>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let conn = state.db.lock().map_err(|_| {
+    let conn = state.db.get().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
@@ -201,7 +201,7 @@ pub async fn batch_move_documents(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<BatchMovePayload>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let conn = state.db.lock().map_err(|_| {
+    let conn = state.db.get().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
@@ -219,7 +219,7 @@ pub async fn delete_document_handler(
     State(state): State<Arc<AppState>>,
     Path(doc_id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let conn = state.db.lock().map_err(|_| {
+    let conn = state.db.get().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
@@ -236,7 +236,7 @@ pub async fn check_hash(
     State(state): State<Arc<AppState>>,
     Path(file_hash): Path<String>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let conn = state.db.lock().map_err(|_| {
+    let conn = state.db.get().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
@@ -341,7 +341,7 @@ pub async fn upload_document(
 
     // Détection stricte de doublon
     {
-        let conn = state.db.lock().map_err(|_| {
+        let conn = state.db.get().map_err(|_| {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
         })?;
 
@@ -381,7 +381,7 @@ pub async fn upload_document(
 
     // Insertion immédiate en DB en état 'pending' pour retour instantané
     let doc_id = {
-        let conn = state.db.lock().map_err(|_| {
+        let conn = state.db.get().map_err(|_| {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
         })?;
 
@@ -436,7 +436,7 @@ pub async fn sync_documents_handler(
 ) -> Result<Json<serde_json::Value>, Response> {
     let retried = state.pipeline.retry_failed();
     let (added_count, added_files) = {
-        let conn = state.db.lock().map_err(|_| {
+        let conn = state.db.get().map_err(|_| {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
         })?;
         let (added_count, added_files) = scan_and_sync_documents(&conn, &state.pdf_engine, &state.config);
@@ -518,7 +518,7 @@ pub async fn get_offline_bundle(
     State(state): State<Arc<AppState>>,
     Path(doc_id): Path<i64>,
 ) -> Result<Json<OfflineBundleResponse>, Response> {
-    let conn = state.db.lock().map_err(|_| {
+    let conn = state.db.get().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
@@ -584,7 +584,7 @@ pub async fn sync_check_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<SyncCheckPayload>,
 ) -> Result<Json<SyncCheckResponse>, Response> {
-    let conn = state.db.lock().map_err(|_| {
+    let conn = state.db.get().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 

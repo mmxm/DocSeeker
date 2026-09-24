@@ -72,7 +72,7 @@ async fn health_handler(
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
-    let is_db_ok = match state.db.lock() {
+    let is_db_ok = match state.db.get() {
         Ok(conn) => conn.query_row("SELECT 1", [], |_| Ok(())).is_ok(),
         Err(_) => false,
     };

@@ -28,8 +28,13 @@ lazy_static::lazy_static! {
 }
 
 fn setup_test_state() -> (Arc<AppState>, String) {
-    let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    // Utiliser un fichier temporaire pour la base de test (r2d2 requiert un fichier)
+    let tmp_dir = tempfile::tempdir().expect("Impossible de créer un répertoire temporaire");
+    let db_path = tmp_dir.path().join("test.sqlite");
+
+    // Initialiser le schéma via une connexion directe
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;").unwrap();
     conn.execute_batch(&get_full_schema_sql()).unwrap();
 
     // Tables auth
@@ -120,7 +125,17 @@ fn setup_test_state() -> (Arc<AppState>, String) {
         [&words_p2],
     ).unwrap();
 
-    let db = Arc::new(Mutex::new(conn));
+    // Fermer la connexion d'initialisation avant de créer le pool
+    drop(conn);
+
+    // Créer le pool de connexions pour les tests
+    let pool = docseeker_backend::db::create_pool(&db_path).expect("Impossible de créer le pool de test");
+
+    // Pipeline dédié avec sa propre connexion
+    let pipeline_conn = Connection::open(&db_path).unwrap();
+    pipeline_conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;").unwrap();
+    let pipeline_db = Arc::new(Mutex::new(pipeline_conn));
+
     let pdf_engine = Arc::clone(&GLOBAL_PDF_ENGINE);
 
     let config = Config {
@@ -130,27 +145,30 @@ fn setup_test_state() -> (Arc<AppState>, String) {
         documents_dir: std::path::PathBuf::from("data/documents"),
         cache_dir: std::path::PathBuf::from("data/cache_crops"),
         covers_dir: std::path::PathBuf::from("data/cache_crops/covers"),
-        db_path: std::path::PathBuf::from("data/db.sqlite"),
+        db_path: db_path,
         max_upload_size: 10 * 1024 * 1024,
         session_duration_days: 30,
         default_admin_password: Some("testpass123".to_string()),
     };
 
     let pipeline = Arc::new(IndexingPipeline::new(
-        Arc::clone(&db),
+        Arc::clone(&pipeline_db),
         Arc::clone(&pdf_engine),
         config.clone(),
     ));
 
     let state = Arc::new(AppState {
         config,
-        db,
+        db: pool,
         pdf_engine,
         pipeline,
         rate_limiter: Arc::new(LoginRateLimiter::new()),
         crop_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
         crop_in_flight: Arc::new(Mutex::new(std::collections::HashMap::new())),
     });
+
+    // Garder le répertoire temporaire en vie via un leak (éviter la suppression prématurée)
+    std::mem::forget(tmp_dir);
 
     (state, session_token.to_string())
 }

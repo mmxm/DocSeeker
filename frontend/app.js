@@ -1967,30 +1967,26 @@ document.addEventListener("DOMContentLoaded", () => {
     searchInput.focus();
   });
 
-  // Filtre : Titres uniquement
+  // Filtre : Titres uniquement (debounced pour éviter les recherches multiples lors de toggles rapides)
   filterTitlesOnly.addEventListener("change", () => {
     filterTitlesChip.classList.toggle("active", filterTitlesOnly.checked);
-    if (searchInput.value.trim()) {
-      performSearch(searchInput.value.trim());
-    }
+    debouncedFilterSearch();
   });
 
-  // Filtre : Dans ce dossier uniquement
+  // Filtre : Dans ce dossier uniquement (debounced)
   filterCurrentFolderOnly.addEventListener("change", () => {
     filterFolderChip.classList.toggle("active", filterCurrentFolderOnly.checked);
-    if (searchInput.value.trim()) {
-      performSearch(searchInput.value.trim());
-    }
+    debouncedFilterSearch();
   });
 
-  // Filtre : Hors-ligne uniquement
+  // Filtre : Hors-ligne uniquement (debounced)
   if (filterOfflineOnly) {
     filterOfflineOnly.addEventListener("change", () => {
       if (filterOfflineChip) {
         filterOfflineChip.classList.toggle("active", filterOfflineOnly.checked);
       }
       if (searchInput.value.trim()) {
-        performSearch(searchInput.value.trim());
+        debouncedFilterSearch();
       } else {
         loadFoldersAndDocuments();
       }
@@ -4016,7 +4012,21 @@ document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
   // Recherche avec Filtres (Titres & Dossier) et Routage Hors-Ligne
   // =========================================================================
-  async function performSearchRequest(query, isTitlesOnly, isFolderOnly, folderId, limit = 15, offset = 0) {
+  let _searchAbortController = null; // Annulation de la requête de recherche en vol
+  let _filterSearchDebounceTimer = null; // Debounce des changements de filtre
+
+  // Debounce de la recherche déclenchée par un changement de filtre (250ms)
+  function debouncedFilterSearch() {
+    if (_filterSearchDebounceTimer) clearTimeout(_filterSearchDebounceTimer);
+    _filterSearchDebounceTimer = setTimeout(() => {
+      _filterSearchDebounceTimer = null;
+      if (searchInput.value.trim()) {
+        performSearch(searchInput.value.trim());
+      }
+    }, 250);
+  }
+
+  async function performSearchRequest(query, isTitlesOnly, isFolderOnly, folderId, limit = 15, offset = 0, signal = null) {
     const isOffline = !navigator.onLine || (filterOfflineOnly && filterOfflineOnly.checked);
     if (isOffline) {
       if (window.downloadQueueManager) {
@@ -4040,11 +4050,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (isTitlesOnly) url += `&titles_only=true`;
     if (isFolderOnly && folderId !== null) url += `&folder_id=${folderId}`;
 
+    const fetchOptions = signal ? { signal } : {};
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, fetchOptions);
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return await res.json();
     } catch (netErr) {
+      // Propager proprement l'annulation sans fallback inutile
+      if (netErr.name === 'AbortError') throw netErr;
       console.warn("[Search] Échec requête en ligne, bascule automatique sur le moteur local hors-ligne :", netErr);
       if (filterOfflineOnly && !filterOfflineOnly.checked) {
         filterOfflineOnly.checked = true;
@@ -4074,6 +4087,13 @@ document.addEventListener("DOMContentLoaded", () => {
       loadFoldersAndDocuments();
       return;
     }
+
+    // Annuler toute recherche précédente en vol pour éviter les race conditions
+    if (_searchAbortController) {
+      try { _searchAbortController.abort(); } catch (e) {}
+    }
+    _searchAbortController = new AbortController();
+    const signal = _searchAbortController.signal;
 
     currentSearchQuery = query;
     isSearchActive = true;
@@ -4105,7 +4125,9 @@ document.addEventListener("DOMContentLoaded", () => {
     resultsContainer.innerHTML = `<div style="padding: 16px; color: var(--text-muted);">Recherche en cours...</div>`;
 
     try {
-      const data = await performSearchRequest(query, isTitlesOnly, isFolderOnly, currentFolderId, 15, 0);
+      const data = await performSearchRequest(query, isTitlesOnly, isFolderOnly, currentFolderId, 15, 0, signal);
+      // Ignorer le résultat si une nouvelle recherche a été lancée entre-temps
+      if (signal.aborted) return;
       lastSearchResultsData = data;
 
       // Par défaut, mettre le tri sur "Pertinence" lors d'une nouvelle recherche
@@ -4118,6 +4140,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
       renderSearchResults(data);
     } catch (err) {
+      // Ignorer silencieusement les requêtes annulées (nouvelle recherche en cours)
+      if (err.name === 'AbortError') return;
       console.error("Erreur recherche:", err);
       _docCardMap.clear();
       resultsContainer.innerHTML = `<div style="padding: 16px; color: var(--danger);">Erreur lors de la recherche (${escapeHtml(err.message)}).</div>`;
@@ -4759,24 +4783,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
-  // Cache dans le CacheStorage du navigateur pour réouverture instantanée et support hors-ligne
-  async function cacheDocumentPdf(docId) {
-    if (!("caches" in window)) return;
-    try {
-      const cache = await caches.open("docseeker-pdf-v1");
-      const url = `/api/pdf/${docId}`;
-      const match = await cache.match(url);
-      if (!match) {
-        fetch(url).then(res => {
-          if (res.ok) cache.put(url, res.clone());
-        }).catch(() => {});
-      }
-    } catch (e) {
-      console.warn("[CacheStorage]", e);
-    }
-  }
-
-  // =========================================================================
   // Gestionnaire Multi-Onglets Lecteur PDF Goodnotes (tabManager)
   // =========================================================================
   const tabManager = {
@@ -5105,6 +5111,7 @@ document.addEventListener("DOMContentLoaded", () => {
       drawerEl.style.display = isHidden ? "flex" : "none";
       readerSidebarToggleBtn.classList.toggle("active", isHidden);
       if (isHidden) {
+        if (typeof syncInDocDrawerIfNeeded === "function") syncInDocDrawerIfNeeded();
         const tabTerm = getActiveDocSearchTerm();
         if (inDocDrawerSearchInput && !inDocDrawerSearchInput.value && tabTerm) {
           inDocDrawerSearchInput.value = tabTerm;
@@ -5735,6 +5742,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Empreinte du dernier rendu pour éviter un rebuild DOM complet inutile (C2)
   let _lastVerticalRenderHash = '';
+  let _inDocDrawerNeedsSync = false;
+
+  function syncInDocDrawerIfNeeded() {
+    if (_inDocDrawerNeedsSync && inDocDrawerOccurrencesList && docOccurrencesList) {
+      inDocDrawerOccurrencesList.innerHTML = docOccurrencesList.innerHTML;
+      inDocDrawerOccurrencesList.querySelectorAll(".dynamic-crop").forEach(img => verticalCropManager.observe(img));
+      _inDocDrawerNeedsSync = false;
+      const activeCard = inDocDrawerOccurrencesList.querySelector(".vertical-occ-card.active");
+      if (activeCard) scrollActiveCardIntoView(activeCard);
+    }
+  }
 
   function renderVerticalOccurrences(docId, docTitle, occurrences, activePage, activeOccId = null) {
     // Calculer une empreinte légère de la liste pour détecter un render identique
@@ -5754,7 +5772,7 @@ document.addEventListener("DOMContentLoaded", () => {
         card.classList.toggle('active', isActive);
         if (isActive) scrollActiveCardIntoView(card);
       });
-      if (inDocDrawerOccurrencesList) {
+      if (inDocDrawerOccurrencesList && inDocDrawerOccurrencesList.children.length > 0) {
         const drawerCards = inDocDrawerOccurrencesList.querySelectorAll('.vertical-occ-card');
         drawerCards.forEach((card, idx) => {
           const isActive = idx === activeIdx;
@@ -5778,9 +5796,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (!occurrences || occurrences.length === 0) {
-      docOccurrencesList.innerHTML = `<div style="color:var(--text-muted); font-size:12.5px; padding:10px;">Aucun extrait trouvé pour ce terme dans ce document.</div>`;
+      const emptyHtml = `<div style="color:var(--text-muted); font-size:12.5px; padding:10px;">Aucun extrait trouvé pour ce terme dans ce document.</div>`;
+      docOccurrencesList.innerHTML = emptyHtml;
       if (inDocDrawerOccurrencesList) {
-        inDocDrawerOccurrencesList.innerHTML = `<div style="color:var(--text-muted); font-size:12.5px; padding:10px;">Aucun extrait trouvé pour ce terme dans ce document.</div>`;
+        inDocDrawerOccurrencesList.innerHTML = emptyHtml;
       }
       return;
     }
@@ -5804,72 +5823,77 @@ document.addEventListener("DOMContentLoaded", () => {
     // Terme de surbrillance : la recherche intra-doc de l'onglet actif (jamais le global)
     const activeDocSearchTerm = getActiveDocSearchTerm();
 
+    // Construction unique du HTML de toutes les cartes (batch DOM au lieu de N créations/insertions)
+    let cardsHtml = "";
     occurrences.forEach((occ, index) => {
-      const card = document.createElement("div");
       const isActive = (index === activeTargetIndex);
-      card.className = `vertical-occ-card ${isActive ? 'active' : ''}`;
-      card.setAttribute("data-doc-id", docId);
-      card.setAttribute("data-page", occ.page_number);
-      card.setAttribute("data-occ-id", occ.occ_id || '');
-      card.setAttribute("data-rect", JSON.stringify(occ.rect || []));
-      card.setAttribute("data-hl-rects", JSON.stringify(occ.highlight_rects || (occ.rect ? [occ.rect] : [])));
+      const rectAttr = escapeHtml(JSON.stringify(occ.rect || []));
+      const hlRectAttr = escapeHtml(JSON.stringify(occ.highlight_rects || (occ.rect ? [occ.rect] : [])));
+      const snippet = activeDocSearchTerm ? highlightTitle(occ.text_snippet || '', activeDocSearchTerm) : escapeHtml(occ.text_snippet || '');
 
-      card.innerHTML = `
-        <div class="vertical-occ-img-wrapper">
-          <img src="${placeholderSvg}" data-src="${occ.crop_url}" class="vertical-occ-img dynamic-crop" alt="Extrait p. ${occ.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
-        </div>
-        <div class="vertical-occ-footer">
-          <span class="vertical-occ-page">Page ${occ.page_number}</span>
-          <span class="vertical-occ-snippet" title="${escapeHtml(occ.text_snippet || '')}">${activeDocSearchTerm ? highlightTitle(occ.text_snippet || '', activeDocSearchTerm) : escapeHtml(occ.text_snippet || '')}</span>
-        </div>
-      `;
-
-      card.addEventListener("click", () => {
-        document.querySelectorAll(".vertical-occ-card.active").forEach(el => el.classList.remove("active"));
-        card.classList.add("active");
-        currentActiveOccurrenceIndex = index;
-        updateOccurrenceStepperUI();
-        viewerPageBadge.textContent = `Page ${occ.page_number}`;
-        const targetRect = (occ.highlight_rects && occ.highlight_rects.length > 0) ? occ.highlight_rects[0] : occ.rect;
-        goToPageAndScrollToOccurrence(occ.page_number, targetRect, occ.y_ratio);
-      });
-
-      docOccurrencesList.appendChild(card);
-      const img = card.querySelector(".dynamic-crop");
-      if (img) verticalCropManager.observe(img);
-
-      if (inDocDrawerOccurrencesList) {
-        const drawerCard = document.createElement("div");
-        drawerCard.className = `vertical-occ-card ${isActive ? 'active' : ''}`;
-        drawerCard.setAttribute("data-doc-id", docId);
-        drawerCard.setAttribute("data-page", occ.page_number);
-        drawerCard.setAttribute("data-occ-id", occ.occ_id || '');
-        drawerCard.setAttribute("data-rect", JSON.stringify(occ.rect || []));
-        drawerCard.setAttribute("data-hl-rects", JSON.stringify(occ.highlight_rects || (occ.rect ? [occ.rect] : [])));
-        drawerCard.setAttribute("data-yratio", occ.y_ratio || 0);
-        drawerCard.innerHTML = `
+      cardsHtml += `
+        <div class="vertical-occ-card ${isActive ? 'active' : ''}"
+             data-index="${index}"
+             data-doc-id="${docId}"
+             data-page="${occ.page_number}"
+             data-occ-id="${escapeHtml(String(occ.occ_id || ''))}"
+             data-rect="${rectAttr}"
+             data-hl-rects="${hlRectAttr}"
+             data-yratio="${occ.y_ratio || 0}">
           <div class="vertical-occ-img-wrapper">
-            <img src="${placeholderSvg}" data-src="${occ.crop_url}" class="vertical-occ-img dynamic-crop" alt="Extrait p. ${occ.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
+            <img src="${placeholderSvg}" data-src="${escapeHtml(occ.crop_url || '')}" class="vertical-occ-img dynamic-crop" alt="Extrait p. ${occ.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
           </div>
           <div class="vertical-occ-footer">
             <span class="vertical-occ-page">Page ${occ.page_number}</span>
-            <span class="vertical-occ-snippet" title="${escapeHtml(occ.text_snippet || '')}">${activeDocSearchTerm ? highlightTitle(occ.text_snippet || '', activeDocSearchTerm) : escapeHtml(occ.text_snippet || '')}</span>
+            <span class="vertical-occ-snippet" title="${escapeHtml(occ.text_snippet || '')}">${snippet}</span>
           </div>
-        `;
-        drawerCard.addEventListener("click", () => {
-          jumpToOccurrenceByIndex(index);
-        });
-        inDocDrawerOccurrencesList.appendChild(drawerCard);
-        const drawerImg = drawerCard.querySelector(".dynamic-crop");
-        if (drawerImg) verticalCropManager.observe(drawerImg);
-      }
+        </div>
+      `;
     });
+
+    docOccurrencesList.innerHTML = cardsHtml;
+    docOccurrencesList.querySelectorAll(".dynamic-crop").forEach(img => verticalCropManager.observe(img));
+
+    // Délégation d'événement click unique pour la liste principale
+    if (!docOccurrencesList._hasDelegatedListener) {
+      docOccurrencesList._hasDelegatedListener = true;
+      docOccurrencesList.addEventListener("click", (e) => {
+        const card = e.target.closest(".vertical-occ-card");
+        if (!card) return;
+        const index = parseInt(card.dataset.index, 10);
+        if (!isNaN(index)) jumpToOccurrenceByIndex(index);
+      });
+    }
+
+    // Optimisation : rendu paresseux du tiroir (évite duplication 2x du DOM et requêtes crops inutiles quand fermé)
+    const isDrawerOpen = inDocSearchDrawer && inDocSearchDrawer.style.display === "flex";
+    if (inDocDrawerOccurrencesList) {
+      // Délégation d'événement click unique pour le tiroir
+      if (!inDocDrawerOccurrencesList._hasDelegatedListener) {
+        inDocDrawerOccurrencesList._hasDelegatedListener = true;
+        inDocDrawerOccurrencesList.addEventListener("click", (e) => {
+          const card = e.target.closest(".vertical-occ-card");
+          if (!card) return;
+          const index = parseInt(card.dataset.index, 10);
+          if (!isNaN(index)) jumpToOccurrenceByIndex(index);
+        });
+      }
+
+      if (isDrawerOpen) {
+        inDocDrawerOccurrencesList.innerHTML = cardsHtml;
+        inDocDrawerOccurrencesList.querySelectorAll(".dynamic-crop").forEach(img => verticalCropManager.observe(img));
+        _inDocDrawerNeedsSync = false;
+      } else {
+        inDocDrawerOccurrencesList.innerHTML = "";
+        _inDocDrawerNeedsSync = true;
+      }
+    }
 
     const activeCard = docOccurrencesList.querySelector(".vertical-occ-card.active");
     if (activeCard) {
       scrollActiveCardIntoView(activeCard);
     }
-    if (inDocDrawerOccurrencesList) {
+    if (inDocDrawerOccurrencesList && isDrawerOpen) {
       const activeDrawerCard = inDocDrawerOccurrencesList.querySelector(".vertical-occ-card.active");
       if (activeDrawerCard) {
         scrollActiveCardIntoView(activeDrawerCard);
