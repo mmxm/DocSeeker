@@ -85,12 +85,8 @@ test.describe('Matrice de Résistance Agressive & Garde-fous Performance / RAM',
 
       // Attendre la complétion pour le document léger, ou nettoyer le document massif
       if (tc.doc.id === ARCHETYPES.LIGHT.id) {
-        const isCached = await cacheBtn.evaluate(el => el.classList.contains('cached'));
-        if (!isCached) {
-          const isDownloading = await cacheBtn.evaluate(el => el.classList.contains('downloading'));
-          if (!isDownloading) await cacheBtn.click();
-        }
-        await expect(cacheBtn).toHaveClass(/cached/, { timeout: 15000 });
+        await harness.downloadDocToComplete(tc.doc.id, 20000);
+        await expect(cacheBtn).toHaveClass(/cached/, { timeout: 10000 });
       } else {
         await harness.cleanDocCache(tc.doc.id);
       }

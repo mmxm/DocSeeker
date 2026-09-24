@@ -42,7 +42,6 @@ test.describe('Matrice M - Mobile & PWA', () => {
   });
 
   test.afterEach(async () => {
-    test.setTimeout(60000);
     const closeBtn = h.page.locator('#closeViewerBtn');
     if (await closeBtn.isVisible().catch(() => false)) {
       await closeBtn.click().catch(() => {});
