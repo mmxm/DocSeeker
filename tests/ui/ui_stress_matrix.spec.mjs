@@ -295,8 +295,9 @@ test.describe('Matrice de Résistance Agressive & Garde-fous Performance / RAM',
 
     // 2. Ouvrir le document en Split View
     const card = await harness.getDocCard(doc.id);
-    // (.doc-cover-wrapper n'existe plus : le diff redesign a remplacé la couverture par les vignettes)
-    const coverEl = card.locator('.vignette-item').first();
+    const coverEl = (await card.locator('.vignette-item').count() > 0)
+      ? card.locator('.vignette-item').first()
+      : card.locator('.doc-title-main, .doc-info').first();
     await coverEl.click();
 
     const viewerPane = page.locator('#viewerPane');
@@ -916,13 +917,13 @@ test.describe('Matrice de Résistance Agressive & Garde-fous Performance / RAM',
 
         // F. Recherche interne au sein du document ouvert
         const internalQuery = (cycle % 2 === 0) ? 'femme' : 'foetus';
-        const docSearchInput = page.locator('#docSearchInput');
+        const docSearchInput = page.locator('#inDocDrawerSearchInput');
         await docSearchInput.fill(internalQuery);
         await docSearchInput.press('Enter');
         await page.waitForTimeout(600);
 
         // Vérifier que le badge de décompte interne s'actualise
-        const countBadge = page.locator('#docDetailCount');
+        const countBadge = page.locator('#inDocDrawerCount');
         await expect(countBadge).toBeVisible({ timeout: 6000 });
         const countText = await countBadge.textContent();
         expect(countText).toContain('résultat');
