@@ -41,7 +41,7 @@ pub async fn list_folders(
     State(state): State<Arc<AppState>>,
     Query(query): Query<FolderListQuery>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let conn = state.db.lock().map_err(|_| {
+    let conn = state.db.get().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
@@ -106,7 +106,7 @@ pub async fn create_folder(
         return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Le nom du dossier ne peut pas être vide"}))).into_response());
     }
 
-    let conn = state.db.lock().map_err(|_| {
+    let conn = state.db.get().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
@@ -131,7 +131,7 @@ pub async fn update_folder(
     Path(folder_id): Path<i64>,
     Json(payload): Json<UpdateFolderPayload>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let conn = state.db.lock().map_err(|_| {
+    let conn = state.db.get().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
@@ -156,7 +156,7 @@ pub async fn delete_folder(
     State(state): State<Arc<AppState>>,
     Path(folder_id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let conn = state.db.lock().map_err(|_| {
+    let conn = state.db.get().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 

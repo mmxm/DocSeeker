@@ -36,7 +36,7 @@ pub async fn search_handler(
     let offset = params.offset.unwrap_or(0);
 
     let search_res = {
-        let conn = state.db.lock().map_err(|_| {
+        let conn = state.db.get().map_err(|_| {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
         })?;
 
@@ -53,7 +53,7 @@ pub async fn doc_search_handler(
 ) -> Result<Json<serde_json::Value>, Response> {
     let query_str = params.q.unwrap_or_default();
 
-    let conn = state.db.lock().map_err(|_| {
+    let conn = state.db.get().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 

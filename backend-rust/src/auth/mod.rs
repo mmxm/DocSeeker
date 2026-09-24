@@ -34,7 +34,7 @@ pub async fn require_auth_middleware(
         }
     };
 
-    let is_valid = match state.db.lock() {
+    let is_valid = match state.db.get() {
         Ok(conn) => SessionManager::validate_session(&conn, &token).unwrap_or(false),
         Err(_) => false,
     };

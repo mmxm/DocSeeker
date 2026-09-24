@@ -179,20 +179,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::error!("Erreur lors de db::init_db : {:?}", e);
         return Err(e.into());
     }
-    info!("Étape 2 : Ouverture de la connexion SQLite...");
-    let conn = match db::open_connection(&config.db_path) {
-        Ok(c) => c,
+
+    // Étape 2 : Création du pool de connexions (WAL mode, 8 connexions max)
+    info!("Étape 2 : Création du pool de connexions SQLite (r2d2, max 8)...");
+    let pool = match db::create_pool(&config.db_path) {
+        Ok(p) => p,
         Err(e) => {
-            tracing::error!("Erreur lors de db::open_connection : {:?}", e);
-            return Err(e.into());
+            tracing::error!("Erreur lors de db::create_pool : {:?}", e);
+            return Err(e);
         }
     };
-    let _ = crate::auth::session::SessionManager::purge_expired_sessions(&conn);
-    let db = Arc::new(Mutex::new(conn));
+
+    // Purge des sessions expirées au démarrage
+    {
+        let conn = pool.get().expect("Impossible d'obtenir une connexion pour la purge des sessions");
+        let _ = crate::auth::session::SessionManager::purge_expired_sessions(&conn);
+    }
 
     // Initialisation ou synchronisation automatique du compte administrateur
     {
-        let conn = db.lock().unwrap();
+        let conn = pool.get().expect("Impossible d'obtenir une connexion pour l'init admin");
         let current_hash: Option<String> = conn
             .query_row("SELECT password_hash FROM admin_credentials WHERE id = 1", [], |r| r.get(0))
             .ok();
@@ -226,9 +232,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialisation du moteur PDF (Pdfium)
     let pdf_engine = Arc::new(PdfEngine::new().expect("Échec initialisation PdfEngine"));
 
+    // Connexion dédiée pour le pipeline d'indexation (écriture intensive en arrière-plan)
+    let pipeline_conn = db::open_connection(&config.db_path)?;
+    let pipeline_db = Arc::new(Mutex::new(pipeline_conn));
+
     // Initialisation du pipeline d'indexation asynchrone
     let pipeline = Arc::new(IndexingPipeline::new(
-        Arc::clone(&db),
+        Arc::clone(&pipeline_db),
         Arc::clone(&pdf_engine),
         config.clone(),
     ));
@@ -243,7 +253,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = Arc::new(AppState {
         config: config.clone(),
-        db,
+        db: pool,
         pdf_engine,
         pipeline,
         rate_limiter,
@@ -253,11 +263,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Synchronisation initiale des fichiers PDF en tâche de fond (démarrage serveur immédiat sans bloquer le healthcheck)
     {
-        let bg_db = Arc::clone(&state.db);
+        let bg_pool = state.db.clone();
         let bg_engine = Arc::clone(&state.pdf_engine);
         let bg_config = state.config.clone();
         tokio::task::spawn_blocking(move || {
-            if let Ok(conn) = bg_db.lock() {
+            if let Ok(conn) = bg_pool.get() {
                 let (added, files) = scan_and_sync_documents(&conn, &bg_engine, &bg_config);
                 if added > 0 {
                     info!("[DocSeeker] {} document(s) synchronisé(s) en tâche de fond : {:?}", added, files);
