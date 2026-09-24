@@ -74,7 +74,7 @@ class PdfCacheManager {
     if (this.progressCache.has(id)) {
       try {
         callback(this.progressCache.get(id));
-      } catch (e) {}
+      } catch (e) { }
     }
   }
 
@@ -121,7 +121,7 @@ class PdfCacheManager {
           updatedAt: Date.now()
         }, normUrl);
       };
-    } catch (e) {}
+    } catch (e) { }
   }
 
   /**
@@ -178,7 +178,7 @@ class PdfCacheManager {
             } else {
               const totalBytes = meta?.totalBytes || 0;
               const isTrulyComplete = totalBytes > 0 && downloadedBytes >= totalBytes;
-              const progress = totalBytes > 0 
+              const progress = totalBytes > 0
                 ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100))
                 : (isTrulyComplete ? 100 : 0);
               const isTaskActive = Boolean(typeof window !== "undefined" && window.downloadQueueManager && window.downloadQueueManager.activeTasks.has(id));
@@ -270,7 +270,7 @@ class PdfCacheManager {
     if (stats) {
       const bestTot = tot > 0 ? tot : (stats.totalBytes || 0);
       const isComplete = bestTot > 0 && stats.downloadedBytes >= bestTot;
-      const progress = bestTot > 0 
+      const progress = bestTot > 0
         ? Math.min(100, Math.round((stats.downloadedBytes / bestTot) * 100))
         : (isComplete ? 100 : 0);
       const status = isComplete ? "complete" : (stats.downloadedBytes > 0 ? "downloading" : "none");
@@ -509,7 +509,7 @@ class PdfCacheManager {
       const tx = db.transaction([DOCSEEKER_CHUNK_STORE, DOCSEEKER_META_STORE], "readwrite");
       tx.objectStore(DOCSEEKER_CHUNK_STORE).clear();
       tx.objectStore(DOCSEEKER_META_STORE).clear();
-    } catch (e) {}
+    } catch (e) { }
   }
 }
 

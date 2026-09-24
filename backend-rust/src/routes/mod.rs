@@ -59,7 +59,7 @@ pub fn create_api_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         // Média & Streaming
         .route("/cover/:doc_id", get(media::get_cover))
         .route("/crop/:doc_id/:page/:occ_id", get(media::get_crop))
-        .route("/pdf/:doc_id", get(media::get_pdf))
+        .route("/pdf/:doc_id", get(media::get_pdf).head(media::get_pdf))
         // Annotations
         .route("/documents/:id/annotations", get(annotations::get_annotations).post(annotations::save_annotations))
         .route("/documents/:id/save-pdf", post(annotations::save_pdf))

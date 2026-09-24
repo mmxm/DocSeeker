@@ -103,7 +103,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     initWorker() {
       if (this.worker) {
-        try { this.worker.terminate(); } catch (e) {}
+        try { this.worker.terminate(); } catch (e) { }
       }
       this.callbacks.clear();
       if (typeof Worker !== 'undefined') {
@@ -172,7 +172,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const blob = await cached.blob();
             if (blob && blob.size > 0) return blob;
           }
-        } catch (e) {}
+        } catch (e) { }
       }
 
       if (!this.worker) return null;
@@ -200,7 +200,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
           });
           await cache.put(cropCacheKey, response);
-        } catch (e) {}
+        } catch (e) { }
       }
       return blob;
     }
@@ -468,7 +468,7 @@ document.addEventListener("DOMContentLoaded", () => {
               if (this.inFlightFetches.has(img)) {
                 img._wasCancelled = true;
                 const ctrl = this.inFlightFetches.get(img);
-                try { ctrl.abort(); } catch (_) {}
+                try { ctrl.abort(); } catch (_) { }
                 this.inFlightFetches.delete(img);
                 img.dataset.loaded = "false";
               }
@@ -504,7 +504,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (this.inFlightFetches && this.inFlightFetches.has(img)) {
         img._wasCancelled = true;
         const ctrl = this.inFlightFetches.get(img);
-        try { ctrl.abort(); } catch (_) {}
+        try { ctrl.abort(); } catch (_) { }
         this.inFlightFetches.delete(img);
       }
       if (img.dataset.loaded !== "true") {
@@ -538,12 +538,12 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       const snippetRaw = vEl.getAttribute('data-snippet');
       let snippet = '';
-      try { snippet = snippetRaw ? decodeURIComponent(snippetRaw) : ''; } catch (_) {}
+      try { snippet = snippetRaw ? decodeURIComponent(snippetRaw) : ''; } catch (_) { }
       if (snippet) {
         const fallbackDiv = document.createElement('div');
         fallbackDiv.className = 'vignette-snippet-fallback';
-        const highlightedText = (typeof currentSearchQuery !== 'undefined' && currentSearchQuery) 
-          ? highlightTitle(snippet, currentSearchQuery) 
+        const highlightedText = (typeof currentSearchQuery !== 'undefined' && currentSearchQuery)
+          ? highlightTitle(snippet, currentSearchQuery)
           : escapeHtml(snippet);
         fallbackDiv.innerHTML = `<div class="vignette-snippet-text">${highlightedText}</div>`;
         const badge = vEl.querySelector('.vignette-page-badge');
@@ -581,8 +581,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const pageNum = Number(vEl.dataset.page);
             let rect = [];
             let hlRects = [];
-            try { rect = JSON.parse(vEl.dataset.rect || '[]'); } catch (e) {}
-            try { hlRects = JSON.parse(vEl.dataset.hlRects || '[]'); } catch (e) {}
+            try { rect = JSON.parse(vEl.dataset.rect || '[]'); } catch (e) { }
+            try { hlRects = JSON.parse(vEl.dataset.hlRects || '[]'); } catch (e) { }
             if (!hlRects || hlRects.length === 0) {
               if (rect && rect.length === 4) hlRects = [rect];
             }
@@ -608,10 +608,10 @@ document.addEventListener("DOMContentLoaded", () => {
                   img.dataset.loaded = "true";
                   img.style.display = "block";
                   img.style.opacity = "1";
-                  try { this.observer.unobserve(img); } catch (e) {}
+                  try { this.observer.unobserve(img); } catch (e) { }
                 } else {
                   this.applySnippetFallback(img, vEl);
-                  try { this.observer.unobserve(img); } catch (e) {}
+                  try { this.observer.unobserve(img); } catch (e) { }
                 }
               }).catch(err => {
                 img._cropReqId = null;
@@ -624,7 +624,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   console.warn('[DynamicCropManager] offlineCropRenderer error:', err);
                 }
                 this.applySnippetFallback(img, vEl);
-                try { this.observer.unobserve(img); } catch (e) {}
+                try { this.observer.unobserve(img); } catch (e) { }
               });
               return true;
             }
@@ -663,7 +663,7 @@ document.addEventListener("DOMContentLoaded", () => {
           img.src = blobUrl;
           img.dataset.loaded = "true";
           img.style.opacity = "1";
-          try { this.observer.unobserve(img); } catch (e) {}
+          try { this.observer.unobserve(img); } catch (e) { }
         })
         .catch(err => {
           this.inFlightFetches.delete(img);
@@ -677,7 +677,7 @@ document.addEventListener("DOMContentLoaded", () => {
           const vEl = img.closest('.vignette-item') || img.closest('.vertical-occ-card');
           if (isOfflineMode && vEl) {
             this.applySnippetFallback(img, vEl);
-            try { this.observer.unobserve(img); } catch (e) {}
+            try { this.observer.unobserve(img); } catch (e) { }
             return;
           }
 
@@ -689,7 +689,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }, 500);
           } else if (vEl) {
             this.applySnippetFallback(img, vEl);
-            try { this.observer.unobserve(img); } catch (e) {}
+            try { this.observer.unobserve(img); } catch (e) { }
           }
         });
     }
@@ -701,13 +701,13 @@ document.addEventListener("DOMContentLoaded", () => {
       this.pendingDebounce.clear();
       if (this.inFlightFetches) {
         for (const [, ctrl] of this.inFlightFetches.entries()) {
-          try { ctrl.abort(); } catch (e) {}
+          try { ctrl.abort(); } catch (e) { }
         }
         this.inFlightFetches.clear();
       }
       // Révoquer toutes les blob: URLs de la session précédente pour libérer la mémoire
       for (const url of this._blobUrls) {
-        try { URL.revokeObjectURL(url); } catch (e) {}
+        try { URL.revokeObjectURL(url); } catch (e) { }
       }
       this._blobUrls.clear();
       if (window.offlineCropRenderer) {
@@ -759,8 +759,8 @@ document.addEventListener("DOMContentLoaded", () => {
         if (pipelineStatusBadge) {
           pipelineStatusBadge.style.display = "inline-flex";
           if (pipelineStatusText) {
-            pipelineStatusText.textContent = remaining > 1 
-              ? `Indexation : ${remaining} restants...` 
+            pipelineStatusText.textContent = remaining > 1
+              ? `Indexation : ${remaining} restants...`
               : (data.current_job ? `Indexation de ${data.current_job.title || data.current_job.filename}...` : "Indexation...");
           }
         }
@@ -1194,7 +1194,7 @@ document.addEventListener("DOMContentLoaded", () => {
         localStorage.removeItem(PERSIST_TABS_KEY);
         localStorage.removeItem(PERSIST_SNAPSHOT_KEY);
       }
-    } catch (e) {}
+    } catch (e) { }
   }
 
   function serializeOpenTabs() {
@@ -1261,7 +1261,7 @@ document.addEventListener("DOMContentLoaded", () => {
           if (Number.isInteger(tab.activeOccurrenceIndex) && tab.activeOccurrenceIndex > 0) {
             setTimeout(() => jumpToOccurrenceByIndex(tab.activeOccurrenceIndex), 120);
           }
-        }).catch(() => {});
+        }).catch(() => { });
       }
     }
 
@@ -1273,7 +1273,7 @@ document.addEventListener("DOMContentLoaded", () => {
           const win = pdfFrame?.contentWindow;
           const container = win?.document?.getElementById("viewerContainer");
           if (container) container.scrollTop = scrollTarget;
-        } catch (e) {}
+        } catch (e) { }
       }, 250);
     }
 
@@ -1613,7 +1613,7 @@ document.addEventListener("DOMContentLoaded", () => {
         btn.addEventListener("click", async () => {
           const sessId = btn.getAttribute("data-session-id");
           const isCurr = btn.getAttribute("data-is-current") === "true";
-          const confirmMsg = isCurr 
+          const confirmMsg = isCurr
             ? "Voulez-vous déconnecter cette session courante ? Vous devrez vous reconnecter."
             : "Voulez-vous déconnecter cet appareil ?";
           if (!confirm(confirmMsg)) return;
@@ -1724,9 +1724,9 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
           if (window.pdfCacheManager) await window.pdfCacheManager.clearAll();
           if (typeof caches !== 'undefined') {
-            await caches.delete('docseeker_covers').catch(() => {});
-            await caches.delete('docseeker_offline_crops').catch(() => {});
-            await caches.delete('docseeker-pdf-v1').catch(() => {});
+            await caches.delete('docseeker_covers').catch(() => { });
+            await caches.delete('docseeker_offline_crops').catch(() => { });
+            await caches.delete('docseeker-pdf-v1').catch(() => { });
           }
           if (window.downloadQueueManager) {
             window.downloadQueueManager.reinitializeWorker();
@@ -1788,7 +1788,7 @@ document.addEventListener("DOMContentLoaded", () => {
       console.log('[Auth] Mode hors-ligne actif avec session locale valide');
       hideLoginModal();
       loadFoldersAndDocuments();
-      restorePersistedTabs().catch(() => {});
+      restorePersistedTabs().catch(() => { });
       return;
     }
 
@@ -1804,20 +1804,20 @@ document.addEventListener("DOMContentLoaded", () => {
           localStorage.setItem('docseeker_session_valid_until', String(Date.now() + 30 * 24 * 3600 * 1000));
           hideLoginModal();
           loadFoldersAndDocuments();
-          restorePersistedTabs().catch(() => {});
+          restorePersistedTabs().catch(() => { });
           return;
         }
       } else if (res.status === 503 && isLocallyValid) {
         console.log('[Auth] Réseau indisponible (503 Service Worker) : session locale valide acceptée');
         hideLoginModal();
         loadFoldersAndDocuments();
-        restorePersistedTabs().catch(() => {});
+        restorePersistedTabs().catch(() => { });
         return;
       }
       if ((!navigator.onLine || res.status === 503) && isLocallyValid) {
         hideLoginModal();
         loadFoldersAndDocuments();
-        restorePersistedTabs().catch(() => {});
+        restorePersistedTabs().catch(() => { });
         return;
       }
       showLoginModal();
@@ -1825,7 +1825,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (isLocallyValid) {
         hideLoginModal();
         loadFoldersAndDocuments();
-        restorePersistedTabs().catch(() => {});
+        restorePersistedTabs().catch(() => { });
         return;
       }
       showLoginModal();
@@ -1887,7 +1887,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!confirm("Voulez-vous vraiment vous déconnecter ?")) return;
       try {
         await fetch(cleanOrigin() + "/api/auth/logout", { method: "POST" });
-      } catch (_) {}
+      } catch (_) { }
       currentSessionToken = null;
       localStorage.removeItem('docseeker_session_token');
       showToast("Vous avez été déconnecté", "info");
@@ -1907,7 +1907,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function showToast(message, type = "info", duration = 3500) {
     const toast = document.createElement("div");
     toast.className = `toast toast-${type}`;
-    
+
     let iconSvg = '';
     if (type === 'success') {
       iconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
@@ -2060,7 +2060,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const delOpts = { method: "DELETE" };
       for (const id of idsToDelete) {
         await apiFetch(`/api/documents/${id}`, delOpts);
-        if (window.pdfCacheManager) window.pdfCacheManager.invalidate(id).catch(() => {});
+        if (window.pdfCacheManager) window.pdfCacheManager.invalidate(id).catch(() => { });
       }
       showToast(`${count} document(s) supprimé(s).`, "info");
       clearFolderDocsCache();
@@ -2384,9 +2384,9 @@ document.addEventListener("DOMContentLoaded", () => {
       if (pdfFrame && pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
         pdfFrame.contentWindow.PDFViewerApplication.close();
       }
-    } catch (e) {}
+    } catch (e) { }
     if (window._currentPdfBlobUrl) {
-      try { URL.revokeObjectURL(window._currentPdfBlobUrl); } catch (e) {}
+      try { URL.revokeObjectURL(window._currentPdfBlobUrl); } catch (e) { }
       window._currentPdfBlobUrl = null;
     }
     currentActiveDocId = null;
@@ -2570,7 +2570,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (win && win.PDFViewerApplication && typeof win.PDFViewerApplication.page === "number" && win.PDFViewerApplication.page > 0) {
         return win.PDFViewerApplication.page;
       }
-    } catch (e) {}
+    } catch (e) { }
 
     if (viewerPageBadge) {
       const m = viewerPageBadge.textContent.match(/\d+/);
@@ -2974,7 +2974,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const item = document.createElement("span");
       item.className = `breadcrumb-item ${isLast ? 'active' : ''}`;
       item.setAttribute("data-folder-id", crumb.id === null ? "root" : crumb.id);
-      
+
       if (index === 0) {
         item.title = "Racine de la bibliothèque";
         item.setAttribute("aria-label", "Racine de la bibliothèque");
@@ -3023,7 +3023,7 @@ document.addEventListener("DOMContentLoaded", () => {
         let docIds = [];
         const jsonPayload = e.dataTransfer.getData("application/json");
         if (jsonPayload) {
-          try { docIds = JSON.parse(jsonPayload); } catch (err) {}
+          try { docIds = JSON.parse(jsonPayload); } catch (err) { }
         }
         if (!docIds || docIds.length === 0) {
           const plainId = e.dataTransfer.getData("text/plain");
@@ -3199,7 +3199,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // Si complètement hors-ligne réseau : initialiser et charger directement depuis SQLite-Wasm local
       if (!navigator.onLine) {
         if (window.downloadQueueManager) {
-          await window.downloadQueueManager.ensureInitialized(1500).catch(() => {});
+          await window.downloadQueueManager.ensureInitialized(1500).catch(() => { });
         }
         let cachedDocs = [];
         let cachedFolders = [];
@@ -3273,7 +3273,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         renderFolders(currentFolders);
         if (window.downloadQueueManager) {
-          window.downloadQueueManager.syncFolders(allFolders).catch(() => {});
+          window.downloadQueueManager.syncFolders(allFolders).catch(() => { });
         }
       }
 
@@ -3291,7 +3291,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // Synchronisation locale asynchrone non-bloquante
       if (window.downloadQueueManager && fetchedDocs.length > 0) {
-        window.downloadQueueManager.syncDocFolders(fetchedDocs).catch(() => {});
+        window.downloadQueueManager.syncDocFolders(fetchedDocs).catch(() => { });
       }
       // Miroir complet de la bibliothèque (dossiers + méta de TOUS les docs,
       // y compris ceux des autres dossiers) : une seule requête par session,
@@ -3308,7 +3308,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (Array.isArray(allDocsRes?.documents)) {
               await window.downloadQueueManager.syncLibraryMeta(allDocsRes.documents, mirrorFolders);
             }
-          } catch (e) {}
+          } catch (e) { }
         })();
       }
 
@@ -3511,7 +3511,7 @@ document.addEventListener("DOMContentLoaded", () => {
         let docIds = [];
         const jsonPayload = e.dataTransfer.getData("application/json");
         if (jsonPayload) {
-          try { docIds = JSON.parse(jsonPayload); } catch (err) {}
+          try { docIds = JSON.parse(jsonPayload); } catch (err) { }
         }
         if (!docIds || docIds.length === 0) {
           const plainId = e.dataTransfer.getData("text/plain");
@@ -3788,8 +3788,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const query = (isSearch && currentSearchQuery && currentSearchQuery.trim())
       ? currentSearchQuery.trim()
       : (searchInput ? searchInput.value.trim() : "");
-    const displayTitle = (isSearch && query) 
-      ? highlightTitle(doc.title, query) 
+    const displayTitle = (isSearch && query)
+      ? highlightTitle(doc.title, query)
       : escapeHtml(doc.title);
 
     if (!isSearch) {
@@ -3992,7 +3992,7 @@ document.addEventListener("DOMContentLoaded", () => {
           if (now - lastCacheActionTime < 60) {
             return;
           }
-          await window.downloadQueueManager.ensureInitialized(1500).catch(() => {});
+          await window.downloadQueueManager.ensureInitialized(1500).catch(() => { });
           const isCurrentlyCached = window.downloadQueueManager.isDocumentCached(numericId);
           const isTaskActive = window.downloadQueueManager.activeTasks.has(numericId);
           const isTaskQueued = window.downloadQueueManager.queue.includes(numericId);
@@ -4086,7 +4086,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const yRatio = parseFloat(vEl.getAttribute("data-yratio") || 0);
         const occId = vEl.getAttribute("data-occ");
         let rect = null;
-        try { rect = JSON.parse(vEl.getAttribute("data-rect") || "[]"); } catch(e) {}
+        try { rect = JSON.parse(vEl.getAttribute("data-rect") || "[]"); } catch (e) { }
         // Héritage EXPLICITE de la recherche globale au moment du clic (vignette de résultat)
         openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], rect, yRatio, occId, currentSearchQuery || null);
       });
@@ -4306,7 +4306,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Annuler toute recherche précédente en vol pour éviter les race conditions
     if (_searchAbortController) {
-      try { _searchAbortController.abort(); } catch (e) {}
+      try { _searchAbortController.abort(); } catch (e) { }
     }
     _searchAbortController = new AbortController();
     const signal = _searchAbortController.signal;
@@ -4494,7 +4494,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch(`/api/documents/${docId}/reindex`, { method: "POST" });
       if (!res.ok) throw new Error("Échec de la réindexation");
       showToast(`"${docTitle}" relancé avec succès ! Indexation en cours...`, "success");
-      
+
       if (currentSearchQuery) {
         performSearch(currentSearchQuery);
       } else {
@@ -4531,7 +4531,7 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const res = await fetch("/api/sync", { method: "POST" });
       const data = await res.json();
-      
+
       const totalProcessed = (data.added || 0) + (data.retried || 0);
       if (totalProcessed > 0) {
         const parts = [];
@@ -4810,7 +4810,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const isCurrent = (currentCommonFolderId === f.id);
       const item = document.createElement("label");
       item.className = `folder-select-item ${isCurrent ? 'disabled' : ''}`;
-      
+
       const depth = (f.fullPath.match(/\//g) || []).length;
       const indentPx = depth * 16;
 
@@ -5020,7 +5020,7 @@ document.addEventListener("DOMContentLoaded", () => {
           currentTab.scrollTop = container.scrollTop;
           currentTab.scrollLeft = container.scrollLeft;
         }
-      } catch (e) {}
+      } catch (e) { }
       if (currentActiveOccurrences && currentActiveOccurrences[currentActiveOccurrenceIndex]) {
         const activeOcc = currentActiveOccurrences[currentActiveOccurrenceIndex];
         currentTab.page = activeOcc.page_number;
@@ -5163,7 +5163,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (win && win.PDFViewerApplication && typeof win.PDFViewerApplication.close === 'function') {
           win.PDFViewerApplication.close();
         }
-      } catch (e) {}
+      } catch (e) { }
 
       this.saveCurrentTabState();
       // Geler l'état de l'onglet courant AVANT de détacher activeTabId,
@@ -5313,7 +5313,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const realPages = tab.totalPages || matchedDoc?.total_pages || localDoc?.total_pages || 0;
     if (popoverPages) popoverPages.textContent = realPages > 0 ? `${realPages} pages` : "-";
     if (popoverSize) popoverSize.textContent = matchedDoc?.file_size ? formatBytes(matchedDoc.file_size) : "-";
-    
+
     const isCached = window.downloadQueueManager ? window.downloadQueueManager.isDocumentCached(tab.docId) : false;
     if (popoverCache) popoverCache.textContent = isCached ? "⚡ Disponible hors-ligne" : "☁️ Sur le serveur";
   }
@@ -5376,7 +5376,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (win && win.PDFViewerApplication && win.PDFViewerApplication.pdfViewer) {
           win.PDFViewerApplication.pdfViewer.currentScaleValue = isReaderFitToWidth ? "page-width" : "auto";
         }
-      } catch (e) {}
+      } catch (e) { }
     });
   }
 
@@ -5431,7 +5431,7 @@ document.addEventListener("DOMContentLoaded", () => {
           if (cl && Number(cl) > 0 && window.pdfCacheManager) {
             window.pdfCacheManager.setDocumentTotalBytes(numericDocId, Number(cl));
           }
-        }).catch(() => {});
+        }).catch(() => { });
       }
     }
 
@@ -5709,7 +5709,7 @@ document.addEventListener("DOMContentLoaded", () => {
             await window.downloadQueueManager.removeDocumentFromCache(currentActiveDocId);
           }
           if (window._currentPdfBlobUrl) {
-            try { URL.revokeObjectURL(window._currentPdfBlobUrl); } catch (e) {}
+            try { URL.revokeObjectURL(window._currentPdfBlobUrl); } catch (e) { }
             window._currentPdfBlobUrl = null;
           }
           if (typeof currentViewerUpdateCacheUI === "function") currentViewerUpdateCacheUI("none", 0);
@@ -5761,7 +5761,7 @@ document.addEventListener("DOMContentLoaded", () => {
             window.downloadQueueManager.resumeDownload(numericDocId);
           }
         }
-      }).catch(() => {});
+      }).catch(() => { });
 
       window.pdfCacheManager.onProgress(numericDocId, (info) => {
         if (thisLoadSeq === currentViewerLoadSeq && Number(currentActiveDocId) === numericDocId) {
@@ -5804,7 +5804,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ total_pages: numPages })
-              }).catch(() => {});
+              }).catch(() => { });
             }
             if (window.downloadQueueManager?.updateDocTotalPages) {
               window.downloadQueueManager.updateDocTotalPages(targetId, numPages);
@@ -5841,7 +5841,7 @@ document.addEventListener("DOMContentLoaded", () => {
           if (Number(currentActiveDocId) === numericDocId) {
             updateCacheUI(p.status, p.progress, p.downloadedBytes, p.totalBytes);
           }
-        }).catch(() => {});
+        }).catch(() => { });
       }
     } else {
       (async () => {
@@ -5858,7 +5858,7 @@ document.addEventListener("DOMContentLoaded", () => {
               if (thisLoadSeq === currentViewerLoadSeq && Number(currentActiveDocId) === numericDocId) {
                 updateCacheUI(p.status, p.progress, p.downloadedBytes, p.totalBytes);
               }
-            }).catch(() => {});
+            }).catch(() => { });
           }
 
           // Si déconnecté (mode hors-ligne) OU si le document est disponible en cache binaire local :
@@ -5869,7 +5869,7 @@ document.addEventListener("DOMContentLoaded", () => {
               if (thisLoadSeq !== currentViewerLoadSeq) return;
               if (localBlobUrl) {
                 if (window._currentPdfBlobUrl) {
-                  try { URL.revokeObjectURL(window._currentPdfBlobUrl); } catch (e) {}
+                  try { URL.revokeObjectURL(window._currentPdfBlobUrl); } catch (e) { }
                 }
                 window._currentPdfBlobUrl = localBlobUrl;
                 pdfTargetUrl = localBlobUrl;
@@ -5915,7 +5915,7 @@ document.addEventListener("DOMContentLoaded", () => {
           try {
             win.history.replaceState(null, "", viewerUrl);
             win._suppressPdfJsFindScroll = true;
-          } catch (e) {}
+          } catch (e) { }
 
           try {
             const app = win.PDFViewerApplication;
@@ -5926,7 +5926,7 @@ document.addEventListener("DOMContentLoaded", () => {
               if (app.pdfSidebar?.isOpen) {
                 app.pdfSidebar.close();
               }
-            } catch (e) {}
+            } catch (e) { }
 
             const onDocReady = () => {
               if (thisLoadSeq !== currentViewerLoadSeq || Number(currentActiveDocId) !== numericDocId) return;
@@ -5939,14 +5939,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (app.page !== safePage) {
                   app.page = safePage;
                 }
-              } catch (e) {}
+              } catch (e) { }
               setTimeout(() => {
                 if (thisLoadSeq !== currentViewerLoadSeq || Number(currentActiveDocId) !== numericDocId) return;
                 try {
                   if (app.pdfSidebar?.isOpen) {
                     app.pdfSidebar.close();
                   }
-                } catch (e) {}
+                } catch (e) { }
                 goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio, targetScrollTop);
                 hookIframePinchZoomIsolation();
                 hookIframeScrollAutoHide();
@@ -5973,7 +5973,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (app.page !== safePage) {
                   app.page = safePage;
                 }
-              } catch (e) {}
+              } catch (e) { }
               goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio, targetScrollTop);
               hookIframePinchZoomIsolation();
               hookIframeScrollAutoHide();
@@ -5985,10 +5985,10 @@ document.addEventListener("DOMContentLoaded", () => {
             const errStr = String(warmErr?.message || warmErr || '');
             if (errStr.includes("Invalid") || errStr.includes("corrupt") || errStr.includes("Root") || warmErr?.name === 'InvalidPDFException') {
               if (window.pdfCacheManager) {
-                await window.pdfCacheManager.invalidate(numericDocId).catch(() => {});
+                await window.pdfCacheManager.invalidate(numericDocId).catch(() => { });
               }
               if (window._currentPdfBlobUrl) {
-                try { URL.revokeObjectURL(window._currentPdfBlobUrl); } catch (e) {}
+                try { URL.revokeObjectURL(window._currentPdfBlobUrl); } catch (e) { }
                 window._currentPdfBlobUrl = null;
               }
               pdfTargetUrl = buildPdfUrl(numericDocId);
@@ -6019,7 +6019,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   pdfFrame.contentWindow.PDFViewerApplication.pdfSidebar.close();
                 }
               }
-            } catch (e) {}
+            } catch (e) { }
             hookIframePinchZoomIsolation();
             hookIframeScrollAutoHide();
 
@@ -6029,7 +6029,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (Number(currentActiveDocId) === numericDocId) {
                   updateCacheUI(p.status, p.progress, p.downloadedBytes, p.totalBytes);
                 }
-              }).catch(() => {});
+              }).catch(() => { });
             }
 
             // Liaison directe avec l'eventBus de PDF.js (moteur unique avec cache IndexedDB)
@@ -6054,7 +6054,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   }
                 });
               }
-            } catch (e) {}
+            } catch (e) { }
 
             // Fallback résilient en cas d'erreur de chargement (ex: ancien cache corrompu)
             try {
@@ -6068,7 +6068,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   updateCacheUI("error", 0);
                 }, { once: true });
               }
-            } catch (e) {}
+            } catch (e) { }
 
             setTimeout(() => {
               goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio, targetScrollTop);
@@ -6310,7 +6310,7 @@ document.addEventListener("DOMContentLoaded", () => {
           let left = 20, top = 100, width = 120, height = 24;
 
           const pageView = (app.pdfViewer.getPageView && app.pdfViewer.getPageView(pageNumber - 1)) ? app.pdfViewer.getPageView(pageNumber - 1) : null;
-          
+
           if (pageView && pageView.viewport) {
             try {
               const [x0, y0, x1, y1] = rect;
@@ -6318,7 +6318,7 @@ document.addEventListener("DOMContentLoaded", () => {
               const pdfY0 = pageHeightPts - y1;
               const pdfY1 = pageHeightPts - y0;
               const vpRect = pageView.viewport.convertToViewportRectangle([x0, pdfY0, x1, pdfY1]);
-              
+
               left = Math.min(vpRect[0], vpRect[2]) - 4;
               top = Math.min(vpRect[1], vpRect[3]) - 3;
               width = Math.abs(vpRect[2] - vpRect[0]) + 8;
@@ -6391,7 +6391,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch(`/api/documents/${docId}`, { method: "DELETE" });
       if (res.ok) {
         showToast(`Document "${docTitle}" supprimé.`, "info");
-        if (window.pdfCacheManager) window.pdfCacheManager.invalidate(docId).catch(() => {});
+        if (window.pdfCacheManager) window.pdfCacheManager.invalidate(docId).catch(() => { });
         selectedDocIds.delete(docId);
         updateSelectionUI();
         clearFolderDocsCache();
@@ -6523,7 +6523,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     uploadProgressContainer.style.display = "block";
     uploadProgressBar.style.backgroundColor = "var(--accent)";
-    
+
     // Si plusieurs fichiers, masquer le champ de titre personnalisé unique
     const singleTitleGroup = document.getElementById("singleTitleGroup");
     if (pdfFiles.length > 1 && singleTitleGroup) {
@@ -6540,8 +6540,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const file = pdfFiles[i];
       const percentBase = Math.round((i / total) * 100);
       uploadProgressBar.style.width = `${percentBase}%`;
-      uploadStatusText.textContent = total === 1 
-        ? `Vérification de ${file.name}...` 
+      uploadStatusText.textContent = total === 1
+        ? `Vérification de ${file.name}...`
         : `[${i + 1}/${total}] Vérification de ${file.name}...`;
 
       // Pré-vérification par empreinte SHA-256 pour éviter tout transfert réseau inutile
@@ -6562,8 +6562,8 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       }
 
-      uploadStatusText.textContent = total === 1 
-        ? `Envoi de ${file.name}...` 
+      uploadStatusText.textContent = total === 1
+        ? `Envoi de ${file.name}...`
         : `[${i + 1}/${total}] Envoi de ${file.name}...`;
 
       const formData = new FormData();
@@ -6601,8 +6601,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const errMsg = err.message || "Erreur réseau";
         errors.push({ file: file.name, error: errMsg });
 
-        const isNetworkFailure = !navigator.onLine || 
-          err.name === "TypeError" || 
+        const isNetworkFailure = !navigator.onLine ||
+          err.name === "TypeError" ||
           (err.message && (err.message.includes("fetch") || err.message.includes("network") || err.message.includes("Network")));
         if (isNetworkFailure) {
           networkAborted = true;
@@ -6630,8 +6630,8 @@ document.addEventListener("DOMContentLoaded", () => {
       uploadStatusText.textContent = `${successCount} envoyé(s), ${duplicates.length} doublon(s), ${errors.length} erreur(s)`;
     } else if (duplicates.length > 0 && errors.length === 0) {
       uploadProgressBar.style.backgroundColor = "var(--warning)";
-      uploadStatusText.textContent = total === 1 
-        ? "Ce document existe déjà dans la base !" 
+      uploadStatusText.textContent = total === 1
+        ? "Ce document existe déjà dans la base !"
         : `${duplicates.length} document(s) déjà présent(s) (doublons ignorés)`;
     } else {
       uploadProgressBar.style.backgroundColor = "var(--danger)";
@@ -6802,7 +6802,7 @@ document.addEventListener("DOMContentLoaded", () => {
     navigator.serviceWorker.register("/sw.js")
       .then((reg) => {
         console.log("[ServiceWorker] Enregistré avec succès:", reg.scope);
-        reg.update().catch(() => {});
+        reg.update().catch(() => { });
       })
       .catch((err) => console.warn("[ServiceWorker] Échec enregistrement:", err));
 
@@ -6824,7 +6824,7 @@ document.addEventListener("DOMContentLoaded", () => {
           sessionStorage.setItem(RELOAD_KEY, String(Date.now()));
           location.reload();
         }
-      } catch (_) {}
+      } catch (_) { }
     });
   }
 
@@ -6850,16 +6850,27 @@ document.addEventListener("DOMContentLoaded", () => {
       const stats = window.pdfCacheManager ? window.pdfCacheManager.progressCache.get(id) : null;
       const hasChunks = Boolean(stats && stats.downloadedBytes > 0);
 
+      if (!hasChunks && window.pdfCacheManager && !isTaskActive && !isTaskQueued && !isCached) {
+        window.pdfCacheManager.getCachedStats(id).then(freshStats => {
+          if (freshStats && freshStats.downloadedBytes > 0) {
+            updateDocCardCacheUI(id);
+          }
+        });
+      }
+
       // Rayon r=10, circonférence = 2 * PI * 10 ≈ 62.83
       const circumference = 62.83;
 
       if (isTaskActive) {
         const task = window.downloadQueueManager.activeTasks.get(id);
-        const progress = Math.max(1, Math.min(100, task ? (task.progress || 0) : 0));
-        const offset = (circumference * (1 - progress / 100)).toFixed(2);
+        const actualProgress = task ? (task.progress || 0) : 0;
+        const displayProgress = Math.max(1, Math.min(100, actualProgress));
+        const offset = (circumference * (1 - displayProgress / 100)).toFixed(2);
 
         btn.className = "doc-cache-btn downloading";
-        btn.title = `Téléchargement en cours : ${progress}% (cliquer pour mettre en pause)`;
+        btn.title = actualProgress > 0 
+          ? `Téléchargement en cours : ${actualProgress}% (cliquer pour mettre en pause)`
+          : "Téléchargement en cours... (cliquer pour mettre en pause)";
         btn.innerHTML = `
           <svg class="progress-ring" viewBox="0 0 26 26">
             <circle cx="13" cy="13" r="10" stroke="rgba(37, 99, 235, 0.18)" stroke-width="2.2" fill="none" />
@@ -6886,8 +6897,8 @@ document.addEventListener("DOMContentLoaded", () => {
           </svg>
         `;
       } else if (hasChunks) {
-        const progress = stats && stats.totalBytes > 0 
-          ? Math.max(5, Math.min(95, Math.round((stats.downloadedBytes / stats.totalBytes) * 100))) 
+        const progress = stats && stats.totalBytes > 0
+          ? Math.max(5, Math.min(95, Math.round((stats.downloadedBytes / stats.totalBytes) * 100)))
           : 20;
         const offset = (circumference * (1 - progress / 100)).toFixed(2);
 

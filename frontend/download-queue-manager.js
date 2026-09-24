@@ -30,10 +30,10 @@ class DownloadQueueManager {
   reinitializeWorker() {
     console.log('[DownloadQueueManager] Réinitialisation du Worker de recherche locale...');
     if (this.worker) {
-      try { this.worker.terminate(); } catch (e) {}
+      try { this.worker.terminate(); } catch (e) { }
     }
     for (const [, { reject }] of this._workerCallbacks) {
-      try { reject(new Error("Worker réinitialisé suite à une mise à jour")); } catch (e) {}
+      try { reject(new Error("Worker réinitialisé suite à une mise à jour")); } catch (e) { }
     }
     this._workerCallbacks.clear();
     this._syncedDocMetaMap.clear();
@@ -92,7 +92,7 @@ class DownloadQueueManager {
       await Promise.race([
         this._initPromise,
         new Promise(resolve => setTimeout(resolve, timeoutMs))
-      ]).catch(() => {});
+      ]).catch(() => { });
     }
   }
 
@@ -137,7 +137,7 @@ class DownloadQueueManager {
   async syncFolders(folders) {
     if (Array.isArray(folders)) {
       this._allFolders = folders;
-      await this.sendToWorker('SYNC_FOLDERS', { folders }).catch(() => {});
+      await this.sendToWorker('SYNC_FOLDERS', { folders }).catch(() => { });
     }
   }
 
@@ -184,7 +184,7 @@ class DownloadQueueManager {
     }
 
     this._syncedDocMetaMap = currentMetaMap;
-    await this.sendToWorker('SYNC_LIBRARY_META', { documents: deltaDocs, folders: foldersToSync }).catch(() => {});
+    await this.sendToWorker('SYNC_LIBRARY_META', { documents: deltaDocs, folders: foldersToSync }).catch(() => { });
   }
 
   // Tous les documents connus (cache + miroir) — pour l'arborescence hors-ligne.
@@ -209,7 +209,7 @@ class DownloadQueueManager {
         id: Number(d.id),
         folder_id: d.folder_id !== null && d.folder_id !== undefined ? Number(d.folder_id) : null
       }))
-    }).catch(() => {});
+    }).catch(() => { });
     const allDocs = await this.getAllCachedDocs().catch(() => []);
     if (Array.isArray(allDocs)) {
       this._cachedDocsList = allDocs;
@@ -330,13 +330,13 @@ class DownloadQueueManager {
     const id = Number(docId);
     if (!id) return;
     await this.cancelDownload(id);
-    await this.sendToWorker('DELETE_DOCUMENT', { docId: id }).catch(() => {});
+    await this.sendToWorker('DELETE_DOCUMENT', { docId: id }).catch(() => { });
     this.cachedDocIds.delete(id);
     if (Array.isArray(this._cachedDocsList)) {
       this._cachedDocsList = this._cachedDocsList.filter(d => Number(d.id) !== id);
     }
     if (window.pdfCacheManager) {
-      await window.pdfCacheManager.invalidate(id).catch(() => {});
+      await window.pdfCacheManager.invalidate(id).catch(() => { });
     }
     if (typeof caches !== 'undefined') {
       try {
@@ -349,7 +349,7 @@ class DownloadQueueManager {
             await cropCache.delete(req);
           }
         }
-      } catch (e) {}
+      } catch (e) { }
     }
     this._notify();
     console.log(`[DownloadQueueManager] Document ${id} supprimé du cache local`);
@@ -426,7 +426,7 @@ class DownloadQueueManager {
       return;
     }
 
-    await this.ensureInitialized(1500).catch(() => {});
+    await this.ensureInitialized(1500).catch(() => { });
 
     // Vérifier si le document est déjà 100% complet (PDF + SQLite-Wasm index)
     const isBundleIndexed = this.cachedDocIds.has(id);
@@ -453,7 +453,7 @@ class DownloadQueueManager {
   async enqueueFolder(folderId) {
     try {
       console.log(`[DownloadQueueManager] Résolution récursive du dossier ${folderId}...`);
-      
+
       // 1. Récupérer l'arborescence des dossiers
       const foldersRes = await fetch('/api/folders').catch(() => null);
       let allFolders = [];
@@ -461,7 +461,7 @@ class DownloadQueueManager {
         const json = await foldersRes.json();
         allFolders = json.folders || [];
         // Mettre à jour la table des dossiers dans le worker
-        this.sendToWorker('SYNC_FOLDERS', { folders: allFolders }).catch(() => {});
+        this.sendToWorker('SYNC_FOLDERS', { folders: allFolders }).catch(() => { });
       }
 
       // Construction des sous-dossiers récursifs
@@ -504,10 +504,18 @@ class DownloadQueueManager {
       if (task) {
         task.status = 'paused';
         if (task.controller) {
-          try { task.controller.abort(); } catch (e) {}
+          try { task.controller.abort(); } catch (e) { }
         }
         if (task.pdfTask) {
-          try { task.pdfTask.destroy(); } catch (e) {}
+          try { task.pdfTask.destroy(); } catch (e) { }
+        }
+        if (window.pdfCacheManager) {
+          window.pdfCacheManager.progressCache.set(id, {
+            status: 'paused',
+            progress: task.progress || 0,
+            downloadedBytes: task.downloadedBytes || 0,
+            totalBytes: task.totalBytes || 0
+          });
         }
         this.activeTasks.delete(id);
       }
@@ -521,7 +529,7 @@ class DownloadQueueManager {
       for (const [id, task] of this.activeTasks) {
         task.status = 'paused';
         if (task.controller) {
-          try { task.controller.abort(); } catch (e) {}
+          try { task.controller.abort(); } catch (e) { }
         }
         if (window.pdfCacheManager) {
           window.pdfCacheManager.pauseDownload(id);
@@ -555,10 +563,10 @@ class DownloadQueueManager {
     const task = this.activeTasks.get(id);
     if (task) {
       if (task.controller) {
-        try { task.controller.abort(); } catch (e) {}
+        try { task.controller.abort(); } catch (e) { }
       }
       if (task.pdfTask) {
-        try { task.pdfTask.destroy(); } catch (e) {}
+        try { task.pdfTask.destroy(); } catch (e) { }
       }
       this.activeTasks.delete(id);
     }
@@ -582,12 +590,27 @@ class DownloadQueueManager {
     const docId = this.queue.shift();
     if (!docId) return;
 
+    // Initialiser immédiatement la tâche avec les données réelles déjà présentes en cache
+    let initialDownloadedBytes = 0;
+    let initialTotalBytes = 0;
+    let initialProgress = 0;
+    if (window.pdfCacheManager) {
+      const stats = await window.pdfCacheManager.getCachedStats(docId);
+      if (stats) {
+        initialDownloadedBytes = stats.downloadedBytes || 0;
+        initialTotalBytes = stats.totalBytes || 0;
+        initialProgress = stats.progress || 0;
+      }
+    }
+
+    const controller = new AbortController();
     const task = {
       docId,
       status: 'downloading',
-      progress: 0,
-      downloadedBytes: 0,
-      totalBytes: 0,
+      progress: initialProgress,
+      downloadedBytes: initialDownloadedBytes,
+      totalBytes: initialTotalBytes,
+      controller,
       pdfTask: null,
     };
     this.activeTasks.set(docId, task);
@@ -607,14 +630,14 @@ class DownloadQueueManager {
     try {
       // S'assurer que les dossiers sont synchronisés dans le worker
       if (Array.isArray(this._allFolders) && this._allFolders.length > 0) {
-        await this.sendToWorker('SYNC_FOLDERS', { folders: this._allFolders }).catch(() => {});
+        await this.sendToWorker('SYNC_FOLDERS', { folders: this._allFolders }).catch(() => { });
       } else {
         const foldersRes = await fetch('/api/folders').catch(() => null);
         if (foldersRes && foldersRes.ok) {
           const fJson = await foldersRes.json();
           if (Array.isArray(fJson.folders)) {
             this._allFolders = fJson.folders;
-            await this.sendToWorker('SYNC_FOLDERS', { folders: this._allFolders }).catch(() => {});
+            await this.sendToWorker('SYNC_FOLDERS', { folders: this._allFolders }).catch(() => { });
           }
         }
       }
@@ -655,183 +678,228 @@ class DownloadQueueManager {
         }
       }
 
-      const controller = new AbortController();
-      task.controller = controller;
-
       const CHUNK_SIZE = 256 * 1024;
       const normUrl = `/api/pdf/${docId}`;
       const prefix = `${normUrl}#`;
 
-        // Scanner les clés de chunks déjà existants pour éviter les écritures redondantes
-        const db = window.pdfCacheManager ? await window.pdfCacheManager.init() : null;
-        const existingChunks = new Set();
-        if (db && db.objectStoreNames.contains('chunks')) {
-          await new Promise((resolve) => {
-            try {
-              const tx = db.transaction('chunks', 'readonly');
-              const store = tx.objectStore('chunks');
-              const range = IDBKeyRange.bound(prefix, prefix + '\uffff');
-              const req = store.openKeyCursor(range);
-              req.onsuccess = (e) => {
-                const cursor = e.target.result;
-                if (cursor) {
-                  existingChunks.add(String(cursor.key));
-                  cursor.continue();
-                } else {
-                  resolve();
-                }
-              };
-              req.onerror = () => resolve();
-            } catch (e) {
-              resolve();
-            }
+      // Scanner les clés de chunks déjà existants pour éviter les écritures redondantes
+      const db = window.pdfCacheManager ? await window.pdfCacheManager.init() : null;
+      const existingChunks = new Set();
+      if (db && db.objectStoreNames.contains('chunks')) {
+        await new Promise((resolve) => {
+          try {
+            const tx = db.transaction('chunks', 'readonly');
+            const store = tx.objectStore('chunks');
+            const range = IDBKeyRange.bound(prefix, prefix + '\uffff');
+            const req = store.openKeyCursor(range);
+            req.onsuccess = (e) => {
+              const cursor = e.target.result;
+              if (cursor) {
+                existingChunks.add(String(cursor.key));
+                cursor.continue();
+              } else {
+                resolve();
+              }
+            };
+            req.onerror = () => resolve();
+          } catch (e) {
+            resolve();
+          }
+        });
+      }
+
+      let currentDownloadedBytes = task.downloadedBytes || 0;
+      if (existingChunks.size > 0 && currentDownloadedBytes === 0) {
+        for (const key of existingChunks) {
+          const parts = key.slice(prefix.length).split('_');
+          if (parts.length === 2) {
+            const b = parseInt(parts[0], 10);
+            const e = parseInt(parts[1], 10);
+            if (e > b) currentDownloadedBytes += (e - b);
+          }
+        }
+      }
+
+      let pdfUrl = `/api/pdf/${docId}`;
+      if (token) {
+        pdfUrl += `?token=${encodeURIComponent(token)}`;
+      }
+
+      let docMeta = this._libraryDocsList ? this._libraryDocsList.find(d => Number(d.id) === docId) : null;
+      let contentLength = task.totalBytes || (docMeta && docMeta.file_size ? docMeta.file_size : 0);
+      if (!contentLength || contentLength <= 0) {
+        try {
+          const rangeRes = await fetch(pdfUrl, {
+            headers: { 'Range': 'bytes=0-0' },
+            credentials: 'include',
+            signal: controller.signal
           });
+          if (rangeRes.ok || rangeRes.status === 206) {
+            const cr = rangeRes.headers.get('content-range');
+            if (cr) {
+              const m = cr.match(/\/(\d+)$/);
+              if (m) contentLength = parseInt(m[1], 10);
+            }
+          }
+        } catch (e) {}
+      }
+
+      if (contentLength > 0) {
+        task.totalBytes = contentLength;
+        if (window.pdfCacheManager) {
+          window.pdfCacheManager.setDocumentTotalBytes(docId, contentLength);
         }
+      }
 
-        let pdfUrl = `/api/pdf/${docId}`;
-        if (token) {
-          pdfUrl += `?token=${encodeURIComponent(token)}`;
+      // Si tous les octets sont déjà présents en cache local
+      if (contentLength > 0 && currentDownloadedBytes >= contentLength) {
+        task.status = 'complete';
+        task.progress = 100;
+        task.downloadedBytes = contentLength;
+        if (window.pdfCacheManager) {
+          await window.pdfCacheManager.markComplete(docId, contentLength);
         }
+        this.cachedDocIds.add(docId);
+        this._notify();
+        return;
+      }
 
-        const pdfRes = await fetch(pdfUrl, { credentials: 'include', signal: controller.signal });
-        if (pdfRes.ok) {
-          const contentLength = Number(pdfRes.headers.get('content-length')) || 0;
-          task.totalBytes = contentLength;
+      // Télécharger UNIQUEMENT les fragments manquants par requêtes Range de 256 Ko
+      if (contentLength > 0) {
+        task.downloadedBytes = currentDownloadedBytes;
+        task.progress = Math.min(99, Math.round((currentDownloadedBytes / contentLength) * 100));
+        this._notify();
 
-          if (window.pdfCacheManager && contentLength > 0) {
-            window.pdfCacheManager.setDocumentTotalBytes(docId, contentLength);
+        const totalChunks = Math.ceil(contentLength / CHUNK_SIZE);
+        for (let i = 0; i < totalChunks; i++) {
+          if (controller.signal.aborted || this.isPaused || task.status === 'paused') {
+            break;
+          }
+          const begin = i * CHUNK_SIZE;
+          const end = Math.min(begin + CHUNK_SIZE, contentLength);
+          const chunkKey = `${normUrl}#${begin}_${end}`;
+
+          if (existingChunks.has(chunkKey)) {
+            continue; // Déjà en cache physique, sauté sans requête réseau
           }
 
-          if (pdfRes.body && contentLength > 0) {
-            const reader = pdfRes.body.getReader();
-            let receivedBytes = 0;
-            let currentOffset = 0;
-            let accumulator = new Uint8Array(CHUNK_SIZE * 2);
-            let accumulatorLen = 0;
+          const chunkRes = await fetch(pdfUrl, {
+            headers: { 'Range': `bytes=${begin}-${end - 1}` },
+            credentials: 'include',
+            signal: controller.signal
+          });
 
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
+          if (!chunkRes.ok && chunkRes.status !== 206) {
+            throw new Error(`HTTP error ${chunkRes.status} downloading chunk ${begin}-${end}`);
+          }
 
-              if (accumulatorLen + value.length > accumulator.length) {
-                const newAcc = new Uint8Array(Math.max(accumulator.length * 2, accumulatorLen + value.length));
-                newAcc.set(accumulator.subarray(0, accumulatorLen), 0);
-                accumulator = newAcc;
-              }
-              accumulator.set(value, accumulatorLen);
-              accumulatorLen += value.length;
-              receivedBytes += value.length;
+          const arrayBuf = await chunkRes.arrayBuffer();
+          if (db) {
+            try {
+              const tx = db.transaction('chunks', 'readwrite');
+              tx.objectStore('chunks').put(arrayBuf, chunkKey);
+              existingChunks.add(chunkKey);
+            } catch (e) { }
+          }
 
-              // Découper et persister les blocs complets de 256 Ko immédiatement au fil de l'eau
-              while (accumulatorLen >= CHUNK_SIZE) {
-                const chunkData = accumulator.slice(0, CHUNK_SIZE);
-                const begin = currentOffset;
-                const end = begin + CHUNK_SIZE;
-                const chunkKey = `${normUrl}#${begin}_${end}`;
+          currentDownloadedBytes += arrayBuf.byteLength;
+          task.downloadedBytes = currentDownloadedBytes;
+          task.progress = Math.min(99, Math.round((currentDownloadedBytes / contentLength) * 100));
+          if (window.pdfCacheManager) {
+            window.pdfCacheManager.progressCache.set(docId, {
+              status: 'downloading',
+              progress: task.progress,
+              downloadedBytes: currentDownloadedBytes,
+              totalBytes: contentLength
+            });
+            window.pdfCacheManager.recordChunkDownloaded(docId, arrayBuf.byteLength, contentLength);
+          }
+          this._notify();
+        }
 
-                if (db && !existingChunks.has(chunkKey)) {
-                  try {
-                    const tx = db.transaction('chunks', 'readwrite');
-                    tx.objectStore('chunks').put(chunkData.buffer, chunkKey);
-                    existingChunks.add(chunkKey);
-                    if (window.pdfCacheManager) {
-                      window.pdfCacheManager.recordChunkDownloaded(docId, CHUNK_SIZE, contentLength);
-                    }
-                  } catch (e) {}
-                }
-
-                currentOffset = end;
-                accumulator.copyWithin(0, CHUNK_SIZE, accumulatorLen);
-                accumulatorLen -= CHUNK_SIZE;
-              }
-
-              task.downloadedBytes = receivedBytes;
-              task.progress = Math.min(99, Math.round((receivedBytes / contentLength) * 100));
-              this._notify();
-            }
-
-            // Écrire le reliquat final (< 256 Ko)
-            if (accumulatorLen > 0) {
-              const chunkData = accumulator.slice(0, accumulatorLen);
-              const begin = currentOffset;
-              const end = begin + accumulatorLen;
-              const chunkKey = `${normUrl}#${begin}_${end}`;
-              if (db && !existingChunks.has(chunkKey)) {
-                try {
-                  const tx = db.transaction('chunks', 'readwrite');
-                  tx.objectStore('chunks').put(chunkData.buffer, chunkKey);
-                  existingChunks.add(chunkKey);
-                  if (window.pdfCacheManager) {
-                    window.pdfCacheManager.recordChunkDownloaded(docId, accumulatorLen, contentLength);
-                  }
-                } catch (e) {}
-              }
-            }
-
-            // Marquer complet dans meta
-            if (db) {
-              try {
-                const metaTx = db.transaction('meta', 'readwrite');
-                metaTx.objectStore('meta').put({
-                  url: normUrl,
-                  totalBytes: contentLength,
-                  downloadedBytes: contentLength,
-                  completed: true,
-                  updatedAt: Date.now()
-                }, normUrl);
-              } catch (e) {}
-            }
-
-            if (window.pdfCacheManager) {
-              await window.pdfCacheManager.markComplete(docId, contentLength);
-            }
-          } else {
-            const arrayBuffer = await pdfRes.arrayBuffer();
-            const actualTotal = arrayBuffer.byteLength;
-            if (db) {
-              const tx = db.transaction(['chunks', 'meta'], 'readwrite');
-              const chunkStore = tx.objectStore('chunks');
-              const metaStore = tx.objectStore('meta');
-
-              for (let begin = 0; begin < actualTotal; begin += CHUNK_SIZE) {
-                const end = Math.min(begin + CHUNK_SIZE, actualTotal);
-                const chunkData = arrayBuffer.slice(begin, end);
-                chunkStore.put(chunkData, `${normUrl}#${begin}_${end}`);
-              }
-
-              metaStore.put({
+        if (!controller.signal.aborted && task.status !== 'paused' && currentDownloadedBytes >= contentLength) {
+          if (db) {
+            try {
+              const metaTx = db.transaction('meta', 'readwrite');
+              metaTx.objectStore('meta').put({
                 url: normUrl,
-                totalBytes: actualTotal,
-                downloadedBytes: actualTotal,
+                totalBytes: contentLength,
+                downloadedBytes: contentLength,
                 completed: true,
                 updatedAt: Date.now()
               }, normUrl);
-
-              await new Promise(r => { tx.oncomplete = r; tx.onerror = r; });
-              if (window.pdfCacheManager) {
-                await window.pdfCacheManager.markComplete(docId, actualTotal);
-              }
-            }
+            } catch (e) { }
           }
-        }
-
-        const isComplete = window.pdfCacheManager ? await window.pdfCacheManager.isComplete(docId) : true;
-        if (isComplete) {
-          this.cachedDocIds.add(docId);
+          if (window.pdfCacheManager) {
+            await window.pdfCacheManager.markComplete(docId, contentLength);
+          }
           task.status = 'complete';
           task.progress = 100;
+          task.downloadedBytes = contentLength;
+          this.cachedDocIds.add(docId);
         }
-        const allDocs = await this.getAllCachedDocs().catch(() => []);
-        if (Array.isArray(allDocs)) {
-          this._cachedDocsList = allDocs;
+      } else {
+        // Fallback binaire global si Content-Length absent
+        const pdfRes = await fetch(pdfUrl, { credentials: 'include', signal: controller.signal });
+        if (pdfRes.ok) {
+          const arrayBuffer = await pdfRes.arrayBuffer();
+          const actualTotal = arrayBuffer.byteLength;
+          if (db) {
+            const tx = db.transaction(['chunks', 'meta'], 'readwrite');
+            const chunkStore = tx.objectStore('chunks');
+            const metaStore = tx.objectStore('meta');
+
+            for (let begin = 0; begin < actualTotal; begin += CHUNK_SIZE) {
+              const end = Math.min(begin + CHUNK_SIZE, actualTotal);
+              const chunkData = arrayBuffer.slice(begin, end);
+              chunkStore.put(chunkData, `${normUrl}#${begin}_${end}`);
+            }
+
+            metaStore.put({
+              url: normUrl,
+              totalBytes: actualTotal,
+              downloadedBytes: actualTotal,
+              completed: true,
+              updatedAt: Date.now()
+            }, normUrl);
+
+            await new Promise(r => { tx.oncomplete = r; tx.onerror = r; });
+          }
+          if (window.pdfCacheManager) {
+            await window.pdfCacheManager.markComplete(docId, actualTotal);
+          }
+          task.status = 'complete';
+          task.progress = 100;
+          this.cachedDocIds.add(docId);
         }
-        this._notify();
+      }
+
+      const isComplete = window.pdfCacheManager ? await window.pdfCacheManager.isComplete(docId) : (task.status === 'complete');
+      if (isComplete) {
+        this.cachedDocIds.add(docId);
+        task.status = 'complete';
+        task.progress = 100;
+      }
+      const allDocs = await this.getAllCachedDocs().catch(() => []);
+      if (Array.isArray(allDocs)) {
+        this._cachedDocsList = allDocs;
+      }
+      this._notify();
     } catch (err) {
-      console.warn(`[DownloadQueueManager] Erreur ou interruption pour le doc ${docId}:`, err);
-      if (err && err.message && err.message.includes("Worker réinitialisé")) {
+      const isAbort = Boolean(
+        (err && (err.name === 'AbortError' || String(err).includes('aborted') || String(err).includes('The operation was aborted'))) ||
+        controller?.signal?.aborted ||
+        task.status === 'paused'
+      );
+
+      if (isAbort) {
+        // Interruption normale ou mise en pause volontaire (changement d'onglet ou clic Stop) : préserver l'état 'paused'
+        task.status = 'paused';
+      } else if (err && err.message && err.message.includes("Worker réinitialisé")) {
         // Le worker a été rechargé (activation SW) : ré-enfiler automatiquement pour reprise transparente
         this.queue.unshift(docId);
       } else {
+        console.warn(`[DownloadQueueManager] Erreur pour le doc ${docId}:`, err);
         task.status = 'error';
       }
     } finally {
@@ -850,7 +918,7 @@ class DownloadQueueManager {
 
     try {
       console.log('[DownloadQueueManager] Vérification de synchronisation avec le serveur...');
-      
+
       // 1. Récupérer la liste des documents locaux depuis SQLite-Wasm
       const cachedDocs = await this.sendToWorker('GET_CACHED_DOCS', {});
       if (!cachedDocs || cachedDocs.length === 0) return;

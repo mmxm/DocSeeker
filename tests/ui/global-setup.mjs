@@ -11,10 +11,10 @@ export default async function globalSetup() {
     execSync(
       `sqlite3 data/db.sqlite "` +
         `INSERT OR IGNORE INTO folders (id, name, color) VALUES (130, 'Martingale', '#3b82f6');` +
-        `UPDATE documents SET folder_id = 130 WHERE id IN (1, 2, 3);"`,
+        `UPDATE documents SET folder_id = 130 WHERE id IN (1, 2, 3, 10, 577);"`,
       { stdio: 'ignore' }
     );
-    console.log('[GlobalSetup] Dossier Martingale et documents 1,2,3 prêts.');
+    console.log('[GlobalSetup] Dossier Martingale et documents 1,2,3,10,577 prêts.');
   } catch (e) {
     console.warn('[GlobalSetup] Seed DB ignoré (sqlite3 non disponible ou DB absente):', e.message);
   }

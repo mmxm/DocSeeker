@@ -631,54 +631,195 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
-  // O18 : Interruption non destructrice : Clic Stop → Préservation octets → Reprise 100%
+  // O18 : Interruption & Reprise : Validation Exclusivement via l'Interface Graphique (Zéro lecture DB)
   // ─────────────────────────────────────────────────────────────────────────
 
-  test('O18 - Interruption Non Destructrice : Clic Stop → Préservation Octets → Reprise 100%', async ({ page, context }) => {
+  test('O18 - Interruption & Reprise : Validation Exclusivement GUI (Zéro Lecture DB)', async ({ page, context }) => {
     const h = new DocSeekerTestHarness(page, context);
     await h.authenticate();
     await h.goto('/');
+    page.on('console', msg => console.log('[PAGE CONSOLE]', msg.text()));
 
-    // 1. Démarrer avec un cache partiel déterministe (30%)
-    await h.injectPartialCache(1, 30);
+    await h.ensureDocNotCached(1);
     await h.openFolder(130);
 
     const card = await h.getDocCard(1);
     const cacheBtn = card.locator('.doc-cache-btn');
     await expect(cacheBtn).toBeVisible({ timeout: 10000 });
 
-    // Vérifier les fragments initiaux
-    const statsInit = await page.evaluate(async () => {
-      return window.pdfCacheManager ? await window.pdfCacheManager.getCachedStats(1) : null;
+    // Ralentir temporairement les requêtes de fragments pour permettre l'interruption en cours de vol
+    let throttleEnabled = true;
+    await page.route('**/api/pdf/**', async (route) => {
+      if (throttleEnabled) {
+        const range = route.request().headers()['range'] || '';
+        if (range.includes('262144-')) {
+          await new Promise(r => setTimeout(r, 800));
+        } else {
+          await new Promise(r => setTimeout(r, 80));
+        }
+      }
+      await route.continue().catch(() => {});
     });
-    expect(statsInit).not.toBeNull();
-    expect(statsInit.downloadedBytes).toBeGreaterThan(0);
-    const initialBytes = statsInit.downloadedBytes;
 
-    // 2. Simuler une mise en pause explicite
-    await page.evaluate(async () => {
-      if (window.downloadQueueManager) window.downloadQueueManager.pauseDownload(1);
-    });
+    // 1. Démarrer le téléchargement par le bouton de l'arborescence
+    await cacheBtn.click();
+    await expect(cacheBtn).toHaveClass(/downloading/, { timeout: 10000 });
 
-    // 3. Vérifier que la pause n'a absolument PAS détruit les fragments existants
-    const statsPaused = await page.evaluate(async () => {
-      return window.pdfCacheManager ? await window.pdfCacheManager.getCachedStats(1) : null;
-    });
-    expect(statsPaused.downloadedBytes).toBeGreaterThanOrEqual(initialBytes);
-    expect(statsPaused.status).toBe('paused');
-    console.log(`[O18] Statut après pause : ${statsPaused.status}, octets conservés : ${statsPaused.downloadedBytes}/${statsPaused.totalBytes}`);
+    // Attendre qu'au moins un premier fragment ait été téléchargé et validé dans l'UI
+    await expect(cacheBtn).toHaveAttribute('title', /Téléchargement en cours : [1-9]\d*%/, { timeout: 10000 });
 
-    // 4. Reprendre le téléchargement en cliquant sur le bouton de l'arborescence
+    // 2. Interruption volontaire via l'interface (clic sur le bouton pendant le téléchargement)
     await cacheBtn.click();
 
-    // 5. Vérifier que la mise en cache continue et se termine à 100%
-    await expect(cacheBtn).toHaveClass(/cached/, { timeout: 45000 });
+    // 3. Vérifications STRICTEMENT via l'interface graphique :
+    // - Le bouton quitte la classe 'downloading'
+    // - Le titre indique 'Cache partiel (X%)' avec un pourcentage X strictement supérieur à 0 et inférieur à 100
+    await expect(cacheBtn).not.toHaveClass(/downloading/, { timeout: 10000 });
+    await expect(cacheBtn).toHaveAttribute('title', /Cache partiel \(\d+%\)/, { timeout: 10000 });
 
-    const isComplete = await page.evaluate(async () => {
-      return window.pdfCacheManager ? await window.pdfCacheManager.isComplete(1) : false;
+    const titlePaused = await cacheBtn.getAttribute('title');
+    const matchPaused = titlePaused.match(/Cache partiel \((\d+)%\)/);
+    expect(matchPaused).not.toBeNull();
+    const pausedPercent = parseInt(matchPaused[1], 10);
+    expect(pausedPercent).toBeGreaterThan(0);
+    expect(pausedPercent).toBeLessThan(100);
+    console.log(`[O18 UI] Pourcentage partiel détecté sur le bouton : ${pausedPercent}%`);
+
+    // 4. Reprendre le téléchargement par le bouton
+    await cacheBtn.click();
+    await expect(cacheBtn).toHaveClass(/downloading/, { timeout: 10000 });
+
+    // 5. Vérifier que la reprise NE repart PAS de 0% (le titre affiche un pourcentage >= au pourcentage interrompu)
+    const titleResumed = await cacheBtn.getAttribute('title');
+    const matchResumed = titleResumed ? titleResumed.match(/Téléchargement en cours : (\d+)%/) : null;
+    if (matchResumed) {
+      const resumedPercent = parseInt(matchResumed[1], 10);
+      expect(resumedPercent).toBeGreaterThanOrEqual(pausedPercent);
+      console.log(`[O18 UI] Pourcentage à la reprise : ${resumedPercent}% (>= ${pausedPercent}%, pas de remise à zéro)`);
+    }
+
+    // 6. Désactiver le ralentissement pour laisser le téléchargement se terminer
+    throttleEnabled = false;
+
+    // 7. Vérifier la complétion 100% via l'interface :
+    // - Le bouton prend la classe 'cached' et le titre 'Disponible hors-ligne'
+    await expect(cacheBtn).toHaveClass(/cached/, { timeout: 30000 });
+    await expect(cacheBtn).toHaveAttribute('title', /Disponible hors-ligne/, { timeout: 10000 });
+
+    // 8. Ouvrir le document et vérifier que le badge du visualiseur affiche bien '⚡ En cache'
+    await card.locator('.doc-title-main').click();
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    const viewerBadge = page.locator('#viewerCacheBadge');
+    await expect(viewerBadge).toBeVisible({ timeout: 10000 });
+    await expect(viewerBadge).toHaveClass(/complete/, { timeout: 10000 });
+    await expect(viewerBadge).toHaveText(/En cache/, { timeout: 10000 });
+
+    // 9. Vérifier le rendu physique effectif des pixels du PDF
+    await h.assertPdfViewerRendered();
+
+    console.log('✅ [O18] Interruption et reprise validées exclusivement via l\'interface graphique.');
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // O19 : Multiples Interruptions et Reprises Hybrides (Arborescence ↔ Visualiseur) - 100% GUI
+  // ─────────────────────────────────────────────────────────────────────────
+
+  test('O19 - Multiples Interruptions et Reprises Hybrides : Validation Exclusivement GUI', async ({ page, context }) => {
+    const h = new DocSeekerTestHarness(page, context);
+    await h.authenticate();
+    await h.goto('/');
+
+    const docId = 10; // Document multi-fragments (1.3 Mo, 5 fragments de 256 Ko)
+    await h.ensureDocNotCached(docId);
+    await h.openFolder(130);
+
+    const card = await h.getDocCard(docId);
+    const cacheBtn = card.locator('.doc-cache-btn');
+    await expect(cacheBtn).toBeVisible({ timeout: 10000 });
+
+    let throttleEnabled = true;
+    await page.route('**/api/pdf/**', async (route) => {
+      if (throttleEnabled) {
+        await new Promise(r => setTimeout(r, 180));
+      }
+      await route.continue().catch(() => {});
     });
-    expect(isComplete).toBe(true);
-    console.log('✅ [O18] Interruption non destructrice et reprise complète validées.');
+
+    // ── ÉTAPE 1 : Démarrage dans l'arborescence et 1ère interruption ──
+    await cacheBtn.click();
+    await expect(cacheBtn).toHaveClass(/downloading/, { timeout: 10000 });
+
+    // Attendre qu'au moins un fragment soit validé sur l'UI
+    await expect(cacheBtn).toHaveAttribute('title', /Téléchargement en cours : [1-9]\d*%/, { timeout: 10000 });
+    await cacheBtn.click(); // Pause 1
+
+    await expect(cacheBtn).not.toHaveClass(/downloading/, { timeout: 10000 });
+    await expect(cacheBtn).toHaveAttribute('title', /Cache partiel \(\d+%\)/, { timeout: 10000 });
+
+    const p1Match = (await cacheBtn.getAttribute('title')).match(/Cache partiel \((\d+)%\)/);
+    const p1 = parseInt(p1Match[1], 10);
+    expect(p1).toBeGreaterThan(0);
+    console.log(`[O19 UI] Interruption 1 (Arborescence) : ${p1}%`);
+
+    // ── ÉTAPE 2 : Ouverture de l'onglet pendant la pause ──
+    await card.locator('.doc-title-main').click();
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    const viewerBadge = page.locator('#viewerCacheBadge');
+    await expect(viewerBadge).toBeVisible({ timeout: 10000 });
+
+    // Le badge du viewer doit afficher l'état partiel (ex: ☁️ X%) et JAMAIS 0%
+    const badgeText1 = await viewerBadge.textContent();
+    const matchBadgePct1 = badgeText1.match(/(\d+)%/);
+    expect(matchBadgePct1).not.toBeNull();
+    expect(parseInt(matchBadgePct1[1], 10)).toBeGreaterThan(0);
+    console.log(`[O19 UI] Badge du viewer après ouverture : "${badgeText1.trim()}"`);
+
+    // ── ÉTAPE 3 : Reprise 1 depuis le visualiseur et 2ème interruption ──
+    await viewerBadge.click(); // Reprise 1
+    await expect(viewerBadge).toHaveClass(/downloading/, { timeout: 10000 });
+
+    await page.waitForTimeout(100);
+    await viewerBadge.click(); // Pause 2
+
+    await expect(viewerBadge).not.toHaveClass(/downloading/, { timeout: 10000 });
+    const badgeText2 = await viewerBadge.textContent();
+    console.log(`[O19 UI] Interruption 2 (Visualiseur) : "${badgeText2.trim()}"`);
+
+    // ── ÉTAPE 4 : Retour à l'accueil et vérification de la cohérence de l'arborescence ──
+    await page.locator('#readerHomeBtn').click();
+    await expect(page.locator('body')).toHaveClass(/home-tab-active/);
+    await expect(page.locator('#viewerPane')).not.toBeVisible();
+
+    const homeCard = await h.getDocCard(docId);
+    const homeBtn = homeCard.locator('.doc-cache-btn');
+    await expect(homeBtn).toHaveAttribute('title', /Cache partiel \(\d+%\)/, { timeout: 10000 });
+
+    const p2Match = (await homeBtn.getAttribute('title')).match(/Cache partiel \((\d+)%\)/);
+    const p2 = parseInt(p2Match[1], 10);
+    expect(p2).toBeGreaterThanOrEqual(p1);
+    console.log(`[O19 UI] Progression préservée dans l'arborescence : ${p2}% (>= ${p1}%)`);
+
+    // ── ÉTAPE 5 : Reprise 2 depuis l'arborescence et complétion finale ──
+    throttleEnabled = false;
+
+    await homeBtn.click(); // Reprise 2
+    await expect(homeBtn).toHaveClass(/cached/, { timeout: 45000 });
+    await expect(homeBtn).toHaveAttribute('title', /Disponible hors-ligne/, { timeout: 10000 });
+
+    // ── ÉTAPE 6 : Réouverture du visualiseur et validation du rendu final ──
+    const tabItem = page.locator('.reader-tab-item').first();
+    if (await tabItem.isVisible()) {
+      await tabItem.click();
+    } else {
+      await homeCard.locator('.doc-title-main').click();
+    }
+
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    await expect(viewerBadge).toHaveClass(/complete/, { timeout: 10000 });
+    await expect(viewerBadge).toHaveText(/En cache/, { timeout: 10000 });
+
+    await h.assertPdfViewerRendered();
+    console.log('✅ [O19] Multiples interruptions et reprises validées exclusivement via l\'interface graphique.');
   });
 });
 
