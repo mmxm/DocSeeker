@@ -730,5 +730,92 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
 
     console.log(`✅ [Core-17] Masquage barre : workspace ${Math.round(before.ws)}px → ${Math.round(hidden.ws)}px (+${Math.round(hidden.ws - before.ws)}px réels), rappel fonctionnel.`);
   });
+
+  // =========================================================================
+  // Core-18 : Persistance du volet latéral (recherche intra-doc) par onglet
+  // =========================================================================
+
+  test('Core-18 : Le statut ouvert/fermé du volet latéral est persisté indépendamment par onglet', async ({ page }) => {
+    // 1. Ouvrir le document 1 depuis une recherche (avec extraits -> volet ouvert par défaut)
+    await h.search('grossesse');
+
+    const firstCard = page.locator('.doc-card').first();
+    await expect(firstCard).toBeVisible({ timeout: 10000 });
+    const vignette = firstCard.locator('.vignette-item').first();
+    await expect(vignette).toBeVisible({ timeout: 6000 });
+    await vignette.click();
+
+    await expect(page.locator('#workspace')).toHaveClass(/split-active/, { timeout: 10000 });
+    const drawer = page.locator('#inDocSearchDrawer');
+    const toggleBtn = page.locator('#readerSidebarToggleBtn');
+
+    // Le volet est ouvert initialement sur l'onglet A (doc 1)
+    await expect(drawer).toBeVisible({ timeout: 8000 });
+    await expect(toggleBtn).toHaveClass(/active/);
+
+    // 2. Fermer le volet latéral sur l'onglet A
+    await toggleBtn.click();
+    await expect(drawer).toBeHidden();
+    await expect(toggleBtn).not.toHaveClass(/active/);
+
+    // 3. Ouvrir un second document (doc 2) dans un onglet B avec recherche explicite (volet ouvert)
+    await page.evaluate(() => {
+      window.tabManager.openTab(2, 'Document 2', 1, [
+        { occ_id: 1, page_number: 1, text_snippet: 'extrait test' }
+      ], null, 0, 1, 'extrait');
+    });
+
+    await expect(page.locator('.reader-tab-item')).toHaveCount(2);
+    const tabA = page.locator('.reader-tab-item').first();
+    const tabB = page.locator('.reader-tab-item').nth(1);
+
+    // Sur l'onglet B, le volet doit être OUVERT
+    await expect(drawer).toBeVisible({ timeout: 6000 });
+    await expect(toggleBtn).toHaveClass(/active/);
+
+    // 4. Rebasculer vers l'onglet A : le volet doit être FERMÉ (persistance de l'état de A)
+    await tabA.click();
+    await page.waitForTimeout(300);
+    await expect(drawer).toBeHidden();
+    await expect(toggleBtn).not.toHaveClass(/active/);
+
+    // 5. Rebasculer vers l'onglet B : le volet doit être OUVERT (persistance de l'état de B)
+    await tabB.click();
+    await page.waitForTimeout(300);
+    await expect(drawer).toBeVisible();
+    await expect(toggleBtn).toHaveClass(/active/);
+
+    // 6. Inverser les états : ouvrir le volet sur A, fermer le volet sur B
+    await tabA.click();
+    await page.waitForTimeout(300);
+    await expect(drawer).toBeHidden();
+    // Ouvrir le volet sur A
+    await toggleBtn.click();
+    await expect(drawer).toBeVisible();
+    await expect(toggleBtn).toHaveClass(/active/);
+
+    // Aller sur B et fermer le volet sur B
+    await tabB.click();
+    await page.waitForTimeout(300);
+    await expect(drawer).toBeVisible();
+    await toggleBtn.click();
+    await expect(drawer).toBeHidden();
+    await expect(toggleBtn).not.toHaveClass(/active/);
+
+    // 7. Vérifications croisées finales
+    // Rebasculer sur A : doit rester OUVERT
+    await tabA.click();
+    await page.waitForTimeout(300);
+    await expect(drawer).toBeVisible();
+    await expect(toggleBtn).toHaveClass(/active/);
+
+    // Rebasculer sur B : doit rester FERMÉ
+    await tabB.click();
+    await page.waitForTimeout(300);
+    await expect(drawer).toBeHidden();
+    await expect(toggleBtn).not.toHaveClass(/active/);
+
+    console.log('✅ [Core-18] Statut ouvert/fermé du volet latéral persisté avec succès indépendamment par onglet.');
+  });
 });
 

@@ -249,7 +249,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
   // État de Recherche Intra-Document — Propriétaire : l'ONGLET (tabManager).
   // Chaque onglet porte searchQuery / occurrences / searchActive /
-  // activeOccurrenceIndex. Les variables ci-dessus ne sont que la PROJECTION
+  // activeOccurrenceIndex / drawerOpen. Les variables ci-dessus ne sont que la PROJECTION
   // de l'état de l'onglet actif vers les vues (stepper, volet, tiroir).
   // Flux unique : onglet → projection → DOM. Aucun héritage inter-documents.
   // =========================================================================
@@ -1189,7 +1189,8 @@ document.addEventListener("DOMContentLoaded", () => {
         scrollLeft: t.scrollLeft ?? null,
         searchQuery: t.searchQuery || "",
         searchActive: Boolean(t.searchActive),
-        activeOccurrenceIndex: t.activeOccurrenceIndex || 0
+        activeOccurrenceIndex: t.activeOccurrenceIndex || 0,
+        drawerOpen: typeof t.drawerOpen === 'boolean' ? t.drawerOpen : null
       }))
     };
   }
@@ -1279,7 +1280,8 @@ document.addEventListener("DOMContentLoaded", () => {
         occurrences: [],
         activeOccurrenceIndex: st.activeOccurrenceIndex || 0,
         scrollTop: null,
-        restoredScrollTop: st.scrollTop ?? null
+        restoredScrollTop: st.scrollTop ?? null,
+        drawerOpen: typeof st.drawerOpen === 'boolean' ? st.drawerOpen : undefined
       });
     }
     if (restored.length === 0) return false;
@@ -4794,6 +4796,9 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!currentTab) return;
       currentTab.page = getCurrentViewerPage();
       currentTab.activeOccurrenceIndex = currentActiveOccurrenceIndex;
+      if (inDocSearchDrawer) {
+        currentTab.drawerOpen = (inDocSearchDrawer.style.display === "flex");
+      }
       try {
         const win = pdfFrame?.contentWindow;
         const container = win?.document?.getElementById("viewerContainer");
@@ -4832,6 +4837,7 @@ document.addEventListener("DOMContentLoaded", () => {
           existingTab.searchQuery = searchQuery;
           existingTab.occurrences = (occurrences && occurrences.length > 0) ? occurrences : existingTab.occurrences;
           existingTab.searchActive = true;
+          existingTab.drawerOpen = true;
         } else {
           // CANAL 2 : une ouverture sans recherche explicite ne réactive pas une
           // ancienne recherche (ni celle d'un autre document).
@@ -4839,6 +4845,8 @@ document.addEventListener("DOMContentLoaded", () => {
           existingTab.searchActive = false;
         }
       } else {
+        const hasInitialResults = Boolean((occurrences && occurrences.length > 0) || (searchQuery && searchQuery.trim()));
+        const isCurrentDrawerOpen = Boolean(inDocSearchDrawer && inDocSearchDrawer.style.display === "flex");
         const newTab = {
           id: `tab_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
           docId: numericDocId,
@@ -4852,7 +4860,8 @@ document.addEventListener("DOMContentLoaded", () => {
           searchQuery: searchQuery || "",
           occurrences: occurrences || [],
           activeOccurrenceIndex: 0,
-          scrollTop: null
+          scrollTop: null,
+          drawerOpen: hasInitialResults || isCurrentDrawerOpen
         };
         this.openTabs.push(newTab);
         this.activeTabId = newTab.id;
@@ -5110,6 +5119,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const isHidden = (drawerEl.style.display === "none" || !drawerEl.style.display);
       drawerEl.style.display = isHidden ? "flex" : "none";
       readerSidebarToggleBtn.classList.toggle("active", isHidden);
+      const activeTab = getActiveTab();
+      if (activeTab) {
+        activeTab.drawerOpen = isHidden;
+        if (typeof persistOpenTabs === "function") persistOpenTabs();
+      }
       if (isHidden) {
         if (typeof syncInDocDrawerIfNeeded === "function") syncInDocDrawerIfNeeded();
         const tabTerm = getActiveDocSearchTerm();
@@ -5208,16 +5222,25 @@ document.addEventListener("DOMContentLoaded", () => {
     if (mainSidebarDrawer) mainSidebarDrawer.classList.remove("open");
     if (mainSidebarOverlay) mainSidebarOverlay.style.display = "none";
 
-    // Ouvrir automatiquement le volet latéral des résultats in-doc dès qu'un document est ouvert avec des résultats
+    // Volet latéral des résultats in-doc : restaurer ou initialiser l'état selon l'onglet cible
+    let shouldShowDrawer = false;
+    if (targetTab && typeof targetTab.drawerOpen === 'boolean') {
+      shouldShowDrawer = targetTab.drawerOpen;
+    } else {
+      shouldShowDrawer = Boolean((occurrences && occurrences.length > 0) || (effectiveSearchQuery && effectiveSearchQuery.trim()));
+      if (targetTab) {
+        targetTab.drawerOpen = shouldShowDrawer;
+      }
+    }
+
     if (inDocSearchDrawer) {
-      const hasResults = (occurrences && occurrences.length > 0) || (effectiveSearchQuery && effectiveSearchQuery.trim());
-      if (hasResults) {
-        inDocSearchDrawer.style.display = "flex";
+      inDocSearchDrawer.style.display = shouldShowDrawer ? "flex" : "none";
+      if (shouldShowDrawer && typeof syncInDocDrawerIfNeeded === "function") {
+        syncInDocDrawerIfNeeded();
       }
     }
     if (readerSidebarToggleBtn) {
-      const isDrawerOpen = inDocSearchDrawer && inDocSearchDrawer.style.display === "flex";
-      readerSidebarToggleBtn.classList.toggle("active", isDrawerOpen);
+      readerSidebarToggleBtn.classList.toggle("active", shouldShowDrawer);
     }
     document.body.classList.remove("home-tab-active");
     document.documentElement.classList.remove("home-tab-active");
@@ -5772,6 +5795,11 @@ document.addEventListener("DOMContentLoaded", () => {
         card.classList.toggle('active', isActive);
         if (isActive) scrollActiveCardIntoView(card);
       });
+      if (inDocSearchDrawer && inDocSearchDrawer.style.display === "flex") {
+        if (inDocDrawerOccurrencesList && inDocDrawerOccurrencesList.children.length === 0) {
+          syncInDocDrawerIfNeeded();
+        }
+      }
       if (inDocDrawerOccurrencesList && inDocDrawerOccurrencesList.children.length > 0) {
         const drawerCards = inDocDrawerOccurrencesList.querySelectorAll('.vertical-occ-card');
         drawerCards.forEach((card, idx) => {
