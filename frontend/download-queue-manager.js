@@ -261,7 +261,7 @@ class DownloadQueueManager {
     if (!id || this.cachedDocIds.has(id) || this._indexingDocIds.has(id)) return;
     this._indexingDocIds.add(id);
     try {
-      const bundleRes = await fetch(`/api/documents/${id}/offline-bundle`);
+      const bundleRes = await fetch(`/api/documents/${id}/offline-bundle`, { credentials: 'include' });
       if (bundleRes.ok) {
         const bundle = await bundleRes.json();
         await this.sendToWorker('INSERT_BUNDLE', { bundle }, 120000);
@@ -397,6 +397,7 @@ class DownloadQueueManager {
   _notify() {
     const state = {
       queueCount: this.queue.length,
+      queue: [...this.queue],
       activeCount: this.activeTasks.size,
       activeTasks: Array.from(this.activeTasks.values()),
       isPaused: this.isPaused,
@@ -599,7 +600,7 @@ class DownloadQueueManager {
       }
 
       // 1. Télécharger le offline-bundle (Index textuel et spatial) et l'injecter dans SQLite-Wasm
-      const bundleRes = await fetch(`/api/documents/${docId}/offline-bundle`);
+      const bundleRes = await fetch(`/api/documents/${docId}/offline-bundle`, { credentials: 'include' });
       if (bundleRes.ok) {
         const bundle = await bundleRes.json();
         await this.sendToWorker('INSERT_BUNDLE', { bundle }, 120000);
@@ -608,7 +609,7 @@ class DownloadQueueManager {
 
       // 2. Mettre en cache l'image de couverture dans CacheStorage
       if (typeof caches !== 'undefined') {
-        const coverRes = await fetch(`/api/cover/${docId}`).catch(() => null);
+        const coverRes = await fetch(`/api/cover/${docId}`, { credentials: 'include' }).catch(() => null);
         if (coverRes && coverRes.ok) {
           const cache = await caches.open('docseeker_covers');
           await cache.put(`/api/cover/${docId}`, coverRes);
@@ -661,7 +662,7 @@ class DownloadQueueManager {
           });
         }
 
-        const pdfRes = await fetch(`/api/pdf/${docId}`, { signal: controller.signal });
+        const pdfRes = await fetch(`/api/pdf/${docId}`, { credentials: 'include', signal: controller.signal });
         if (pdfRes.ok) {
           const contentLength = Number(pdfRes.headers.get('content-length')) || 0;
           task.totalBytes = contentLength;

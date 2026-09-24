@@ -495,6 +495,27 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
     expect(idbStats).not.toBeNull();
     expect(idbStats.downloadedBytes).toBeGreaterThan(0);
 
+    // 4 bis. Réouverture du document partiellement mis en cache : VÉRIFICATION CRITIQUE ANTI-RÉGRESSION
+    // Le document ne doit PAS relancer de téléchargement automatique complet en tâche de fond !
+    await doc1Card.locator('.doc-title-main').click();
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    const partialBadge = page.locator('#viewerCacheBadge');
+    await expect(partialBadge).toBeVisible({ timeout: 10000 });
+
+    // Attente de stabilisation pour s'assurer qu'aucun téléchargement n'est déclenché en douce
+    await page.waitForTimeout(1000);
+
+    const isAutoDownloading = await page.evaluate(() => {
+      const dqm = window.downloadQueueManager;
+      return Boolean(dqm && (dqm.activeTasks.has(1) || dqm.queue.includes(1)));
+    });
+    expect(isAutoDownloading).toBe(false);
+    await expect(partialBadge).not.toHaveClass(/downloading/);
+
+    // Refermer pour passer au déclenchement explicite
+    await page.locator('#readerHomeBtn').click();
+    await expect(page.locator('#viewerPane')).toBeHidden();
+
     // 5. Clic sur le bouton de mise en cache manuel (Style iCloud Sync)
     const cacheBtn = doc1Card.locator('.doc-cache-btn');
     await expect(cacheBtn).toBeVisible();

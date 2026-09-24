@@ -475,4 +475,53 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
     expect(isComplete).toBe(true);
     console.log('✅ [O14] Reprise automatique de la mise en cache au retour sur l onglet validée.');
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // O15 : Ouverture Document Non En Cache → Pas de Téléchargement Automatique Intempestif
+  // ─────────────────────────────────────────────────────────────────────────
+
+  test('O15 - Ouverture Document Non En Cache : Pas de Téléchargement Automatique Intempestif', async ({ page }) => {
+    await h.ensureDocNotCached(2);
+    await h.openFolder(130);
+
+    // 1. Première ouverture de consultation simple
+    const card = await h.getDocCard(2);
+    await card.locator('.doc-title-main').click();
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    const badge = page.locator('#viewerCacheBadge');
+    await expect(badge).toBeVisible({ timeout: 10000 });
+
+    // Attendre pour s'assurer qu'aucun téléchargement complet n'est lancé en douce
+    await page.waitForTimeout(1000);
+
+    let isEnqueuedOrActive = await page.evaluate(() => {
+      const dqm = window.downloadQueueManager;
+      return Boolean(dqm && (dqm.activeTasks.has(2) || dqm.queue.includes(2)));
+    });
+    expect(isEnqueuedOrActive).toBe(false);
+    await expect(badge).not.toHaveClass(/downloading/);
+
+    // 2. Quitter le document et retourner à l'accueil
+    await page.locator('#readerHomeBtn').click();
+    await expect(page.locator('body')).toHaveClass(/home-tab-active/);
+    await expect(page.locator('#viewerPane')).not.toBeVisible();
+
+    // 3. Réouverture du document : doit rester en consultation sans retéléchargement forcé
+    const cardReopened = await h.getDocCard(2);
+    await cardReopened.locator('.doc-title-main').click();
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(1000);
+
+    isEnqueuedOrActive = await page.evaluate(() => {
+      const dqm = window.downloadQueueManager;
+      return Boolean(dqm && (dqm.activeTasks.has(2) || dqm.queue.includes(2)));
+    });
+    expect(isEnqueuedOrActive).toBe(false);
+    await expect(badge).not.toHaveClass(/downloading/);
+
+    // 4. Seul un clic explicite sur le badge doit déclencher le téléchargement complet
+    await badge.click();
+    await expect(badge).toHaveClass(/downloading|complete/, { timeout: 10000 });
+    console.log('✅ [O15] Zéro téléchargement intempestif aux ouvertures successives.');
+  });
 });
