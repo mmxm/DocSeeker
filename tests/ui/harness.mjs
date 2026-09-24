@@ -64,6 +64,7 @@ export class DocSeekerTestHarness {
     expect(loginRes.ok()).toBeTruthy();
     await this.page.addInitScript(() => {
       localStorage.setItem('docseeker_session_valid_until', String(Date.now() + 30 * 24 * 3600 * 1000));
+      sessionStorage.setItem('docseeker_last_sw_controller_reload', String(Date.now()));
     });
   }
 
