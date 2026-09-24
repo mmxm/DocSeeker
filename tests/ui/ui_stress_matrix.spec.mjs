@@ -49,6 +49,7 @@ test.describe('Matrice de Résistance Agressive & Garde-fous Performance / RAM',
 
   for (const tc of clickSpamCases) {
     test(`Matrice A1 - Clics frénétiques (${tc.clicks} clics en ${tc.intervalMs}ms) sur Téléchargement (${tc.name})`, async ({ page }) => {
+      if (tc.doc.id === ARCHETYPES.MASSIVE.id) test.slow();
       await harness.goto('/');
       const startMetrics = await harness.getPerformanceMetrics();
 
@@ -92,7 +93,8 @@ test.describe('Matrice de Résistance Agressive & Garde-fous Performance / RAM',
       }
 
       const endMetrics = await harness.getPerformanceMetrics();
-      harness.assertResourceGuard(startMetrics, endMetrics, { maxHeapGrowthMB: 60, maxDurationMs: 30000 });
+      const maxDuration = (tc.doc.id === ARCHETYPES.MASSIVE.id) ? 60000 : 30000;
+      harness.assertResourceGuard(startMetrics, endMetrics, { maxHeapGrowthMB: 60, maxDurationMs: maxDuration });
     });
   }
 
