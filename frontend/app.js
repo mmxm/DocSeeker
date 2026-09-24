@@ -1499,8 +1499,183 @@ document.addEventListener("DOMContentLoaded", () => {
     refreshCachedDocsBtn.addEventListener("click", () => refreshDownloadsView());
   }
 
+  // Chargement et affichage des sessions actives
+  async function loadActiveSessions() {
+    const listEl = document.getElementById("activeSessionsList");
+    if (!listEl) return;
+
+    try {
+      const res = await fetch("/api/auth/sessions");
+      if (res.status === 401) {
+        listEl.innerHTML = `<div class="sessions-empty-state">Authentification requise pour afficher les sessions.</div>`;
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const sessions = data.sessions || [];
+
+      if (sessions.length === 0) {
+        listEl.innerHTML = `<div class="sessions-empty-state">Aucune session active répertoriée.</div>`;
+        return;
+      }
+
+      // Formatage du temps relatif convivial
+      const formatRelativeTime = (dateStr) => {
+        try {
+          const date = new Date(dateStr.endsWith("Z") ? dateStr : `${dateStr}Z`);
+          const diffMs = Date.now() - date.getTime();
+          const diffSec = Math.floor(diffMs / 1000);
+          if (diffSec < 60) return "À l'instant";
+          const diffMin = Math.floor(diffSec / 60);
+          if (diffMin < 60) return `Il y a ${diffMin} min`;
+          const diffHours = Math.floor(diffMin / 60);
+          if (diffHours < 24) return `Il y a ${diffHours} h`;
+          const diffDays = Math.floor(diffHours / 24);
+          if (diffDays < 7) return `Il y a ${diffDays} j`;
+          return date.toLocaleDateString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+        } catch (e) {
+          return dateStr;
+        }
+      };
+
+      // Icône selon le type d'appareil
+      const getDeviceIconSvg = (deviceType) => {
+        if (deviceType === "mobile") {
+          return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>`;
+        }
+        if (deviceType === "tablet") {
+          return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>`;
+        }
+        return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>`;
+      };
+
+      let html = "";
+      sessions.forEach(s => {
+        const iconSvg = getDeviceIconSvg(s.device_type);
+        const lastSeenText = formatRelativeTime(s.last_seen);
+        const ipTag = s.ip_address ? `<span class="session-ip-tag" title="Adresse IP de connexion">${escapeHtml(s.ip_address)}</span>` : "";
+        const currentBadge = s.is_current ? `<span class="session-badge-current">Cet appareil</span>` : "";
+        const itemClass = s.is_current ? "session-item current-session" : "session-item";
+        const btnText = s.is_current ? "Se déconnecter" : "Déconnecter";
+
+        html += `
+          <div class="${itemClass}" data-session-id="${escapeHtml(s.id)}">
+            <div class="session-item-left">
+              <div class="session-item-icon">
+                ${iconSvg}
+              </div>
+              <div class="session-item-info">
+                <div class="session-title-line">
+                  <span class="session-device-name">${escapeHtml(s.os)} • ${escapeHtml(s.browser)}</span>
+                  ${currentBadge}
+                </div>
+                <div class="session-details-line">
+                  <span>Dernière activité : ${lastSeenText}</span>
+                  ${ipTag ? `<span>•</span> ${ipTag}` : ""}
+                </div>
+              </div>
+            </div>
+            <div class="session-item-actions">
+              <button class="btn-session-revoke" data-session-id="${escapeHtml(s.id)}" data-is-current="${s.is_current ? 'true' : 'false'}">
+                ${btnText}
+              </button>
+            </div>
+          </div>
+        `;
+      });
+
+      listEl.innerHTML = html;
+
+      // Écouteurs pour la révocation unitaire
+      listEl.querySelectorAll(".btn-session-revoke").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const sessId = btn.getAttribute("data-session-id");
+          const isCurr = btn.getAttribute("data-is-current") === "true";
+          const confirmMsg = isCurr 
+            ? "Voulez-vous déconnecter cette session courante ? Vous devrez vous reconnecter."
+            : "Voulez-vous déconnecter cet appareil ?";
+          if (!confirm(confirmMsg)) return;
+
+          try {
+            btn.disabled = true;
+            btn.textContent = "Déconnexion...";
+            const delRes = await fetch(`/api/auth/sessions/${encodeURIComponent(sessId)}`, { method: "DELETE" });
+            if (!delRes.ok) throw new Error(`HTTP ${delRes.status}`);
+            const delData = await delRes.json();
+            if (delData.is_current) {
+              showToast("Session fermée. Reconnexion requise.", "info");
+              setTimeout(() => window.location.reload(), 600);
+            } else {
+              showToast("Appareil déconnecté avec succès", "success");
+              loadActiveSessions();
+            }
+          } catch (err) {
+            console.error("Erreur révocation session:", err);
+            showToast("Erreur lors de la déconnexion de l'appareil", "error");
+            btn.disabled = false;
+            btn.textContent = isCurr ? "Se déconnecter" : "Déconnecter";
+          }
+        });
+      });
+
+    } catch (e) {
+      console.error("Erreur chargement sessions:", e);
+      listEl.innerHTML = `<div class="sessions-empty-state">Impossible de charger les sessions actives.</div>`;
+    }
+  }
+
+  // Écouteurs pour la révocation globale
+  const revokeOtherSessionsBtn = document.getElementById("revokeOtherSessionsBtn");
+  if (revokeOtherSessionsBtn) {
+    revokeOtherSessionsBtn.addEventListener("click", async () => {
+      if (confirm("Voulez-vous déconnecter tous les autres appareils connectés à DocSeeker ? Votre session sur cet appareil restera active.")) {
+        try {
+          revokeOtherSessionsBtn.disabled = true;
+          const res = await fetch("/api/auth/sessions/revoke-all", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ include_current: false })
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          showToast(`${data.revoked_count} autre(s) appareil(s) déconnecté(s)`, "success");
+          loadActiveSessions();
+        } catch (e) {
+          console.error("Erreur déconnexion autres appareils:", e);
+          showToast("Erreur lors de la déconnexion des autres appareils", "error");
+        } finally {
+          revokeOtherSessionsBtn.disabled = false;
+        }
+      }
+    });
+  }
+
+  const revokeAllSessionsBtn = document.getElementById("revokeAllSessionsBtn");
+  if (revokeAllSessionsBtn) {
+    revokeAllSessionsBtn.addEventListener("click", async () => {
+      if (confirm("Voulez-vous déconnecter absolument tous les appareils (y compris ce navigateur) ? Vous devrez vous reconnecter immédiatement.")) {
+        try {
+          revokeAllSessionsBtn.disabled = true;
+          const res = await fetch("/api/auth/sessions/revoke-all", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ include_current: true })
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          showToast("Toutes les sessions ont été révoquées. Reconnexion...", "info");
+          setTimeout(() => window.location.reload(), 600);
+        } catch (e) {
+          console.error("Erreur révocation totale:", e);
+          showToast("Erreur lors de la révocation des sessions", "error");
+          revokeAllSessionsBtn.disabled = false;
+        }
+      }
+    });
+  }
+
   // Mise à jour de la Vue Réglages
   async function refreshSettingsView() {
+    loadActiveSessions();
     const cachedCountEl = document.getElementById("settingsCachedCount");
     const storageUsedEl = document.getElementById("settingsStorageUsed");
     if (window.downloadQueueManager && cachedCountEl) {

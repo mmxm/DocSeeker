@@ -1,5 +1,5 @@
 use axum::{
-    extract::{ConnectInfo, State},
+    extract::{ConnectInfo, Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
 };
@@ -384,3 +384,131 @@ pub async fn setup_handler(
         "message": "Mot de passe administrateur configuré avec succès"
     })).into_response()
 }
+
+#[derive(Deserialize, Default)]
+pub struct RevokeAllPayload {
+    pub include_current: Option<bool>,
+}
+
+/// GET /api/auth/sessions (Liste des sessions actives)
+pub async fn list_sessions_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    let token = match extract_session_token(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Non authentifié"}))).into_response(),
+    };
+
+    let conn = match state.db.get() {
+        Ok(c) => c,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Erreur DB"}))).into_response(),
+    };
+
+    match SessionManager::list_active_sessions(&conn, &token) {
+        Ok(sessions) => Json(serde_json::json!({
+            "status": "ok",
+            "sessions": sessions
+        })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+/// DELETE /api/auth/sessions/:id (Révocation individuelle d'une session)
+pub async fn revoke_session_handler(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let current_token = match extract_session_token(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Non authentifié"}))).into_response(),
+    };
+
+    let conn = match state.db.get() {
+        Ok(c) => c,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Erreur DB"}))).into_response(),
+    };
+
+    let is_current = (session_id == current_token) || (SessionManager::hash_token(&current_token) == session_id);
+
+    match SessionManager::revoke_session_by_id_or_hash(&conn, &session_id) {
+        Ok(true) => {
+            let mut response = Json(serde_json::json!({
+                "status": "ok",
+                "message": "Session révoquée avec succès",
+                "is_current": is_current
+            })).into_response();
+
+            // Si c'est la session courante, effacer le cookie
+            if is_current {
+                let cookie_name = get_cookie_name(&headers);
+                let expired_cookie = Cookie::build((cookie_name, ""))
+                    .path("/")
+                    .http_only(true)
+                    .same_site(SameSite::Lax)
+                    .max_age(time::Duration::seconds(0))
+                    .build();
+
+                response.headers_mut().insert(
+                    header::SET_COOKIE,
+                    expired_cookie.to_string().parse().unwrap(),
+                );
+            }
+
+            response
+        }
+        Ok(false) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session introuvable ou déjà expirée"}))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+/// POST /api/auth/sessions/revoke-all (Révocation en masse des sessions)
+pub async fn revoke_all_sessions_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    payload: Option<Json<RevokeAllPayload>>,
+) -> Response {
+    let current_token = match extract_session_token(&headers) {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Non authentifié"}))).into_response(),
+    };
+
+    let conn = match state.db.get() {
+        Ok(c) => c,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Erreur DB"}))).into_response(),
+    };
+
+    let include_current = payload.and_then(|Json(p)| p.include_current).unwrap_or(false);
+    let except_token = if include_current { None } else { Some(current_token.as_str()) };
+
+    match SessionManager::revoke_all_sessions(&conn, except_token) {
+        Ok(count) => {
+            let mut response = Json(serde_json::json!({
+                "status": "ok",
+                "message": if include_current { "Toutes les sessions ont été révoquées" } else { "Toutes les autres sessions ont été déconnectées" },
+                "revoked_count": count,
+                "is_current_revoked": include_current
+            })).into_response();
+
+            if include_current {
+                let cookie_name = get_cookie_name(&headers);
+                let expired_cookie = Cookie::build((cookie_name, ""))
+                    .path("/")
+                    .http_only(true)
+                    .same_site(SameSite::Lax)
+                    .max_age(time::Duration::seconds(0))
+                    .build();
+
+                response.headers_mut().insert(
+                    header::SET_COOKIE,
+                    expired_cookie.to_string().parse().unwrap(),
+                );
+            }
+
+            response
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+

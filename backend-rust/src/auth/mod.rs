@@ -2,6 +2,7 @@ pub mod password;
 pub mod rate_limit;
 pub mod routes;
 pub mod session;
+pub mod user_agent;
 
 use axum::{
     extract::{Request, State},

@@ -7,13 +7,16 @@ pub mod search;
 use axum::{
     extract::DefaultBodyLimit,
     middleware,
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
     Router,
 };
 use std::sync::Arc;
 
 use crate::auth::require_auth_middleware;
-use crate::auth::routes::{change_password_handler, login_handler, logout_handler, setup_handler, status_handler};
+use crate::auth::routes::{
+    change_password_handler, list_sessions_handler, login_handler, logout_handler,
+    revoke_all_sessions_handler, revoke_session_handler, setup_handler, status_handler,
+};
 use crate::AppState;
 
 pub fn create_api_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
@@ -29,6 +32,9 @@ pub fn create_api_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     let protected_routes = Router::new()
         .route("/auth/logout", post(logout_handler))
         .route("/auth/change-password", post(change_password_handler))
+        .route("/auth/sessions", get(list_sessions_handler))
+        .route("/auth/sessions/:id", delete(revoke_session_handler))
+        .route("/auth/sessions/revoke-all", post(revoke_all_sessions_handler))
         // Dossiers
         .route("/folders", get(folders::list_folders).post(folders::create_folder))
         .route("/folders/:id", patch(folders::update_folder).delete(folders::delete_folder))

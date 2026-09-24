@@ -187,3 +187,73 @@ fn test_sync_check_logic() {
     assert_eq!(deleted_ids, vec![3, 4]);
 }
 
+#[test]
+fn test_session_management_and_revocation() {
+    use docseeker_backend::auth::session::SessionManager;
+
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(r#"
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            expires_at DATETIME NOT NULL,
+            last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+            user_agent TEXT,
+            ip_address TEXT
+        );
+    "#).unwrap();
+
+    // 1. Créer 3 sessions (Mac, iPhone, Windows)
+    let ua_mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+    let ua_iphone = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+    let ua_win = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+    let token_mac = SessionManager::create_session(&conn, 30, Some(ua_mac), Some("192.168.1.10")).unwrap();
+    let token_iphone = SessionManager::create_session(&conn, 30, Some(ua_iphone), Some("192.168.1.11")).unwrap();
+    let _token_win = SessionManager::create_session(&conn, 30, Some(ua_win), Some("192.168.1.12")).unwrap();
+
+    // 2. Lister les sessions avec token_mac comme session courante
+    let sessions = SessionManager::list_active_sessions(&conn, &token_mac).unwrap();
+    assert_eq!(sessions.len(), 3);
+
+    // Vérifier les détails de la session Mac courante
+    let mac_info = sessions.iter().find(|s| s.os == "macOS").unwrap();
+    assert!(mac_info.is_current);
+    assert_eq!(mac_info.browser, "Safari");
+    assert_eq!(mac_info.device_type, "desktop");
+    assert_eq!(mac_info.ip_address.as_deref(), Some("192.168.1.10"));
+    assert_eq!(mac_info.id, SessionManager::hash_token(&token_mac));
+
+    // Vérifier la session iPhone (non courante)
+    let iphone_info = sessions.iter().find(|s| s.os == "iOS").unwrap();
+    assert!(!iphone_info.is_current);
+    assert_eq!(iphone_info.device_type, "mobile");
+    assert_eq!(iphone_info.id, SessionManager::hash_token(&token_iphone));
+
+    // 3. Révocation individuelle de la session Windows par son hash public
+    let win_info = sessions.iter().find(|s| s.os == "Windows").unwrap();
+    let revoked = SessionManager::revoke_session_by_id_or_hash(&conn, &win_info.id).unwrap();
+    assert!(revoked);
+
+    let sessions_after_single = SessionManager::list_active_sessions(&conn, &token_mac).unwrap();
+    assert_eq!(sessions_after_single.len(), 2);
+    assert!(!sessions_after_single.iter().any(|s| s.os == "Windows"));
+
+    // 4. Révocation de toutes les autres sessions (sauf token_mac)
+    let count_revoked = SessionManager::revoke_all_sessions(&conn, Some(&token_mac)).unwrap();
+    assert_eq!(count_revoked, 1); // Seul l'iPhone restait à révoquer
+
+    let sessions_after_others = SessionManager::list_active_sessions(&conn, &token_mac).unwrap();
+    assert_eq!(sessions_after_others.len(), 1);
+    assert_eq!(sessions_after_others[0].os, "macOS");
+    assert!(sessions_after_others[0].is_current);
+
+    // 5. Révocation absolue de toutes les sessions
+    let count_all = SessionManager::revoke_all_sessions(&conn, None).unwrap();
+    assert_eq!(count_all, 1);
+
+    let sessions_empty = SessionManager::list_active_sessions(&conn, &token_mac).unwrap();
+    assert_eq!(sessions_empty.len(), 0);
+}
+
+

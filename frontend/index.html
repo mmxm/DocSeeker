@@ -512,6 +512,25 @@
             </div>
           </div>
 
+          <!-- Section Sessions Actives & Appareils Connectés -->
+          <div class="settings-card" id="settingsSessionsCard">
+            <div class="settings-sessions-header">
+              <div class="settings-label-group">
+                <span class="settings-label-title">Sessions & Appareils connectés</span>
+                <span class="settings-label-desc">Gérez les accès authentifiés à votre bibliothèque DocSeeker.</span>
+              </div>
+              <div class="settings-sessions-actions">
+                <button id="revokeOtherSessionsBtn" class="btn btn-sm btn-secondary" title="Déconnecter tous les autres appareils connectés">Déconnecter les autres appareils</button>
+                <button id="revokeAllSessionsBtn" class="btn btn-sm btn-danger" title="Déconnecter absolument tous les appareils y compris celui-ci">Tout révoquer</button>
+              </div>
+            </div>
+
+            <!-- Liste dynamique des sessions -->
+            <div id="activeSessionsList" class="active-sessions-list">
+              <div class="sessions-loading-state">Chargement des sessions...</div>
+            </div>
+          </div>
+
           <!-- Section Session Locale (persistance des onglets, opt-in) -->
           <div class="settings-card">
             <h3 class="settings-card-title">Session (ce navigateur)</h3>

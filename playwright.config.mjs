@@ -20,7 +20,7 @@ export default defineConfig({
     {
       // Tests déterministes : 0 retry, aucune tolérance à la flakiness
       name: 'stable',
-      testMatch: ['**/ui_core.spec.*', '**/ui_offline.spec.*'],
+      testMatch: ['**/ui_core.spec.*', '**/ui_offline.spec.*', '**/ui_sessions.spec.*'],
       retries: 0,
       use: {
         ...devices['Desktop Chrome'],
