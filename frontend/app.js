@@ -1967,30 +1967,26 @@ document.addEventListener("DOMContentLoaded", () => {
     searchInput.focus();
   });
 
-  // Filtre : Titres uniquement
+  // Filtre : Titres uniquement (debounced pour éviter les recherches multiples lors de toggles rapides)
   filterTitlesOnly.addEventListener("change", () => {
     filterTitlesChip.classList.toggle("active", filterTitlesOnly.checked);
-    if (searchInput.value.trim()) {
-      performSearch(searchInput.value.trim());
-    }
+    debouncedFilterSearch();
   });
 
-  // Filtre : Dans ce dossier uniquement
+  // Filtre : Dans ce dossier uniquement (debounced)
   filterCurrentFolderOnly.addEventListener("change", () => {
     filterFolderChip.classList.toggle("active", filterCurrentFolderOnly.checked);
-    if (searchInput.value.trim()) {
-      performSearch(searchInput.value.trim());
-    }
+    debouncedFilterSearch();
   });
 
-  // Filtre : Hors-ligne uniquement
+  // Filtre : Hors-ligne uniquement (debounced)
   if (filterOfflineOnly) {
     filterOfflineOnly.addEventListener("change", () => {
       if (filterOfflineChip) {
         filterOfflineChip.classList.toggle("active", filterOfflineOnly.checked);
       }
       if (searchInput.value.trim()) {
-        performSearch(searchInput.value.trim());
+        debouncedFilterSearch();
       } else {
         loadFoldersAndDocuments();
       }
@@ -4016,7 +4012,21 @@ document.addEventListener("DOMContentLoaded", () => {
   // =========================================================================
   // Recherche avec Filtres (Titres & Dossier) et Routage Hors-Ligne
   // =========================================================================
-  async function performSearchRequest(query, isTitlesOnly, isFolderOnly, folderId, limit = 15, offset = 0) {
+  let _searchAbortController = null; // Annulation de la requête de recherche en vol
+  let _filterSearchDebounceTimer = null; // Debounce des changements de filtre
+
+  // Debounce de la recherche déclenchée par un changement de filtre (250ms)
+  function debouncedFilterSearch() {
+    if (_filterSearchDebounceTimer) clearTimeout(_filterSearchDebounceTimer);
+    _filterSearchDebounceTimer = setTimeout(() => {
+      _filterSearchDebounceTimer = null;
+      if (searchInput.value.trim()) {
+        performSearch(searchInput.value.trim());
+      }
+    }, 250);
+  }
+
+  async function performSearchRequest(query, isTitlesOnly, isFolderOnly, folderId, limit = 15, offset = 0, signal = null) {
     const isOffline = !navigator.onLine || (filterOfflineOnly && filterOfflineOnly.checked);
     if (isOffline) {
       if (window.downloadQueueManager) {
@@ -4040,11 +4050,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (isTitlesOnly) url += `&titles_only=true`;
     if (isFolderOnly && folderId !== null) url += `&folder_id=${folderId}`;
 
+    const fetchOptions = signal ? { signal } : {};
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, fetchOptions);
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return await res.json();
     } catch (netErr) {
+      // Propager proprement l'annulation sans fallback inutile
+      if (netErr.name === 'AbortError') throw netErr;
       console.warn("[Search] Échec requête en ligne, bascule automatique sur le moteur local hors-ligne :", netErr);
       if (filterOfflineOnly && !filterOfflineOnly.checked) {
         filterOfflineOnly.checked = true;
@@ -4074,6 +4087,13 @@ document.addEventListener("DOMContentLoaded", () => {
       loadFoldersAndDocuments();
       return;
     }
+
+    // Annuler toute recherche précédente en vol pour éviter les race conditions
+    if (_searchAbortController) {
+      try { _searchAbortController.abort(); } catch (e) {}
+    }
+    _searchAbortController = new AbortController();
+    const signal = _searchAbortController.signal;
 
     currentSearchQuery = query;
     isSearchActive = true;
@@ -4105,7 +4125,9 @@ document.addEventListener("DOMContentLoaded", () => {
     resultsContainer.innerHTML = `<div style="padding: 16px; color: var(--text-muted);">Recherche en cours...</div>`;
 
     try {
-      const data = await performSearchRequest(query, isTitlesOnly, isFolderOnly, currentFolderId, 15, 0);
+      const data = await performSearchRequest(query, isTitlesOnly, isFolderOnly, currentFolderId, 15, 0, signal);
+      // Ignorer le résultat si une nouvelle recherche a été lancée entre-temps
+      if (signal.aborted) return;
       lastSearchResultsData = data;
 
       // Par défaut, mettre le tri sur "Pertinence" lors d'une nouvelle recherche
@@ -4118,6 +4140,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
       renderSearchResults(data);
     } catch (err) {
+      // Ignorer silencieusement les requêtes annulées (nouvelle recherche en cours)
+      if (err.name === 'AbortError') return;
       console.error("Erreur recherche:", err);
       _docCardMap.clear();
       resultsContainer.innerHTML = `<div style="padding: 16px; color: var(--danger);">Erreur lors de la recherche (${escapeHtml(err.message)}).</div>`;
