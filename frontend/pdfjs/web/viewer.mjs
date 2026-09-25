@@ -13795,10 +13795,37 @@ const PDFViewerApplication = {
       this.setTitleUsingUrl(args.originalUrl || args.url, args.url);
     }
     const apiParams = AppOptions.getAll(OptionKind.API);
+    // Latence d'affichage : streaming activé (parse dès l'arrivée des octets) et
+    // ranges de 1 Mo (1-2 allers-retours par page au lieu de 4-8 en 64 Ko).
+    // Les petits documents (<= 20 Mo) sont préchargés en entier (auto-fetch)
+    // pour un rendu/scroll instantané ; les gros restent à la demande.
+    let prefetchSmall = false;
+    if (args?.url) {
+      try {
+        const probe = await fetch(args.url, {
+          method: "GET",
+          headers: { Range: "bytes=0-0" },
+          credentials: "include"
+        });
+        const cr = probe.headers.get("content-range");
+        const total = cr ? parseInt(cr.split("/")[1], 10) : parseInt(probe.headers.get("content-length"), 10) || 0;
+        if (total > 0 && total <= 20 * 1024 * 1024) {
+          prefetchSmall = true;
+        }
+        try {
+          await probe.body?.cancel();
+        } catch (e) {}
+      } catch (e) {}
+      if (currentSeq !== this._openSeq) {
+        return;
+      }
+    }
     const loadingTask = getDocument({
       ...apiParams,
       withCredentials: true,
-      disableAutoFetch: true,
+      disableStream: false,
+      rangeChunkSize: 1048576,
+      disableAutoFetch: !prefetchSmall,
       ...args
     });
     this.pdfLoadingTask = loadingTask;
