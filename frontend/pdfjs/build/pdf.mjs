@@ -10196,87 +10196,27 @@ class PDFFetchStreamReader {
       done
     } = await this._reader.read();
     if (done) {
-      if (this._normUrl && this._accumulatedLen > 0) {
-        try {
-          const merged = new Uint8Array(this._accumulatedLen);
-          let off = 0;
-          for (const b of this._accumulatedBytes) {
-            merged.set(b, off);
-            off += b.byteLength;
-          }
-          const begin = this._currentOffset;
-          const end = begin + this._accumulatedLen;
-          const chunkKey = `${this._normUrl}#${begin}_${end}`;
-          _writeCachedChunk(chunkKey, merged.buffer);
-          if (typeof window !== "undefined") {
-            let chunkDocId = null;
-            try {
-              const m = String(this._normUrl || "").match(/\/api\/pdf\/(\d+)/);
-              if (m) chunkDocId = Number(m[1]);
-            } catch (e) {}
+      // DocSeeker : signaler la réception INTÉGRALE du flux complet (pas un range,
+      // pas un flux interrompu). L'app parente peut alors persister le document
+      // en cache local complet via PDFViewerApplication.pdfDocument.getData().
+      try {
+        if (this._normUrl && this._contentLength > 0 && this._loaded >= this._contentLength) {
+          const m = String(this._normUrl).match(/\/api\/pdf\/(\d+)/);
+          if (m && typeof window !== "undefined") {
             window.parent?.postMessage({
-              type: "docseeker_chunk_saved",
-              docId: chunkDocId,
-              cacheKey: chunkKey,
-              chunkSize: this._accumulatedLen,
-              totalBytes: this._contentLength || 0
+              type: "docseeker_pdf_stream_complete",
+              docId: Number(m[1]),
+              length: this._contentLength
             }, "*");
           }
-        } catch (e) {}
-        this._accumulatedBytes = [];
-        this._accumulatedLen = 0;
-      }
+        }
+      } catch (e) {}
       return {
         value,
         done
       };
     }
     this._loaded += value.byteLength;
-
-    if (this._normUrl) {
-      const CHUNK_SIZE = 256 * 1024;
-      this._accumulatedBytes.push(new Uint8Array(value));
-      this._accumulatedLen += value.byteLength;
-      while (this._accumulatedLen >= CHUNK_SIZE) {
-        const merged = new Uint8Array(CHUNK_SIZE);
-        let off = 0;
-        while (off < CHUNK_SIZE && this._accumulatedBytes.length > 0) {
-          const first = this._accumulatedBytes[0];
-          const needed = CHUNK_SIZE - off;
-          if (first.byteLength <= needed) {
-            merged.set(first, off);
-            off += first.byteLength;
-            this._accumulatedBytes.shift();
-          } else {
-            merged.set(first.subarray(0, needed), off);
-            this._accumulatedBytes[0] = first.subarray(needed);
-            off += needed;
-          }
-        }
-        this._accumulatedLen -= CHUNK_SIZE;
-        const begin = this._currentOffset;
-        const end = begin + CHUNK_SIZE;
-        const chunkKey = `${this._normUrl}#${begin}_${end}`;
-        _writeCachedChunk(chunkKey, merged.buffer);
-        this._currentOffset = end;
-
-        if (typeof window !== "undefined") {
-          let chunkDocId = null;
-          try {
-            const m = String(this._normUrl || "").match(/\/api\/pdf\/(\d+)/);
-            if (m) chunkDocId = Number(m[1]);
-          } catch (e) {}
-          window.parent?.postMessage({
-            type: "docseeker_chunk_saved",
-            docId: chunkDocId,
-            cacheKey: chunkKey,
-            chunkSize: CHUNK_SIZE,
-            totalBytes: this._contentLength || 0
-          }, "*");
-        }
-      }
-    }
-
     this.onProgress?.({
       loaded: this._loaded,
       total: this._contentLength
@@ -10291,66 +10231,6 @@ class PDFFetchStreamReader {
     this._abortController.abort();
   }
 }
-const DOCSEEKER_CHUNK_DB_NAME = "docseeker_pdf_chunks_v2";
-const DOCSEEKER_CHUNK_STORE = "chunks";
-const DOCSEEKER_META_STORE = "meta";
-let _chunkDbPromise = null;
-
-function _getDocseekerChunkDb() {
-  if (!_chunkDbPromise) {
-    _chunkDbPromise = new Promise((resolve) => {
-      try {
-        if (typeof indexedDB === "undefined") return resolve(null);
-        const req = indexedDB.open(DOCSEEKER_CHUNK_DB_NAME, 2);
-        req.onupgradeneeded = (e) => {
-          const db = e.target.result;
-          if (!db.objectStoreNames.contains(DOCSEEKER_CHUNK_STORE)) {
-            db.createObjectStore(DOCSEEKER_CHUNK_STORE);
-          }
-          if (!db.objectStoreNames.contains(DOCSEEKER_META_STORE)) {
-            db.createObjectStore(DOCSEEKER_META_STORE);
-          }
-        };
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => resolve(null);
-      } catch (err) {
-        resolve(null);
-      }
-    });
-  }
-  return _chunkDbPromise;
-}
-
-async function _readCachedChunk(key) {
-  try {
-    const db = await _getDocseekerChunkDb();
-    if (!db) return null;
-    return new Promise((resolve) => {
-      try {
-        const tx = db.transaction(DOCSEEKER_CHUNK_STORE, "readonly");
-        const store = tx.objectStore(DOCSEEKER_CHUNK_STORE);
-        const req = store.get(key);
-        req.onsuccess = () => resolve(req.result || null);
-        req.onerror = () => resolve(null);
-      } catch (e) {
-        resolve(null);
-      }
-    });
-  } catch (err) {
-    return null;
-  }
-}
-
-async function _writeCachedChunk(key, arrayBuffer) {
-  try {
-    const db = await _getDocseekerChunkDb();
-    if (!db) return;
-    const tx = db.transaction(DOCSEEKER_CHUNK_STORE, "readwrite");
-    const store = tx.objectStore(DOCSEEKER_CHUNK_STORE);
-    store.put(arrayBuffer, key);
-  } catch (err) {}
-}
-
 class PDFFetchStreamRangeReader {
   constructor(stream, begin, end) {
     this._stream = stream;
@@ -10365,36 +10245,18 @@ class PDFFetchStreamRangeReader {
     headers.append("Range", `bytes=${begin}-${end - 1}`);
     const url = source.url;
 
-    let normUrl = url;
-    try {
-      const locOrigin = (typeof window !== "undefined" && window.location) 
-        ? window.location.origin 
-        : (typeof self !== "undefined" && self.location ? self.location.origin : undefined);
-      normUrl = locOrigin ? new URL(url, locOrigin).pathname : url;
-    } catch (e) {}
-
-    const cacheKey = `${normUrl}#${begin}_${end}`;
-    this._cacheKey = cacheKey;
-    this._fromCache = false;
-    this._cachedData = null;
-    this._accumulatedChunks = null;
-
-    _readCachedChunk(cacheKey).then(cached => {
-      if (cached && cached.byteLength === (end - begin)) {
-        this._fromCache = true;
-        this._cachedData = cached;
-        this._readCapability.resolve();
-        return;
-      }
-      this._startNetworkFetch(url, headers, stream);
-    }).catch(() => {
-      this._startNetworkFetch(url, headers, stream);
-    });
-
+    this._startNetworkFetch(url, headers, stream);
     this.onProgress = null;
   }
 
   _startNetworkFetch(url, headers, stream) {
+    try {
+      if (typeof window !== "undefined") {
+        window.parent?.postMessage({ type: "docseeker_viewer_fetching" }, "*");
+        this._emittedNetworkEnd = false;
+      }
+    } catch (e) {}
+
     fetch(url, createFetchOptions(headers, this._withCredentials, this._abortController)).then(response => {
       const responseOrigin = getResponseOrigin(response.url);
       if (responseOrigin !== stream._responseOrigin) {
@@ -10419,8 +10281,8 @@ class PDFFetchStreamRangeReader {
       } catch (e) {}
       this._readCapability.resolve();
       this._reader = response.body.getReader();
-      this._accumulatedChunks = [];
     }).catch(err => {
+      this._emitNetworkEnd();
       if (err.name === 'AbortError' || this._abortController.signal.aborted) {
         this._readCapability.resolve();
         return;
@@ -10447,65 +10309,20 @@ class PDFFetchStreamRangeReader {
       return { value: undefined, done: true };
     }
 
-    if (this._fromCache) {
-      if (this._cachedData) {
-        const data = this._cachedData;
-        this._cachedData = null;
-        this._loaded += data.byteLength;
-        this.onProgress?.({
-          loaded: this._loaded
-        });
-        return {
-          value: getArrayBuffer(data),
-          done: false
-        };
-      }
-      return {
-        value: undefined,
-        done: true
-      };
-    }
-
     let value, done;
     try {
       const res = await this._reader.read();
       value = res.value;
       done = res.done;
     } catch (readErr) {
+      this._emitNetworkEnd();
       if (readErr.name === 'AbortError' || this._abortController.signal.aborted) {
         return { value: undefined, done: true };
       }
       throw readErr;
     }
     if (done) {
-      if (this._accumulatedChunks && this._accumulatedChunks.length > 0 && this._cacheKey) {
-        try {
-          let totalLen = 0;
-          for (const c of this._accumulatedChunks) totalLen += c.byteLength;
-          const merged = new Uint8Array(totalLen);
-          let off = 0;
-          for (const c of this._accumulatedChunks) {
-            merged.set(c, off);
-            off += c.byteLength;
-          }
-          _writeCachedChunk(this._cacheKey, merged.buffer);
-          if (typeof window !== "undefined") {
-            let chunkDocId = null;
-            try {
-              const m = String(this._cacheKey || "").match(/\/api\/pdf\/(\d+)/);
-              if (m) chunkDocId = Number(m[1]);
-            } catch (e) {}
-            window.parent?.postMessage({
-              type: "docseeker_chunk_saved",
-              docId: chunkDocId,
-              cacheKey: this._cacheKey,
-              chunkSize: totalLen,
-              totalBytes: this._totalLength || 0
-            }, "*");
-          }
-        } catch (e) {}
-        this._accumulatedChunks = null;
-      }
+      this._emitNetworkEnd();
       return {
         value,
         done
@@ -10513,9 +10330,6 @@ class PDFFetchStreamRangeReader {
     }
 
     this._loaded += value.byteLength;
-    if (this._accumulatedChunks) {
-      this._accumulatedChunks.push(new Uint8Array(value));
-    }
     this.onProgress?.({
       loaded: this._loaded
     });
@@ -10527,9 +10341,24 @@ class PDFFetchStreamRangeReader {
 
   cancel(reason) {
     if (!this._fromCache) {
+      this._emitNetworkEnd();
       this._reader?.cancel(reason);
       this._abortController.abort();
     }
+  }
+
+  /**
+   * DocSeeker : signal de fin de requête réseau du viewer (done, annulation ou
+   * échec). Idempotent — libère la priorité réseau tenue par cette requête.
+   */
+  _emitNetworkEnd() {
+    if (this._emittedNetworkEnd) return;
+    this._emittedNetworkEnd = true;
+    try {
+      if (typeof window !== "undefined") {
+        window.parent?.postMessage({ type: "docseeker_viewer_network_end" }, "*");
+      }
+    } catch (e) {}
   }
 }
 

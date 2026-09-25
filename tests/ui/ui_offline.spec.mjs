@@ -438,48 +438,6 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
-  // O14 : Cache interrompu par changement d'onglet → Reprise automatique au retour
-  // ─────────────────────────────────────────────────────────────────────────
-
-  test('O14 - Cache Interrompu par Changement d Onglet : Reprise Automatique au Retour', async ({ page }) => {
-    await h.ensureDocNotCached(1);
-    await h.openFolder(130);
-
-    // 1. Ouvrir le document 1 dans le viewer et vérifier le rendu effectif du canvas
-    const card = await h.getDocCard(1);
-    await card.locator('.doc-title-main').click();
-    await h.assertPdfViewerRendered();
-    const badge = page.locator('#viewerCacheBadge');
-    await expect(badge).toBeVisible({ timeout: 10000 });
-
-    // Lancer la mise en cache si non démarrée
-    const isCachedInitial = await badge.evaluate(el => el.classList.contains('complete'));
-    if (!isCachedInitial) {
-      await badge.click();
-    }
-
-    // 2. Quitter l'onglet en revenant à l'accueil
-    await page.locator('#readerHomeBtn').click();
-    await expect(page.locator('body')).toHaveClass(/home-tab-active/);
-    await expect(page.locator('#viewerPane')).not.toBeVisible();
-    await page.waitForTimeout(600);
-
-    // 3. Retourner sur l'onglet du document 1
-    const tabItem = page.locator('.reader-tab-item').first();
-    await expect(tabItem).toBeVisible({ timeout: 10000 });
-    await tabItem.click();
-
-    // 4. Le viewer se réaffiche, rend le PDF et la mise en cache doit reprendre jusqu'à complétion
-    await h.assertPdfViewerRendered();
-    await expect(badge).toHaveClass(/complete/, { timeout: 45000 });
-    const isComplete = await page.evaluate(async () => {
-      return window.pdfCacheManager ? await window.pdfCacheManager.isComplete(1) : false;
-    });
-    expect(isComplete).toBe(true);
-    console.log('✅ [O14] Reprise automatique de la mise en cache au retour sur l onglet validée.');
-  });
-
-  // ─────────────────────────────────────────────────────────────────────────
   // O15 : Ouverture Document Non En Cache → Pas de Téléchargement Automatique Intempestif
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -728,6 +686,7 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
     const h = new DocSeekerTestHarness(page, context);
     await h.authenticate();
     await h.goto('/');
+    page.on('console', msg => console.log('[PAGE]', msg.text()));
 
     const docId = 10; // Document multi-fragments (1.3 Mo, 5 fragments de 256 Ko)
     await h.ensureDocNotCached(docId);

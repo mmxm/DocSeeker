@@ -1500,7 +1500,7 @@ class BasePreferences {
     spreadModeOnLoad: -1,
     textLayerMode: 1,
     viewOnLoad: 0,
-    disableAutoFetch: false,
+    disableAutoFetch: true,
     disableFontFace: false,
     disableRange: false,
     disableStream: true,
@@ -13798,7 +13798,7 @@ const PDFViewerApplication = {
     const loadingTask = getDocument({
       ...apiParams,
       withCredentials: true,
-      disableAutoFetch: false,
+      disableAutoFetch: true,
       ...args
     });
     this.pdfLoadingTask = loadingTask;
@@ -13972,17 +13972,27 @@ const PDFViewerApplication = {
       }
       try {
         this.eventBus?.dispatch("doccomplete", { source: this, length });
+      } catch (e) {}
+      // DocSeeker : tous les octets du document ont été reçus (chunks/ranges,
+      // p. ex. après un parcours complet des pages avec disableAutoFetch).
+      // L'app parente peut persister le document complet en cache local (OPFS).
+      try {
         let docId = null;
-        try {
-          const u = this.url || this._downloadUrl || (new URL(window.location.href).searchParams.get("file")) || "";
-          const m = String(u).match(/\/api\/pdf\/(\d+)/);
-          if (m) docId = Number(m[1]);
-        } catch (e) {}
-        window.parent?.postMessage({
-          type: "docseeker_pdf_complete",
-          docId,
-          length
-        }, "*");
+        const u = this.url || this._downloadUrl || (new URL(window.location.href).searchParams.get("file")) || "";
+        const m = String(u).match(/\/api\/pdf\/(\d+)/);
+        if (m) docId = Number(m[1]);
+        if (docId) {
+          window.parent?.postMessage({
+            type: "docseeker_pdf_stream_complete",
+            docId,
+            length
+          }, "*");
+        }
+      } catch (e) {}
+      // Fin de réception réseau du viewer (tous les octets reçus) : libère la
+      // priorité réseau au profit des téléchargements de fond.
+      try {
+        window.parent?.postMessage({ type: "docseeker_viewer_network_end" }, "*");
       } catch (e) {}
       firstPagePromise.then(() => {
         this.eventBus.dispatch("documentloaded", {
@@ -14904,6 +14914,9 @@ function onPageChanging({
   pageNumber,
   pageLabel
 }) {
+  try {
+    window.parent?.postMessage({ type: "docseeker_viewer_activity" }, "*");
+  } catch (e) {}
   this.toolbar?.setPageNumber(pageNumber, pageLabel);
   this.secondaryToolbar?.setPageNumber(pageNumber);
   if (this.pdfSidebar?.visibleView === SidebarView.THUMBS) {

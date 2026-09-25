@@ -196,6 +196,32 @@ function getCachedPdfDoc(docId) {
 async function getCachedPdfBytesFromIndexedDB(docId) {
   const id = Number(docId);
   const normUrl = `/api/pdf/${id || docId}`;
+
+  // 1. Tenter lecture directe instantanée depuis OPFS
+  if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.getDirectory === 'function') {
+    try {
+      const root = await navigator.storage.getDirectory();
+      const dir = await root.getDirectoryHandle('docseeker_pdfs');
+      const fileHandle = await dir.getFileHandle(`doc_${id}.pdf`);
+      const file = await fileHandle.getFile();
+      if (file.size > 0) {
+        return await file.arrayBuffer();
+      }
+    } catch (_) {}
+  }
+
+  // 2. Tenter lecture depuis CacheStorage
+  if (typeof caches !== 'undefined') {
+    try {
+      const cache = await caches.open('docseeker_pdfs_v1');
+      const res = await cache.match(`/offline/doc_${id}.pdf`);
+      if (res) {
+        const buf = await res.arrayBuffer();
+        if (buf && buf.byteLength > 0) return buf;
+      }
+    } catch (_) {}
+  }
+
   return new Promise((resolve) => {
     try {
       if (typeof indexedDB === 'undefined') return resolve(null);

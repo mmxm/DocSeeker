@@ -229,8 +229,8 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
   // Core-8 : Badge dossier 3/3 complet
   // =========================================================================
 
-  test('Core-8 - Badge Dossier 3/3 "✓ En Cache" (Couverture Complète)', async ({ page }) => {
-    test.setTimeout(120000); // 3 docs × 30s chacun
+  test('Core-8 - Badge Dossier 5/5 "✓ En Cache" (Couverture Complète)', async ({ page }) => {
+    test.setTimeout(180000); // 5 docs (dont 2 volumineux) × marge de complétion
     const folderMartingale = page.locator('.folder-card[data-folder-id="130"]');
     await expect(folderMartingale).toBeVisible({ timeout: 10000 });
     await folderMartingale.click();
@@ -240,7 +240,7 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
     await expect(page.locator('.doc-card[data-doc-id="1"]')).toBeVisible({ timeout: 10000 });
     const docCards = page.locator('.doc-card');
     const docCount = await docCards.count();
-    expect(docCount).toBe(3);
+    expect(docCount).toBe(5); // docs 1, 2, 3, 10, 577 (seed global-setup.mjs)
 
     // Mettre les 3 docs en cache
     for (let i = 0; i < docCount; i++) {
@@ -262,7 +262,7 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
 
     // Bouton d'action dossier → supprimer du cache
     await expect(folderMartingale.locator('.folder-btn-action.btn-delete-folder-cache')).toBeVisible();
-    console.log('[Core-8] Badge dossier 3/3 ✓ validé ✅');
+    console.log('[Core-8] Badge dossier 5/5 ✓ validé ✅');
   });
 
   // =========================================================================
@@ -545,7 +545,7 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
   // Core-14 : Suppression du Cache depuis le Badge du Reader en Plein Téléchargement
   // =========================================================================
 
-  test('Core-14 - Suppression du Cache depuis le Badge du Reader en Plein Téléchargement', async ({ page }) => {
+  test('Core-14 - Suppression du Cache depuis le Badge du Reader (cycle complet puis retrait)', async ({ page }) => {
     // 1. Ouvrir le dossier Martingale
     await h.openFolder(130);
     const doc2Card = page.locator('.doc-card[data-doc-id="2"]');
@@ -568,14 +568,23 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
     const badge = page.locator('#viewerCacheBadge');
     await expect(badge).toBeVisible({ timeout: 10000 });
 
-    // 3. Cliquer sur le badge de cache pour déclencher la suppression en plein téléchargement sans dialogue
+    // 3. Nouvelle sémantique du badge : un clic pendant le téléchargement met en
+    // pause. La suppression du cache se fait depuis le badge "complete" via un
+    // dialogue de confirmation.
+    await expect(badge).toHaveClass(/complete/, { timeout: 45000 });
+
+    page.once('dialog', dialog => dialog.accept());
     await badge.click();
 
     // 4. Vérifier que le cache est purgé et que le badge passe à l'état cloud (non téléchargé)
     await expect(badge).toHaveClass(/cloud/, { timeout: 10000 });
+    const isComplete = await page.evaluate(async () => {
+      return window.pdfCacheManager ? await window.pdfCacheManager.isComplete(2) : false;
+    });
+    expect(isComplete).toBe(false);
     await h.assertPdfViewerRendered();
 
-    console.log('✅ [Core-14] Suppression du cache depuis le badge viewer en cours de téléchargement validée.');
+    console.log('✅ [Core-14] Suppression du cache depuis le badge viewer validée.');
   });
 
   // =========================================================================

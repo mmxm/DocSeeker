@@ -361,18 +361,7 @@ export class DocSeekerTestHarness {
       if (window.pdfCacheManager) {
         const total = 2000000;
         const loaded = Math.round(total * (pct / 100));
-        const db = await window.pdfCacheManager.init();
-        if (db) {
-          const normUrl   = `/api/pdf/${id}`;
-          const tx        = db.transaction(['chunks', 'meta'], 'readwrite');
-          const chunkSize = 256 * 1024;
-          tx.objectStore('chunks').put(new Uint8Array(chunkSize), `${normUrl}#0_${chunkSize}`);
-          tx.objectStore('meta').put({
-            url: normUrl, totalBytes: total, downloadedBytes: loaded, completed: false, updatedAt: Date.now()
-          }, normUrl);
-          await new Promise(r => { tx.oncomplete = r; tx.onerror = r; });
-          window.pdfCacheManager.progressCache.set(id, { status: 'downloading', progress: pct, downloadedBytes: loaded, totalBytes: total });
-        }
+        window.pdfCacheManager.progressCache.set(id, { status: 'downloading', progress: pct, downloadedBytes: loaded, totalBytes: total });
       }
     }, { id: Number(docId), pct: percent });
     await this.page.waitForTimeout(100);
