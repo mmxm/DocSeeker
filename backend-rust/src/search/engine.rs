@@ -74,43 +74,45 @@ pub fn search_titles(
         get_folder_and_subfolder_ids(conn, fid)
     });
 
-    let where_clause = terms
-        .iter()
-        .map(|t| {
-            let esc = normalize_text(t).replace('\'', "''");
-            format!("(LOWER(filename) LIKE '%{esc}%' OR LOWER(title) LIKE '%{esc}%')")
-        })
-        .collect::<Vec<_>>()
-        .join(" AND ");
+    // Recherche déléguée au builder partagé (search-core) : l'index documents_fts
+    // (même tokenizer FTS5 que la recherche de contenu) garantit l'insensibilité
+    // casse/accents en ligne, hors ligne (wasm) et iOS — une seule implémentation.
+    let (query_sql, _) = search_core::sql::build_title_search_sql(
+        query,
+        allowed_folder_ids.as_deref(),
+        page_size,
+        current_offset,
+    );
+    if query_sql.is_empty() {
+        return Ok(SearchResponse {
+            query: query.to_string(),
+            query_hash: String::new(),
+            total_documents: 0,
+            total_occurrences: 0,
+            results: Vec::new(),
+            page: 1,
+            limit: page_size,
+            total_pages: 0,
+            has_more: false,
+        });
+    }
 
-    let folder_filter = if let Some(ref ids) = allowed_folder_ids {
-        if ids.is_empty() {
-            "AND 0".to_string()
-        } else if ids.len() == 1 {
-            format!("AND folder_id = {}", ids[0])
-        } else {
-            let id_strs: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
-            format!("AND folder_id IN ({})", id_strs.join(","))
-        }
+    // Nombre total de documents correspondants : même builder SANS limite
+    // (i64::MAX) ni offset, pour un COUNT exact indépendant de la pagination.
+    let (count_sql, _) = search_core::sql::build_title_search_sql(
+        query,
+        allowed_folder_ids.as_deref(),
+        usize::MAX / 2,
+        0,
+    );
+    let total_documents: usize = if count_sql.is_empty() {
+        0
     } else {
-        String::new()
+        let wrapped = format!("SELECT count(*) FROM ({count_sql})");
+        conn.query_row(&wrapped, [], |r| r.get(0)).unwrap_or(0)
     };
 
-    // Nombre total de documents correspondants via COUNT SQL indexé
-    let count_sql = format!(
-        "SELECT count(*) FROM documents WHERE ({where_clause}) AND COALESCE(status, 'ready') = 'ready' {folder_filter}"
-    );
-    let total_documents: usize = conn.query_row(&count_sql, [], |r| r.get(0)).unwrap_or(0);
-
-    let query_sql = format!(
-        "SELECT id, filename, title, folder_id, total_pages, created_at, COALESCE(updated_at, created_at) AS updated_at \
-         FROM documents \
-         WHERE ({where_clause}) AND COALESCE(status, 'ready') = 'ready' {folder_filter} \
-         ORDER BY title ASC LIMIT {page_size} OFFSET {current_offset}"
-    );
-
     let mut stmt = conn.prepare(&query_sql)?;
-    let norm_terms: Vec<String> = terms.iter().map(|t| normalize_text(t)).collect();
 
     let rows = stmt.query_map([], |row| {
         Ok((
@@ -118,13 +120,14 @@ pub fn search_titles(
             row.get::<_, String>(1)?,
             row.get::<_, Option<String>>(2)?.unwrap_or_default(),
             row.get::<_, Option<i64>>(3)?,
-            row.get::<_, i64>(4)?,
-            row.get::<_, String>(5)?,
-            row.get::<_, String>(6)?,
+            row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+            row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+            row.get::<_, Option<String>>(6)?.unwrap_or_default(),
         ))
     })?;
 
     let mut results = Vec::new();
+    let norm_terms: Vec<String> = terms.iter().map(|t| normalize_text(t)).collect();
     for r in rows.flatten() {
         let (id, filename, title, doc_folder_id, total_pages, created_at, updated_at) = r;
         let title_norm = normalize_text(&title);
@@ -350,4 +353,74 @@ pub fn search_within_document(
         total_occurrences,
         occurrences: paged_occurrences,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_titles_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&search_core::schema::get_full_schema_sql())
+            .unwrap();
+        for (id, filename, title) in [
+            (1, "pathologie_du_fer.pdf", "219 - Pathologie du fer chez l'adulte et l'enfant Hémochromatose"),
+            (2, "cardiologie.pdf", "Livre de Cardiologie"),
+            (3, "pneumologie.pdf", "Traité de PNEUMOLOGIE"),
+        ] {
+            conn.execute(
+                "INSERT INTO documents (id, filename, title, status, total_pages, created_at, updated_at) VALUES (?1, ?2, ?3, 'ready', 12, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                rusqlite::params![id, filename, title],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn test_title_search_accents_both_sides() {
+        let conn = setup_titles_db();
+        let resp = search_titles(&conn, "Hémochromatose", None, None, None).unwrap();
+        assert_eq!(resp.total_documents, 1, "doit trouver le titre accentué exact");
+        assert_eq!(resp.results[0].id, 1);
+    }
+
+    #[test]
+    fn test_title_search_without_accents() {
+        let conn = setup_titles_db();
+        let resp = search_titles(&conn, "hemochromatose", None, None, None).unwrap();
+        assert_eq!(resp.total_documents, 1, "doit trouver le titre accentué sans accents");
+        assert_eq!(resp.results[0].id, 1);
+    }
+
+    #[test]
+    fn test_title_search_case_insensitive() {
+        let conn = setup_titles_db();
+        let resp = search_titles(&conn, "pneumologie", None, None, None).unwrap();
+        assert_eq!(resp.total_documents, 1);
+        assert_eq!(resp.results[0].id, 3);
+    }
+
+    #[test]
+    fn test_title_search_prefix_truncated() {
+        let conn = setup_titles_db();
+        let resp = search_titles(&conn, "hemoch", None, None, None).unwrap();
+        assert_eq!(resp.total_documents, 1, "préfixe tronqué sans accent");
+        assert_eq!(resp.results[0].id, 1);
+    }
+
+    #[test]
+    fn test_title_search_multi_terms() {
+        let conn = setup_titles_db();
+        let resp = search_titles(&conn, "pathologie fer", None, None, None).unwrap();
+        assert_eq!(resp.total_documents, 1);
+    }
+
+    #[test]
+    fn test_title_search_no_result() {
+        let conn = setup_titles_db();
+        let resp = search_titles(&conn, "dermatologie", None, None, None).unwrap();
+        assert_eq!(resp.total_documents, 0);
+        assert!(resp.results.is_empty());
+    }
 }

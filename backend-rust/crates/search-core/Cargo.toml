@@ -13,3 +13,6 @@ sha2 = "0.10"
 hex = "0.4"
 unicode-normalization = "0.1"
 urlencoding = "2.1"
+
+[dev-dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }

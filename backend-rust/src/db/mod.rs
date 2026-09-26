@@ -107,6 +107,27 @@ pub fn init_db(db_path: &Path) -> Result<()> {
     info!("Init table auth...");
     conn.execute_batch(schema::CREATE_AUTH_TABLES)?;
 
+    // Backfill idempotent de l'index documents_fts (recherche titres) : l'index
+    // est « external content » sur documents, donc sauf reconstruction totale,
+    // les lignes antérieures à sa création doivent être injectées une fois.
+    let docs_fts_count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let docs_count: i64 = conn.query_row("SELECT count(*) FROM documents", [], |r| r.get(0)).unwrap_or(0);
+    if docs_count > 0 && docs_fts_count != docs_count {
+        info!(
+            "Reconstruction documents_fts : {} documents indexés / {} au total",
+            docs_fts_count, docs_count
+        );
+        // 'rebuild' vide puis reconstruit l'index en rescannant la table de
+        // contenu (documents) — pas besoin d'INSERT explicite (qui doublerait).
+        conn.execute_batch("INSERT INTO documents_fts(documents_fts) VALUES('rebuild');")?;
+    }
+
     // Migrations idempotentes si colonnes manquantes (rétrocompatibilité avec bases v1 existantes)
     info!("Verification des colonnes documents...");
     ensure_column(&conn, "documents", "file_hash", "TEXT")?;

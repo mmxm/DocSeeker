@@ -78,13 +78,15 @@ pub fn build_search_query_sql(
         .collect::<Vec<_>>()
         .join(" AND ");
 
+    // Boost titre : termes tokenisés + préfixe sur l'index documents_fts (même
+    // tokenizer que le contenu → insensible casse/accents, cohérence garantie).
     let mut title_conds = Vec::new();
     for t in &terms {
         let norm_t = normalize_text(t);
         if !norm_t.is_empty() {
-            let escaped = norm_t.replace('\'', "''");
+            let escaped = norm_t.replace('"', "\"\"");
             title_conds.push(format!(
-                "(LOWER(d.filename) LIKE '%{esc}%' OR LOWER(d.title) LIKE '%{esc}%')",
+                "d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"*')",
                 esc = escaped
             ));
         }
@@ -209,11 +211,17 @@ pub fn build_title_search_sql(
         return (String::new(), Vec::new());
     }
 
+    // Recherche sur l'index documents_fts : normalisation (casse + accents)
+    // assurée par le même tokenizer que le contenu (unicode61 remove_diacritics).
+    // Chaque terme est tokenisé avec préfixe → « hemoch » trouve « Hémochromatose ».
     let where_clause = terms
         .iter()
         .map(|t| {
-            let esc = normalize_text(t).replace('\'', "''");
-            format!("(LOWER(filename) LIKE '%{esc}%' OR LOWER(title) LIKE '%{esc}%')")
+            let esc = normalize_text(t).replace('"', "\"\"");
+            format!(
+                "id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"*')",
+                esc = esc
+            )
         })
         .collect::<Vec<_>>()
         .join(" AND ");
@@ -267,4 +275,103 @@ pub fn build_doc_search_sql(doc_id: i64, query: &str) -> (String, Vec<String>, S
     );
 
     (sql, terms, query_hash)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(&crate::schema::get_full_schema_sql()).unwrap();
+        for (id, filename, title) in [
+            (1, "pathologie_du_fer.pdf", "219 - Pathologie du fer chez l'adulte et l'enfant Hémochromatose"),
+            (2, "Cardiologie_2024.pdf", "Livre de Cardiologie"),
+            (3, "pneumologie.pdf", "Traité de PNEUMOLOGIE"),
+        ] {
+            conn.execute(
+                "INSERT INTO documents (id, filename, title, status, created_at, updated_at) VALUES (?1, ?2, ?3, 'ready', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                rusqlite::params![id, filename, title],
+            )
+            .unwrap();
+        }
+        // Une page indexée pour le doc 1 (contenu accentué) : la recherche
+        // globale matche sur le contenu (pages_fts), le boost titre s'y ajoute.
+        conn.execute(
+            "INSERT INTO pages (doc_id, page_number, text_content) VALUES (1, 1, 'Traitement de l''hémochromatose par saignées chez l''adulte')",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    fn ids(conn: &rusqlite::Connection, sql: &str) -> Vec<i64> {
+        conn.prepare(sql)
+            .unwrap()
+            .query_map([], |r| r.get::<_, i64>(0))
+            .unwrap()
+            .flatten()
+            .collect()
+    }
+
+    #[test]
+    fn test_title_search_accents_both_sides() {
+        let conn = setup_db();
+        let (sql, _) = build_title_search_sql("Hémochromatose", None, 10, 0);
+        assert_eq!(ids(&conn, &sql), vec![1], "accents de part et d'autre");
+    }
+
+    #[test]
+    fn test_title_search_without_accents() {
+        let conn = setup_db();
+        let (sql, _) = build_title_search_sql("hemochromatose", None, 10, 0);
+        assert_eq!(ids(&conn, &sql), vec![1], "sans accents côté requête");
+    }
+
+    #[test]
+    fn test_title_search_prefix_truncated() {
+        let conn = setup_db();
+        let (sql, _) = build_title_search_sql("hemoch", None, 10, 0);
+        assert_eq!(ids(&conn, &sql), vec![1], "préfixe tronqué sans accent");
+    }
+
+    #[test]
+    fn test_title_search_case_and_accent_on_query_side() {
+        let conn = setup_db();
+        let (sql, _) = build_title_search_sql("HÉMoch", None, 10, 0);
+        assert_eq!(ids(&conn, &sql), vec![1], "casse + accents tronqués");
+    }
+
+    #[test]
+    fn test_title_search_multi_terms_and_sql_injection_safe() {
+        let conn = setup_db();
+        // Multi-termes = AND ; le guillemet est échappé pour FTS5 (pas d'injection)
+        let (sql, _) = build_title_search_sql("pathologie fer", None, 10, 0);
+        assert_eq!(ids(&conn, &sql), vec![1]);
+        let (sql2, _) = build_title_search_sql("hem\"chromatose", None, 10, 0);
+        assert_eq!(ids(&conn, &sql2), Vec::<i64>::new());
+    }
+
+    #[test]
+    fn test_title_search_matches_filename_too() {
+        let conn = setup_db();
+        let (sql, _) = build_title_search_sql("cardiologie_2024", None, 10, 0);
+        assert_eq!(ids(&conn, &sql), vec![2], "filename indexé également");
+    }
+
+    #[test]
+    fn test_global_search_title_boost_clause() {
+        let conn = setup_db();
+        let data = build_search_query_sql("hemochromatose", None, 10, 0);
+        // La recherche globale ne doit pas échouer avec la clause boost titre
+        let results = ids(&conn, &data.sql);
+        assert_eq!(results, vec![1], "doc trouvé + boost titre appliqué");
+    }
+
+    #[test]
+    fn test_search_titles_no_result() {
+        let conn = setup_db();
+        let (sql, _) = build_title_search_sql("dermatologie", None, 10, 0);
+        assert!(ids(&conn, &sql).is_empty());
+    }
 }

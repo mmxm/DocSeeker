@@ -109,6 +109,23 @@ async function init() {
       const schemaSql = get_schema_sql();
       db.exec(`PRAGMA foreign_keys = OFF;\n` + schemaSql);
 
+      // Backfill idempotent de l'index documents_fts (recherche titres) : les
+      // bases locales créées avant l'introduction de l'index doivent être
+      // reconstruites une seule fois (même logique que le backend).
+      try {
+        let ftsCount = 0, docsCount = 0;
+        db.exec({
+          sql: `SELECT (SELECT count(*) FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid), (SELECT count(*) FROM documents)`,
+          callback: (r) => { ftsCount = r[0]; docsCount = r[1]; }
+        });
+        if (docsCount > 0 && ftsCount !== docsCount) {
+          db.exec(`INSERT INTO documents_fts(documents_fts) VALUES('rebuild');`);
+          console.log('[OfflineSearchWorker] Index documents_fts reconstruit (' + docsCount + ' documents)');
+        }
+      } catch (e) {
+        console.warn('[OfflineSearchWorker] Backfill documents_fts ignoré:', e);
+      }
+
       isReady = true;
       console.log('[OfflineSearchWorker] Prêt pour la recherche locale BM25');
       return true;

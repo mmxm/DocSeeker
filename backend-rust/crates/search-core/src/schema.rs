@@ -69,6 +69,32 @@ CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
     INSERT INTO pages_fts(pages_fts, rowid, text_content) VALUES('delete', old.id, old.text_content);
     INSERT INTO pages_fts(rowid, text_content) VALUES (new.id, new.text_content);
 END;
+
+-- Index de recherche sur les métadonnées (titre + nom de fichier) : la
+-- normalisation (casse + accents) est déléguée au MÊME tokenizer que la
+-- recherche de contenu (unicode61 remove_diacritics 2), ce qui garantit un
+-- comportement identique en ligne (backend), hors ligne (wasm navigateur) et
+-- iOS — sans aucune fonction SQL spécifique ni duplication de règles.
+CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+    title,
+    filename,
+    content='documents',
+    content_rowid='id',
+    tokenize='unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER IF NOT EXISTS documents_fts_ai AFTER INSERT ON documents BEGIN
+    INSERT INTO documents_fts(rowid, title, filename) VALUES (new.id, new.title, new.filename);
+END;
+
+CREATE TRIGGER IF NOT EXISTS documents_fts_ad AFTER DELETE ON documents BEGIN
+    INSERT INTO documents_fts(documents_fts, rowid, title, filename) VALUES('delete', old.id, old.title, old.filename);
+END;
+
+CREATE TRIGGER IF NOT EXISTS documents_fts_au AFTER UPDATE ON documents BEGIN
+    INSERT INTO documents_fts(documents_fts, rowid, title, filename) VALUES('delete', old.id, old.title, old.filename);
+    INSERT INTO documents_fts(rowid, title, filename) VALUES (new.id, new.title, new.filename);
+END;
 "#;
 
 pub const CREATE_ANNOTATIONS_TABLE: &str = r#"
