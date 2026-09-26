@@ -56514,7 +56514,11 @@ class WorkerMessageHandler {
         }
         pdfManagerArgs.source = pdfStream;
         pdfManagerArgs.length = fullRequest.contentLength;
-        pdfManagerArgs.disableAutoFetch = false;
+        // NB : ne PAS écraser pdfManagerArgs.disableAutoFetch ici — la valeur du
+        // viewer est déjà propagée dans pdfManagerArgs. La réécrire (à false
+        // historiquement, puis ||= isStreamingSupported) ré-aspirait les gros PDF
+        // en fond dès l'ouverture (auto-cache intégral sans scroll) ou cassait le
+        // préchargement des petits PDF.
         newPdfManager = new NetworkPdfManager(pdfManagerArgs);
         for (const chunk of cachedChunks) {
           newPdfManager.sendProgressiveData(chunk);
