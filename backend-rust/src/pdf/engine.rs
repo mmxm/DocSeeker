@@ -74,28 +74,44 @@ impl PdfEngine {
         })
     }
 
-    /// Extrait les informations d'un PDF : nombre de pages, métadonnées, texte et mots par page.
-    pub fn extract_document_data(&self, file_path: &Path) -> Result<ExtractedPdfData, String> {
+    /// Métadonnées rapides (nombre de pages + titre) sans itérer sur les pages.
+    pub fn extract_document_metadata(&self, file_path: &Path) -> Result<StreamedPdfMetadata, String> {
+        let pdfium = self.pdfium.lock().map_err(|e| e.to_string())?;
+        let doc = pdfium
+            .load_pdf_from_file(file_path, None)
+            .map_err(|e| format!("Erreur chargement PDF : {}", e))?;
+
+        Ok(StreamedPdfMetadata {
+            total_pages: doc.pages().len() as i64,
+            meta_title: doc
+                .metadata()
+                .get(PdfDocumentMetadataTagType::Title)
+                .map(|s| s.value().trim().to_string())
+                .unwrap_or_default(),
+        })
+    }
+
+    /// Extrait le document page par page en flux : chaque page est transmise au callback
+    /// (typiquement une insertion DB) puis libérée — la RAM reste bornée à une seule page,
+    /// quel que soit le nombre de pages (correctif OOM sur les livres de 900+ pages).
+    pub fn extract_pages_streaming(
+        &self,
+        file_path: &Path,
+        mut on_page: impl FnMut(i64, String, String) -> Result<(), String>,
+    ) -> Result<i64, String> {
         let pdfium = self.pdfium.lock().map_err(|e| e.to_string())?;
         let doc = pdfium
             .load_pdf_from_file(file_path, None)
             .map_err(|e| format!("Erreur chargement PDF : {}", e))?;
 
         let total_pages = doc.pages().len() as i64;
-        let meta_title = doc
-            .metadata()
-            .get(PdfDocumentMetadataTagType::Title)
-            .map(|s| s.value().trim().to_string())
-            .unwrap_or_default();
-
-        let mut pages_data = Vec::new();
 
         for page_idx in 0..total_pages as u16 {
             if let Ok(page) = doc.pages().get(page_idx) {
                 let page_number = (page_idx + 1) as i64;
                 let page_height = page.height().value as f64;
 
-                let (text_content, words) = if let Ok(text_page) = page.text() {
+                let (text_content, words_list) = if let Ok(text_page) = page.text() {
                     let full_text = text_page.all();
                     let mut words_list = Vec::new();
 
@@ -157,19 +173,13 @@ impl PdfEngine {
                     (String::new(), Vec::new())
                 };
 
-                pages_data.push(ExtractedPageData {
-                    page_number,
-                    text_content,
-                    words_json: serde_json::to_string(&words).unwrap_or_else(|_| "[]".to_string()),
-                });
+                let words_json = serde_json::to_string(&words_list).unwrap_or_else(|_| "[]".to_string());
+                drop(words_list);
+                on_page(page_number, text_content, words_json)?;
             }
         }
 
-        Ok(ExtractedPdfData {
-            total_pages,
-            meta_title,
-            pages: pages_data,
-        })
+        Ok(total_pages)
     }
 
     /// Génère la vignette de couverture (première page) au format WebP.
@@ -316,14 +326,7 @@ impl PdfEngine {
     }
 }
 
-pub struct ExtractedPageData {
-    pub page_number: i64,
-    pub text_content: String,
-    pub words_json: String,
-}
-
-pub struct ExtractedPdfData {
+pub struct StreamedPdfMetadata {
     pub total_pages: i64,
     pub meta_title: String,
-    pub pages: Vec<ExtractedPageData>,
 }

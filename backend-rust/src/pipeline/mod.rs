@@ -5,6 +5,9 @@ use rusqlite::{params, Connection};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{info, warn, error};
 
+/// Seuil au-delà duquel /api/pipeline/status renvoie les stats en cache sans tenter la DB.
+const STATUS_STATS_MAX_AGE_SECS: u64 = 60;
+
 use crate::config::Config;
 use crate::pdf::engine::PdfEngine;
 use crate::pdf::indexer::index_pdf_file;
@@ -27,6 +30,8 @@ pub struct IndexingPipeline {
     sender: UnboundedSender<i64>,
     state: Arc<Mutex<PipelineState>>,
     db: Arc<Mutex<Connection>>,
+    /// Dernières stats DB connues (réponse dégradée mais fraîche pendant l'indexation).
+    cached_stats: Arc<Mutex<(HashMap<String, i64>, std::time::Instant)>>,
 }
 
 impl IndexingPipeline {
@@ -48,7 +53,8 @@ impl IndexingPipeline {
         let worker_engine = Arc::clone(&pdf_engine);
         let worker_config = config.clone();
 
-        // Worker thread asynchrone en arrière-plan
+        // Worker asynchrone en arrière-plan : l'indexation (Pdfium + insertions FTS5, minutes sur un gros livre)
+        // tourne sur le pool de threads bloquants — jamais sur l'exécuteur HTTP asynchrone.
         tokio::spawn(async move {
             info!("[Pipeline] Worker d'indexation asynchrone démarré.");
             while let Some(doc_id) = receiver.recv().await {
@@ -59,13 +65,30 @@ impl IndexingPipeline {
                     }
                 }
 
-                Self::process_document(
-                    doc_id,
-                    &worker_db,
-                    &worker_engine,
-                    &worker_config,
-                    &worker_state,
-                );
+                let process_db = Arc::clone(&worker_db);
+                let process_engine = Arc::clone(&worker_engine);
+                let process_config = worker_config.clone();
+                let process_state = Arc::clone(&worker_state);
+                let process_result = tokio::task::spawn_blocking(move || {
+                    Self::process_document(
+                        doc_id,
+                        &process_db,
+                        &process_engine,
+                        &process_config,
+                        &process_state,
+                    )
+                })
+                .await;
+
+                if let Err(join_err) = process_result {
+                    error!("[Pipeline] Panique du worker d'indexation doc {} : {}", doc_id, join_err);
+                    if let Ok(conn) = worker_db.lock() {
+                        let _ = conn.execute(
+                            "UPDATE documents SET status = 'failed', error_message = 'Indexation interrompue (panique worker)', updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+                            params![doc_id],
+                        );
+                    }
+                }
 
                 {
                     let mut s = worker_state.lock().unwrap();
@@ -75,7 +98,12 @@ impl IndexingPipeline {
             }
         });
 
-        let pipeline = Self { sender, state, db };
+        let pipeline = Self {
+            sender,
+            state,
+            db,
+            cached_stats: Arc::new(Mutex::new((HashMap::new(), std::time::Instant::now() - std::time::Duration::from_secs(STATUS_STATS_MAX_AGE_SECS)))),
+        };
         pipeline.recover_pending();
         pipeline
     }
@@ -149,7 +177,10 @@ impl IndexingPipeline {
         .into_iter()
         .collect();
 
-        if let Ok(conn) = self.db.lock() {
+        // Aperçu DB sans jamais bloquer le thread HTTP : si l'indexation tient la connexion
+        // (des minutes d'affilée), on renvoie l'état de la file + les stats précédentes en cache.
+        let mut db_ok = false;
+        if let Ok(conn) = self.db.try_lock() {
             if let Ok(mut stmt) = conn.prepare("SELECT COALESCE(status, 'ready'), COUNT(*) FROM documents GROUP BY status") {
                 if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
                     for (st, count) in rows.flatten() {
@@ -161,6 +192,16 @@ impl IndexingPipeline {
                 if let Ok(total) = stmt.query_row([], |r| r.get::<_, i64>(0)) {
                     stats.insert("total".to_string(), total);
                 }
+            }
+            db_ok = true;
+        }
+
+        if db_ok {
+            *self.cached_stats.lock().unwrap() = (stats.clone(), std::time::Instant::now());
+        } else {
+            let (cached, cached_at) = &*self.cached_stats.lock().unwrap();
+            if cached_at.elapsed() < std::time::Duration::from_secs(STATUS_STATS_MAX_AGE_SECS) {
+                stats.clone_from(cached);
             }
         }
 

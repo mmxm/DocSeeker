@@ -7,6 +7,7 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::AppState;
@@ -272,27 +273,101 @@ pub async fn upload_document(
     let mut uploaded_filename = String::new();
     let mut custom_title: Option<String> = None;
     let mut target_folder_id: Option<i64> = None;
-    let mut file_bytes: Vec<u8> = Vec::new();
+
+    // Streaming : le fichier est écrit sur disque au fil de l'eau avec hachage incrémental.
+    // Aucune bufferisation du PDF complet en RAM (correctif OOM conteneur 2 Go : un upload
+    // de 800 Mo ne consomme plus que ~1 Mo de mémoire au lieu de 800 Mo).
+    let mut hasher = sha2::Sha256::new();
+    let mut file_size: i64 = 0;
+    let mut header_window: Vec<u8> = Vec::new();
+    #[allow(unused_assignments)]
+    let mut temp_file: Option<tokio::fs::File> = None;
+    let mut temp_path: Option<std::path::PathBuf> = None;
+
+    // Garde-fou : suppression du fichier partiel si la requête échoue en cours de route
+    struct PartialUploadCleanup(Option<std::path::PathBuf>);
+    impl Drop for PartialUploadCleanup {
+        fn drop(&mut self) {
+            if let Some(path) = self.0.take() {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+    let mut cleanup = PartialUploadCleanup(None);
 
     loop {
         match multipart.next_field().await {
-            Ok(Some(field)) => {
+            Ok(Some(mut field)) => {
                 let field_name = field.name().unwrap_or("").to_string();
                 if field_name == "file" {
                     if let Some(fname) = field.file_name() {
                         uploaded_filename = fname.to_string();
                     }
-                    match field.bytes().await {
-                        Ok(bytes) => file_bytes = bytes.to_vec(),
-                        Err(e) => {
-                            return Err((
-                                StatusCode::BAD_REQUEST,
-                                Json(serde_json::json!({
-                                    "error": format!("Erreur lors de la lecture du fichier : {}", e)
-                                })),
-                            ).into_response());
+                    if uploaded_filename.is_empty() {
+                        return Err((
+                            StatusCode::BAD_REQUEST,
+                            Json(serde_json::json!({ "error": "Nom de fichier manquant" })),
+                        ).into_response());
+                    }
+
+                    // Fichier partiel : .upload-<nonce>-<nom>.part dans le répertoire documents
+                    let norm_name: String = uploaded_filename.nfc().collect();
+                    let nonce = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0);
+                    let tmp_path = state.config.documents_dir.join(format!(".upload-{}-{}.part", nonce, norm_name));
+                    std::fs::create_dir_all(&state.config.documents_dir).ok();
+                    let out = tokio::fs::File::create(&tmp_path).await.map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({ "error": format!("Échec de création du fichier temporaire : {}", e) })),
+                        ).into_response()
+                    })?;
+                    temp_path = Some(tmp_path.clone());
+                    cleanup.0 = Some(tmp_path);
+                    temp_file = Some(out);
+
+                    // Écriture + hachage chunk par chunk : RAM constante (~1 Mo)
+                    loop {
+                        match field.chunk().await {
+                            Ok(Some(chunk)) => {
+                                file_size += chunk.len() as i64;
+                                if file_size > state.config.max_upload_size as i64 {
+                                    return Err((
+                                        StatusCode::PAYLOAD_TOO_LARGE,
+                                        Json(serde_json::json!({ "error": "Fichier trop volumineux (MAX_UPLOAD_SIZE dépassé)" })),
+                                    ).into_response());
+                                }
+                                if header_window.len() < 1024 {
+                                    let take = (1024 - header_window.len()).min(chunk.len());
+                                    header_window.extend_from_slice(&chunk[..take]);
+                                }
+                                hasher.update(&chunk);
+                                if let Some(out) = temp_file.as_mut() {
+                                    out.write_all(&chunk).await.map_err(|e| {
+                                        (
+                                            StatusCode::INTERNAL_SERVER_ERROR,
+                                            Json(serde_json::json!({ "error": format!("Échec d'écriture du fichier : {}", e) })),
+                                        ).into_response()
+                                    })?;
+                                }
+                            }
+                            Ok(None) => break,
+                            Err(e) => {
+                                return Err((
+                                    StatusCode::BAD_REQUEST,
+                                    Json(serde_json::json!({
+                                        "error": format!("Erreur lors de la lecture du fichier : {}", e)
+                                    })),
+                                ).into_response());
+                            }
                         }
                     }
+                    if let Some(out) = temp_file.as_mut() {
+                        out.flush().await.ok();
+                    }
+                    drop(temp_file.take()); // fichier fermé ; le renommage interviendra après la détection de doublon
                 } else if field_name == "title" {
                     if let Ok(text) = field.text().await {
                         let trimmed = text.trim().to_string();
@@ -318,7 +393,7 @@ pub async fn upload_document(
         }
     }
 
-    if uploaded_filename.is_empty() || file_bytes.is_empty() {
+    if uploaded_filename.is_empty() || file_size < 5 {
         return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Fichier PDF manquant ou vide"}))).into_response());
     }
 
@@ -327,17 +402,13 @@ pub async fn upload_document(
     }
 
     // Validation signature magique PDF (conforme ISO 32000-1 §7.5.2 : %PDF- dans les 1024 premiers octets)
-    let header_window = &file_bytes[..file_bytes.len().min(1024)];
     let has_pdf_magic = header_window.windows(5).any(|w| w == b"%PDF-");
     if !has_pdf_magic {
         return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Format invalide : signature PDF manquante"}))).into_response());
     }
 
-    // Calcul de l'empreinte SHA-256
-    let mut hasher = sha2::Sha256::new();
-    sha2::Digest::update(&mut hasher, &file_bytes);
-    let file_hash = hex::encode(sha2::Digest::finalize(hasher));
-    let file_size = file_bytes.len() as i64;
+    // Empreinte SHA-256 calculée de façon incrémentale pendant le streaming
+    let file_hash = hex::encode(hasher.finalize());
 
     // Détection stricte de doublon
     {
@@ -373,10 +444,12 @@ pub async fn upload_document(
     let norm_filename: String = uploaded_filename.nfc().collect();
     let dest_path = state.config.documents_dir.join(&norm_filename);
 
-    // Écriture du fichier sur disque
-    std::fs::create_dir_all(&state.config.documents_dir).ok();
-    if let Err(e) = std::fs::write(&dest_path, &file_bytes) {
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Échec d'écriture du fichier : {}", e)}))).into_response());
+    // Promotion atomique du fichier temporaire (streamé) vers son emplacement définitif
+    if let Some(tmp_path) = temp_path.take() {
+        if let Err(e) = tokio::fs::rename(&tmp_path, &dest_path).await {
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Échec d'écriture du fichier : {}", e)}))).into_response());
+        }
+        cleanup.0 = None; // le fichier partiel a été promu, plus rien à nettoyer
     }
 
     // Insertion immédiate en DB en état 'pending' pour retour instantané

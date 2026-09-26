@@ -49,7 +49,9 @@ pub fn index_pdf_file(
     }
 
     let file_hash = compute_file_hash(file_path).map_err(|e| e.to_string())?;
-    let extracted = pdf_engine.extract_document_data(file_path)?;
+
+    // Métadonnées rapides (1 seule ouverture PDF) : titre + nombre de pages
+    let metadata = pdf_engine.extract_document_metadata(file_path)?;
 
     // Nettoyage et normalisation du titre
     let stem = Path::new(original_filename)
@@ -60,7 +62,7 @@ pub fn index_pdf_file(
     let clean_base_title: String = stem.nfc().collect();
     let clean_base_title = clean_base_title.replace('_', " ").trim().to_string();
 
-    let meta_title: String = extracted.meta_title.nfc().collect();
+    let meta_title: String = metadata.meta_title.nfc().collect();
     let title = if let Some(ct) = custom_title {
         ct.to_string()
     } else if !meta_title.is_empty()
@@ -87,41 +89,62 @@ pub fn index_pdf_file(
         conn.execute("DELETE FROM pages WHERE doc_id = ?1", params![id]).map_err(|e| e.to_string())?;
         conn.execute(
             "UPDATE documents SET title = ?1, file_hash = ?2, total_pages = ?3, file_size = ?4, status = 'ready', error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?5",
-            params![title, file_hash, extracted.total_pages, file_size, id],
+            params![title, file_hash, metadata.total_pages, file_size, id],
         ).map_err(|e| e.to_string())?;
         id
     } else {
         conn.execute(
             "INSERT INTO documents (filename, title, file_hash, total_pages, file_size, status, error_message) VALUES (?1, ?2, ?3, ?4, ?5, 'ready', NULL)",
-            params![original_filename, title, file_hash, extracted.total_pages, file_size],
+            params![original_filename, title, file_hash, metadata.total_pages, file_size],
         ).map_err(|e| e.to_string())?;
         conn.last_insert_rowid()
     };
 
     // Générer la couverture WebP si au moins 1 page
-    if extracted.total_pages > 0 {
+    if metadata.total_pages > 0 {
         let cover_webp = config.covers_dir.join(format!("{}.webp", doc_id));
         if let Err(e) = pdf_engine.render_cover(file_path, &cover_webp) {
             warn!("[Indexer] Impossible de générer la couverture pour doc {} : {}", doc_id, e);
         }
     }
 
-    // Insérer les pages dans une transaction (le trigger pages_ai indexe automatiquement dans pages_fts)
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // Extraction + insertion en flux : la RAM reste bornée à une page.
+    // Une seule transaction (le trigger pages_ai alimente pages_fts) : SQLite
+    // déverse la transaction dans le WAL sur disque, la RAM de la connexion
+    // reste bornée par cache_size — comme avant, mais sans accumulation des pages.
+    let mut inserted_pages: i64 = 0;
     {
-        let mut insert_page = tx
-            .prepare("INSERT INTO pages (doc_id, page_number, text_content, words_json) VALUES (?1, ?2, ?3, ?4)")
-            .map_err(|e| e.to_string())?;
-
-        for p in extracted.pages {
-            insert_page
-                .execute(params![doc_id, p.page_number, p.text_content, p.words_json])
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let mut stream_error: Option<String> = None;
+        {
+            let mut insert_page = tx
+                .prepare("INSERT INTO pages (doc_id, page_number, text_content, words_json) VALUES (?1, ?2, ?3, ?4)")
                 .map_err(|e| e.to_string())?;
-        }
-    }
-    tx.commit().map_err(|e| e.to_string())?;
 
-    info!("[Indexer] Document {} ('{}') indexé avec succès ({} pages).", doc_id, title, extracted.total_pages);
+            if let Err(e) = pdf_engine.extract_pages_streaming(file_path, |page_number, text_content, words_json| {
+                insert_page
+                    .execute(params![doc_id, page_number, text_content, words_json])
+                    .map_err(|e| e.to_string())?;
+                inserted_pages += 1;
+                Ok(())
+            }) {
+                stream_error = Some(e);
+            }
+        } // insert_page (emprunt de tx) droppé ici
+
+        if let Some(e) = stream_error {
+            let _ = tx.rollback();
+            // Ne pas laisser un document sans pages dans un état "ready"
+            let _ = conn.execute(
+                "UPDATE documents SET status = 'failed', error_message = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                params![format!("Extraction interrompue : {}", e), doc_id],
+            );
+            return Err(format!("Extraction interrompue à la page {}: {}", inserted_pages + 1, e));
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+    }
+
+    info!("[Indexer] Document {} ('{}') indexé avec succès ({} pages).", doc_id, title, inserted_pages);
     Ok(doc_id)
 }
 
