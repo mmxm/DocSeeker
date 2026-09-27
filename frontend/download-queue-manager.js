@@ -132,6 +132,49 @@ class DownloadQueueManager {
     this._lastSyncedFoldersHash = '';
     this._workerFailed = false;
     this._initWorker();
+    // Après réparation d'une base corrompue, le worker peut repartir d'une base
+    // vide : resynchroniser les métadonnées et réindexer le cache PDF existant.
+    this._fullResyncAfterWorkerReset();
+  }
+
+  // Resynchronisation complète après (ré)initialisation du worker : miroir
+  // bibliothèque reconstruit depuis le serveur + réindexation des documents
+  // déjà présents dans le cache PDF local. Idempotent et non bloquant.
+  async _fullResyncAfterWorkerReset() {
+    try {
+      await this.ensureInitialized();
+      // Lever les mémoires de session : la synchro doit repartir de zéro.
+      this._syncedDocMetaMap.clear();
+      this._lastSyncedFoldersHash = '';
+      if (typeof window !== 'undefined') window._libraryMirrorSynced = false;
+
+      const [docsRes, foldersRes] = await Promise.all([
+        fetch('/api/documents', { credentials: 'include' }).then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch('/api/folders', { credentials: 'include' }).then(r => r.ok ? r.json() : null).catch(() => null)
+      ]);
+      const documents = Array.isArray(docsRes?.documents) ? docsRes.documents : null;
+      const folders = Array.isArray(foldersRes?.folders) ? foldersRes.folders : null;
+      if (documents) {
+        await this.syncLibraryMeta(documents, folders);
+      }
+
+      // Réindexer les PDF déjà téléchargés dans le cache local. On repart
+      // d'une liste d'ids vierge : l'ancienne mémoire peut référencer des
+      // documents que la base reconstruite ne connaît plus.
+      this.cachedDocIds = new Set();
+      const cachedIds = (window.pdfCacheManager && typeof window.pdfCacheManager.getCachedIds === 'function')
+        ? await window.pdfCacheManager.getCachedIds().catch(() => [])
+        : [];
+      for (const id of (cachedIds || [])) {
+        await this.ensureDocumentIndexedLocally(id);
+      }
+      if ((cachedIds || []).length > 0) {
+        console.log(`[DownloadQueueManager] ${cachedIds.length} document(s) réindexé(s) après réinitialisation locale.`);
+      }
+      this._notify();
+    } catch (e) {
+      console.warn('[DownloadQueueManager] Resynchronisation après reset:', e);
+    }
   }
 
   _initWorker() {

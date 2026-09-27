@@ -34,8 +34,164 @@ import initSearchWasm, {
 } from './wasm/search_wasm/search_wasm.js';
 
 let db = null;
+let sqlite3Module = null;
 let isReady = false;
 let initPromise = null;
+// Une seule tentative de réparation par session de worker (anti-boucle).
+let repairedThisSession = false;
+
+// Types d'opérations qui modifient la base : en cas de corruption, on répare
+// puis on retente une fois avant d'abandonner.
+const WRITE_RETRY_TYPES = new Set([
+  'INSERT_BUNDLE', 'SYNC_FOLDERS', 'SYNC_LIBRARY_META',
+  'UPDATE_DOC_FOLDERS', 'UPDATE_DOC_TOTAL_PAGES', 'DELETE_DOCUMENT'
+]);
+
+// Reconnaît les erreurs de corruption SQLite (SQLITE_CORRUPT*, incluant les
+// index virtuels FTS5 : SQLITE_CORRUPT_VTAB) et le message générique
+// "database disk image is malformed".
+function isCorruptionError(err) {
+  if (!err) return false;
+  const msg = String(err.message || err);
+  return /CORRUPT/i.test(msg) || /malformed/i.test(msg) || /disk image/i.test(msg);
+}
+
+// Suppression des fichiers SQLite (base + WAL/SHM/journal) via l'API OPFS native
+async function deleteLocalDbFiles() {
+  const names = [
+    'docseeker_local.sqlite', 'docseeker_local.sqlite-wal',
+    'docseeker_local.sqlite-shm', 'docseeker_local.sqlite-journal'
+  ];
+  try {
+    const root = await navigator.storage.getDirectory();
+    for (const n of names) {
+      try { await root.removeEntry(n); } catch (_) { /* fichier absent */ }
+    }
+  } catch (e) {
+    console.warn('[OfflineSearchWorker] Suppression OPFS impossible:', e);
+  }
+}
+
+// Rouvre une base propre (OPFS si possible, sinon VFS standard)
+function reopenFresh() {
+  try { if (db) db.close(); } catch (_) { /* ignore */ }
+  db = null;
+  if (sqlite3Module && sqlite3Module.oo1 && sqlite3Module.oo1.OpfsDb) {
+    try {
+      db = new sqlite3Module.oo1.OpfsDb('/docseeker_local.sqlite');
+    } catch (_) {
+      db = new sqlite3Module.oo1.DB('/docseeker_local.sqlite', 'c');
+    }
+  } else {
+    db = new sqlite3Module.oo1.DB('/docseeker_local.sqlite', 'c');
+  }
+}
+
+// Rebuild seul des index FTS5 (opération qui préserve les données) : remonte
+// les shadow tables depuis les tables de contenu. Retourne true en cas de succès.
+function tryRebuildFts() {
+  if (!db) return false;
+  try {
+    db.exec(`INSERT INTO pages_fts(pages_fts) VALUES('rebuild');`);
+    db.exec(`INSERT INTO documents_fts(documents_fts) VALUES('rebuild');`);
+    console.log('[OfflineSearchWorker] Index FTS reconstruits (données conservées)');
+    return true;
+  } catch (e) {
+    console.warn('[OfflineSearchWorker] Rebuild FTS impossible:', e);
+    return false;
+  }
+}
+
+// Réparation de la base locale corrompue (ex: SQLITE_CORRUPT_VTAB sur les
+// index FTS5 external-content après un crash ou deux onglets écrivant
+// simultanément sur l'OPFS). Stratégie en escalade :
+//  1. rebuild FTS5 (sans perte de données) ;
+//  2. recréation des objets FTS + rebuild (sans perte des métadonnées) ;
+//  3. reconstruction complète de la base (perte du miroir local : les
+//     métadonnées sont resynchronisées depuis le serveur et les documents
+//     déjà téléchargés dans le cache OPFS sont réindexés automatiquement) ;
+//  4. suppression du fichier + réinitialisation à neuf.
+// Retourne true si une base utilisable est en place.
+async function repairDatabase() {
+  if (repairedThisSession) {
+    // Une escalade complète a déjà eu lieu cette session : ne pas boucler.
+    return !!db;
+  }
+  repairedThisSession = true;
+
+  console.warn('[OfflineSearchWorker] Réparation de la base locale...');
+  try { if (db) db.exec('ROLLBACK'); } catch (_) { /* pas de transaction en cours */ }
+
+  // Niveau 1 : rebuild des index FTS5
+  if (tryRebuildFts()) {
+    try {
+      db.exec({ sql: `SELECT count(*) FROM documents_fts`, callback: () => { } });
+      console.log('[OfflineSearchWorker] Base réparée (niveau 1)');
+      return true;
+    } catch (_) { /* continuer l'escalade */ }
+  }
+
+  // Niveau 2 : recréation des objets FTS (table virtuelle + shadow + triggers)
+  for (const tbl of ['pages_fts', 'documents_fts']) {
+    try {
+      const objs = [];
+      db.exec({
+        sql: `SELECT type, name FROM sqlite_master WHERE name LIKE '${tbl}%' OR (type='trigger' AND sql LIKE '%${tbl}%')`,
+        callback: (r) => objs.push({ type: r[0], name: r[1] })
+      });
+      for (const o of objs) {
+        try {
+          db.exec(`DROP ${o.type === 'trigger' ? 'TRIGGER' : 'TABLE'} IF EXISTS "${o.name}"`);
+        } catch (_) { /* ignoré, recréé ensuite */ }
+      }
+      db.exec(`PRAGMA foreign_keys = OFF;\n` + get_schema_sql());
+      db.exec(`INSERT INTO ${tbl}(${tbl}) VALUES('rebuild');`);
+      console.log(`[OfflineSearchWorker] ${tbl} recréé et reconstruit (niveau 2)`);
+    } catch (e2) {
+      console.warn(`[OfflineSearchWorker] Recréation ${tbl} impossible:`, e2);
+    }
+  }
+  try {
+    db.exec({ sql: `SELECT count(*) FROM documents_fts`, callback: () => { } });
+    console.log('[OfflineSearchWorker] Base réparée (niveau 2)');
+    return true;
+  } catch (_) { /* continuer l'escalade */ }
+
+  // Niveau 3 : reconstruction complète (les tables de contenu sont recréées
+  // vides ; la synchro et la réindexation depuis le cache PDF les repeuplent)
+  console.warn('[OfflineSearchWorker] Niveau 3 : reconstruction complète de la base');
+  try {
+    const names = [];
+    db.exec({
+      sql: `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`,
+      callback: (r) => names.push(r[0])
+    });
+    for (const n of names) {
+      try { db.exec(`DROP TABLE IF EXISTS "${n}"`); } catch (_) { /* ignoré */ }
+    }
+    db.exec(`PRAGMA foreign_keys = OFF;\n` + get_schema_sql());
+    db.exec('VACUUM;');
+    db.exec({ sql: `SELECT count(*) FROM documents_fts`, callback: () => { } });
+    console.log('[OfflineSearchWorker] Base reconstruite (niveau 3)');
+    return true;
+  } catch (e3) {
+    console.error('[OfflineSearchWorker] Reconstruction impossible:', e3);
+  }
+
+  // Niveau 4 : suppression du fichier + réouverture à neuf
+  console.warn('[OfflineSearchWorker] Niveau 4 : suppression du fichier de base');
+  try { if (db) db.close(); } catch (_) { /* ignore */ }
+  db = null;
+  await deleteLocalDbFiles();
+  try {
+    reopenFresh();
+    db.exec(`PRAGMA foreign_keys = OFF;\n` + get_schema_sql());
+    console.log('[OfflineSearchWorker] Base réinitialisée (niveau 4)');
+  } catch (e4) {
+    console.error('[OfflineSearchWorker] Réinitialisation impossible:', e4);
+  }
+  return !!db; // les opérations suivantes retentent sur la base neuve
+}
 
 // Initialisation de la base SQLite locale et du module Wasm partagé
 async function init() {
@@ -88,6 +244,7 @@ async function init() {
       }
 
       const sqlite3 = await sqlite3InitModule(sqliteConfig);
+      sqlite3Module = sqlite3;
 
       // Tentative d'utilisation de l'OPFS haute performance, sinon fallback
       if (sqlite3.oo1 && sqlite3.oo1.OpfsDb) {
@@ -109,6 +266,17 @@ async function init() {
       const schemaSql = get_schema_sql();
       db.exec(`PRAGMA foreign_keys = OFF;\n` + schemaSql);
 
+      // Sonde d'intégrité : un index FTS5 external-content corrompu échoue dès la
+      // première lecture (SQLITE_CORRUPT_VTAB). Mieux vaut réparer maintenant que
+      // laisser chaque écriture échouer en silence pendant toute la session.
+      try {
+        db.exec({ sql: `SELECT count(*) FROM documents_fts`, callback: () => { } });
+        db.exec({ sql: `SELECT count(*) FROM documents`, callback: () => { } });
+      } catch (probeErr) {
+        console.warn('[OfflineSearchWorker] Sonde d\'intégrité en échec:', probeErr);
+        await repairDatabase();
+        if (!db) throw probeErr;
+      }
       // Backfill idempotent de l'index documents_fts (recherche titres) : les
       // bases locales créées avant l'introduction de l'index doivent être
       // reconstruites une seule fois (même logique que le backend).
@@ -131,11 +299,32 @@ async function init() {
       return true;
     } catch (err) {
       console.error('[OfflineSearchWorker] Erreur fatale initialisation:', err);
+      // Réinitialiser la promesse : le message suivant retentera une
+      // initialisation complète (et donc une éventuelle réparation).
+      initPromise = null;
       throw err;
     }
   })();
 
   return initPromise;
+}
+
+// Exécute une lecture (recherche) ; en cas de corruption, répare la base puis
+// retente une fois.
+async function runReadWithRepair(fn) {
+  try {
+    return fn();
+  } catch (err) {
+    if (isCorruptionError(err) && await repairDatabase()) {
+      try {
+        return fn();
+      } catch (retryErr) {
+        console.error('[OfflineSearchWorker] Recherche en échec après réparation:', retryErr);
+        throw retryErr;
+      }
+    }
+    throw err;
+  }
 }
 
 // Ingestion d'un paquet offline-bundle complet : SQL généré par Rust
@@ -268,6 +457,8 @@ function updateDocTotalPages(docId, totalPages) {
       bind: [totalPages, docId]
     });
   } catch (e) {
+    // Laisser remonter une corruption pour que le wrapper déclenche la réparation
+    if (isCorruptionError(e)) throw e;
     console.warn('[OfflineSearchWorker] updateDocTotalPages:', e);
   }
 }
@@ -388,7 +579,7 @@ function getAllKnownDocuments() {
 
 
 // Exécution de la recherche locale : la requête SQL est générée par Rust !
-function executeSearch(queryStr, titlesOnly = false, folderId = null, limit = 15, offset = 0) {
+async function executeSearch(queryStr, titlesOnly = false, folderId = null, limit = 15, offset = 0) {
   if (!db) {
     return {
       query: queryStr,
@@ -421,7 +612,7 @@ function executeSearch(queryStr, titlesOnly = false, folderId = null, limit = 15
     }
 
     const docs = [];
-    db.exec({
+    await runReadWithRepair(() => db.exec({
       sql: titleSqlData.sql,
       callback: (r) => {
         docs.push({
@@ -440,7 +631,7 @@ function executeSearch(queryStr, titlesOnly = false, folderId = null, limit = 15
           matched_all_terms: true
         });
       }
-    });
+    }));
 
     return {
       query: queryStr,
@@ -479,7 +670,7 @@ function executeSearch(queryStr, titlesOnly = false, folderId = null, limit = 15
   const rawRows = [];
 
   try {
-    db.exec({
+    await runReadWithRepair(() => db.exec({
       sql,
       callback: (row) => {
         const [
@@ -508,7 +699,7 @@ function executeSearch(queryStr, titlesOnly = false, folderId = null, limit = 15
           total_occurrences: totalOccs,
         });
       }
-    });
+    }));
   } catch (err) {
     console.error('[OfflineSearchWorker] Erreur exécution requête FTS5:', err);
   }
@@ -537,7 +728,7 @@ function executeSearch(queryStr, titlesOnly = false, folderId = null, limit = 15
 }
 
 // Recherche au sein d'un document spécifique (Split View)
-function executeDocSearch(docId, queryStr) {
+async function executeDocSearch(docId, queryStr) {
   if (!db || !docId || !queryStr) return { doc_id: docId, query: queryStr, total_occurrences: 0, occurrences: [] };
 
   const docSqlData = JSON.parse(build_doc_search_sql_wasm(BigInt(docId), queryStr));
@@ -550,14 +741,14 @@ function executeDocSearch(docId, queryStr) {
   const rows = [];
 
   try {
-    db.exec({
+    await runReadWithRepair(() => db.exec({
       sql,
       callback: (row) => {
         if (row && row[1]) {
           rows.push([Number(row[0]), row[1], Number(row[2]) || 0.0]);
         }
       }
-    });
+    }));
   } catch (err) {
     console.error('[OfflineSearchWorker] Erreur doc_search:', err);
   }
@@ -585,6 +776,26 @@ function executeDocSearch(docId, queryStr) {
   };
 }
 
+// Exécute un handler d'écriture ; en cas de corruption, répare la base puis
+// retente une fois (les données perdues sont resynchronisées / réindexées).
+async function runWriteWithRepair(type, fn) {
+  try {
+    return fn();
+  } catch (err) {
+    if (isCorruptionError(err) && await repairDatabase()) {
+      try {
+        const result = fn();
+        console.warn(`[OfflineSearchWorker] ${type}: réécrit avec succès après réparation`);
+        return result;
+      } catch (retryErr) {
+        console.error(`[OfflineSearchWorker] ${type}: échec après réparation:`, retryErr);
+        throw retryErr;
+      }
+    }
+    throw err;
+  }
+}
+
 // Réception des messages
 self.onmessage = async (e) => {
   const { id, type, payload } = e.data;
@@ -594,19 +805,21 @@ self.onmessage = async (e) => {
 
     switch (type) {
       case 'INSERT_BUNDLE': {
-        const ok = insertDocumentBundle(payload.bundle);
+        const ok = await runWriteWithRepair(type, () => insertDocumentBundle(payload.bundle));
         self.postMessage({ id, success: ok });
         break;
       }
       case 'SYNC_FOLDERS': {
-        syncFolders(payload.folders);
+        await runWriteWithRepair(type, () => syncFolders(payload.folders));
         self.postMessage({ id, success: true });
         break;
       }
       case 'SYNC_LIBRARY_META': {
         try {
-          if (Array.isArray(payload.folders)) syncFolders(payload.folders);
-          syncLibraryMeta(payload.documents);
+          await runWriteWithRepair(type, () => {
+            if (Array.isArray(payload.folders)) syncFolders(payload.folders);
+            syncLibraryMeta(payload.documents);
+          });
           self.postMessage({ id, success: true });
         } catch (e) {
           self.postMessage({ id, success: false, error: String(e && e.message || e) });
@@ -614,17 +827,17 @@ self.onmessage = async (e) => {
         break;
       }
       case 'UPDATE_DOC_FOLDERS': {
-        updateDocFolders(payload.docs);
+        await runWriteWithRepair(type, () => updateDocFolders(payload.docs));
         self.postMessage({ id, success: true });
         break;
       }
       case 'UPDATE_DOC_TOTAL_PAGES': {
-        updateDocTotalPages(payload.docId, payload.totalPages);
+        await runWriteWithRepair(type, () => updateDocTotalPages(payload.docId, payload.totalPages));
         self.postMessage({ id, success: true });
         break;
       }
       case 'DELETE_DOCUMENT': {
-        deleteDocument(payload.docId);
+        await runWriteWithRepair(type, () => deleteDocument(payload.docId));
         self.postMessage({ id, success: true });
         break;
       }
@@ -650,7 +863,7 @@ self.onmessage = async (e) => {
         break;
       }
       case 'SEARCH': {
-        const result = executeSearch(
+        const result = await executeSearch(
           payload.query,
           payload.titlesOnly,
           payload.folderId,
@@ -661,7 +874,7 @@ self.onmessage = async (e) => {
         break;
       }
       case 'DOC_SEARCH': {
-        const result = executeDocSearch(payload.docId, payload.query);
+        const result = await executeDocSearch(payload.docId, payload.query);
         self.postMessage({ id, success: true, data: result });
         break;
       }

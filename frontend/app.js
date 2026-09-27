@@ -5953,7 +5953,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (thisLoadSeq !== currentViewerLoadSeq) return;
 
-        let viewerUrl = `/pdfjs/web/viewer.html?v=5.9&verbosity=0&file=${encodeURIComponent(pdfTargetUrl)}#pagemode=none&page=${targetPage}`;
+        if (pdfTargetUrl && !pdfTargetUrl.startsWith("blob:") && !pdfTargetUrl.startsWith("data:")) {
+          try {
+            pdfTargetUrl = new URL(pdfTargetUrl, window.location.origin).href;
+          } catch (e) {}
+        }
+
+        let viewerUrl = `/pdfjs/web/viewer.html?v=5.11&verbosity=0&file=${encodeURIComponent(pdfTargetUrl)}#pagemode=none&page=${targetPage}`;
         // CANAL 4 : le hash ne porte QUE la recherche de l'onglet cible.
         // Jamais la requête d'un autre document (le global).
         if (effectiveSearchQuery) {
@@ -6063,7 +6069,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 window._currentPdfBlobUrl = null;
               }
               pdfTargetUrl = buildPdfUrl(numericDocId);
-              viewerUrl = `/pdfjs/web/viewer.html?v=5.9&verbosity=0&file=${encodeURIComponent(pdfTargetUrl)}#pagemode=none&page=${targetPage}`;
+              if (pdfTargetUrl && !pdfTargetUrl.startsWith("blob:") && !pdfTargetUrl.startsWith("data:")) {
+                try {
+                  pdfTargetUrl = new URL(pdfTargetUrl, window.location.origin).href;
+                } catch (e) {}
+              }
+              viewerUrl = `/pdfjs/web/viewer.html?v=5.11&verbosity=0&file=${encodeURIComponent(pdfTargetUrl)}#pagemode=none&page=${targetPage}`;
               if (effectiveSearchQuery) {
                 viewerUrl += `&search=${encodeURIComponent(effectiveSearchQuery)}`;
               } else {

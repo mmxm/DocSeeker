@@ -34,6 +34,11 @@ const VERSIONED_FILES: &[&str] = &[
     "offline-search-worker.js",
     "worker-setup.js",
     "crop-worker.js",
+    // Le viewer PDF.js fait partie du versionnement : son contenu détermine
+    // la version d'app-shell et déclenche le cycle de mise à jour du SW
+    // (sinon un viewer.html périmé peut rester servi longtemps).
+    "pdfjs/web/viewer.html",
+    "pdfjs/web/viewer.mjs",
 ];
 
 /// Version en cache mémoire, recalculée quand un fichier versionné change

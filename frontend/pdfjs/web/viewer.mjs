@@ -834,7 +834,7 @@ const defaultOptions = {
     kind: OptionKind.WORKER
   },
   workerSrc: {
-    value: "../build/pdf.worker.mjs?v=5.10",
+    value: "../build/pdf.worker.mjs?v=5.11",
     kind: OptionKind.WORKER
   }
 };
@@ -13801,6 +13801,11 @@ const PDFViewerApplication = {
     // pour un rendu/scroll instantané ; les gros restent à la demande.
     let prefetchSmall = false;
     if (args?.url) {
+      if (typeof args.url === "string" && !args.url.startsWith("blob:") && !args.url.startsWith("data:")) {
+        try {
+          args.url = new URL(args.url, window.location.origin).href;
+        } catch (e) {}
+      }
       try {
         const probe = await fetch(args.url, {
           method: "GET",
@@ -13823,7 +13828,7 @@ const PDFViewerApplication = {
     const loadingTask = getDocument({
       ...apiParams,
       withCredentials: true,
-      disableStream: false,
+      disableStream: !prefetchSmall,
       rangeChunkSize: 1048576,
       disableAutoFetch: !prefetchSmall,
       ...args

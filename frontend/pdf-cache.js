@@ -133,6 +133,14 @@ class PdfCacheManager {
     return `/api/pdf/${Number(docId)}`;
   }
 
+  /**
+   * Liste des identifiants de PDF complets actuellement en cache local (OPFS/CacheStorage)
+   */
+  async getCachedIds() {
+    await this.init();
+    return Array.from(this.cachedIds || []);
+  }
+
   onProgress(docId, callback) {
     const id = Number(docId);
     if (!this.progressListeners.has(id)) {

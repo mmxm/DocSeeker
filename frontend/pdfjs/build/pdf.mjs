@@ -1085,7 +1085,7 @@ class StatTimer {
     return outBuf.join("");
   }
 }
-function isValidFetchUrl(url, baseUrl) {
+function isValidFetchUrl(url, baseUrl = (typeof document !== "undefined" && document.baseURI) || (typeof location !== "undefined" && location.origin) || undefined) {
   try {
     const {
       protocol
@@ -10087,6 +10087,16 @@ class PDFFetchStream {
   _responseOrigin = null;
   constructor(source) {
     this.source = source;
+    let url = source.url;
+    try {
+      if (typeof url === "string" && !url.startsWith("blob:") && !url.startsWith("data:")) {
+        const base = (typeof document !== "undefined" && document.baseURI) || (typeof location !== "undefined" && location.origin);
+        if (base) {
+          url = new URL(url, base).href;
+          source.url = url;
+        }
+      }
+    } catch (e) {}
     this.isHttp = /^https?:/i.test(source.url);
     this.headers = createHeaders(this.isHttp, source.httpHeaders);
     this._fullRequestReader = null;
@@ -10154,7 +10164,6 @@ class PDFFetchStreamReader {
         throw createResponseStatusError(response.status, url);
       }
       this._reader = response.body.getReader();
-      this._headersCapability.resolve();
       const responseHeaders = response.headers;
       const {
         allowRangeRequests,
@@ -10168,6 +10177,7 @@ class PDFFetchStreamReader {
       this._isRangeSupported = allowRangeRequests;
       this._contentLength = suggestedLength || this._contentLength;
       this._filename = extractFilenameFromHeader(responseHeaders);
+      this._headersCapability.resolve();
       if (!this._isStreamingSupported && this._isRangeSupported) {
         this.cancel(new AbortException("Streaming is disabled."));
       }
@@ -10381,8 +10391,17 @@ class NetworkManager {
     httpHeaders,
     withCredentials
   }) {
-    this.url = url;
-    this.isHttp = /^https?:/i.test(url);
+    let rawUrl = url;
+    try {
+      if (typeof rawUrl === "string" && !rawUrl.startsWith("blob:") && !rawUrl.startsWith("data:")) {
+        const base = (typeof document !== "undefined" && document.baseURI) || (typeof location !== "undefined" && location.origin);
+        if (base) {
+          rawUrl = new URL(rawUrl, base).href;
+        }
+      }
+    } catch (e) {}
+    this.url = rawUrl;
+    this.isHttp = /^https?:/i.test(this.url);
     this.headers = createHeaders(this.isHttp, httpHeaders);
     this.withCredentials = withCredentials || false;
     this.currXhrId = 0;

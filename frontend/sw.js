@@ -224,10 +224,10 @@ self.addEventListener('fetch', (event) => {
       (async () => {
         // Cas A : Chargement de l'iframe du viewer PDF.js (/pdfjs/web/viewer.html)
         if (url.pathname.includes('/pdfjs/web/viewer.html')) {
-          const cachedViewer = await caches.match('/pdfjs/web/viewer.html', { ignoreSearch: true });
-          if (cachedViewer) {
-            return cachedViewer;
-          }
+          // Network-first : le viewer servi doit toujours être la version
+          // déployée (un viewer périmé peut attendre le 100 % du cache avant
+          // d'afficher, ou re-télécharger les PDF en intégralité). Le cache
+          // ne sert qu'en repli hors-ligne.
           try {
             const netRes = await fetch(event.request);
             if (netRes && netRes.status === 200) {
@@ -236,8 +236,8 @@ self.addEventListener('fetch', (event) => {
             }
             return netRes;
           } catch (e) {
-            const retry = await caches.match('/pdfjs/web/viewer.html', { ignoreSearch: true });
-            if (retry) return retry;
+            const cachedViewer = await caches.match('/pdfjs/web/viewer.html', { ignoreSearch: true });
+            if (cachedViewer) return cachedViewer;
             return new Response('Lecteur PDF non disponible', {
               status: 503,
               headers: { 'Content-Type': 'text/plain' }
