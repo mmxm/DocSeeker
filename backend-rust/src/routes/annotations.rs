@@ -15,46 +15,17 @@ pub struct AnnotationsPayload {
 }
 
 pub async fn get_annotations(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path(doc_id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let conn = state.db.get().map_err(|_| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
-    })?;
-
-    let json_str: Result<String, _> = conn.query_row(
-        "SELECT annotations_json FROM document_annotations WHERE doc_id = ?1",
-        params![doc_id],
-        |r| r.get(0),
-    );
-
-    match json_str {
-        Ok(str_val) => {
-            let parsed: serde_json::Value = serde_json::from_str(&str_val).unwrap_or(serde_json::json!([]));
-            Ok(Json(serde_json::json!({"doc_id": doc_id, "annotations": parsed})))
-        }
-        Err(_) => Ok(Json(serde_json::json!({"doc_id": doc_id, "annotations": []}))),
-    }
+    Ok(Json(serde_json::json!({"doc_id": doc_id, "annotations": []})))
 }
 
 pub async fn save_annotations(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path(doc_id): Path<i64>,
-    Json(payload): Json<AnnotationsPayload>,
+    Json(_payload): Json<AnnotationsPayload>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    let conn = state.db.get().map_err(|_| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
-    })?;
-
-    let serialized = serde_json::to_string(&payload.annotations).unwrap_or_else(|_| "[]".to_string());
-
-    conn.execute(
-        "INSERT INTO document_annotations (doc_id, annotations_json, updated_at) \
-         VALUES (?1, ?2, CURRENT_TIMESTAMP) \
-         ON CONFLICT(doc_id) DO UPDATE SET annotations_json = excluded.annotations_json, updated_at = CURRENT_TIMESTAMP",
-        params![doc_id, serialized],
-    ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response())?;
-
     Ok(Json(serde_json::json!({"status": "ok", "doc_id": doc_id})))
 }
 

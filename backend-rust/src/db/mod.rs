@@ -102,8 +102,7 @@ pub fn init_db(db_path: &Path) -> Result<()> {
             info!("Index FTS5 reconstruit avec succès pour {} pages.", count);
         }
     }
-    info!("Init table annotations...");
-    conn.execute_batch(schema::CREATE_ANNOTATIONS_TABLE)?;
+    let _ = conn.execute("DROP TABLE IF EXISTS document_annotations", []);
     info!("Init table auth...");
     conn.execute_batch(schema::CREATE_AUTH_TABLES)?;
 

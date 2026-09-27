@@ -98,6 +98,44 @@ fn map_folder_row(row: &rusqlite::Row) -> rusqlite::Result<FolderItem> {
     })
 }
 
+use std::path::PathBuf;
+
+/// Calcule le chemin relatif d'un dossier dans l'arborescence (ex: "Collèges/Gynécologie")
+pub fn get_folder_relative_path(conn: &rusqlite::Connection, folder_id: i64) -> Option<PathBuf> {
+    let mut current_id = folder_id;
+    let mut parts = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+
+    while current_id > 0 && visited.insert(current_id) {
+        let parent_info: Result<(String, Option<i64>), _> = conn.query_row(
+            "SELECT name, parent_id FROM folders WHERE id = ?1",
+            params![current_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        );
+        match parent_info {
+            Ok((name, parent_opt)) => {
+                parts.push(name);
+                match parent_opt {
+                    Some(pid) => current_id = pid,
+                    None => break,
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        parts.reverse();
+        let mut path = PathBuf::new();
+        for p in parts {
+            path.push(p);
+        }
+        Some(path)
+    }
+}
+
 pub async fn create_folder(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateFolderPayload>,
@@ -118,6 +156,12 @@ pub async fn create_folder(
 
     let id = conn.last_insert_rowid();
 
+    // Création physique du dossier correspondant sur le système de fichiers
+    if let Some(rel) = get_folder_relative_path(&conn, id) {
+        let abs_dir = state.config.documents_dir.join(rel);
+        let _ = std::fs::create_dir_all(abs_dir);
+    }
+
     Ok(Json(serde_json::json!({
         "id": id,
         "name": payload.name.trim(),
@@ -136,10 +180,30 @@ pub async fn update_folder(
     })?;
 
     if let Some(ref name) = payload.name {
-        conn.execute(
-            "UPDATE folders SET name = ?1 WHERE id = ?2",
-            params![name.trim(), folder_id],
-        ).ok();
+        let clean_name = name.trim();
+        if !clean_name.is_empty() {
+            let old_rel = get_folder_relative_path(&conn, folder_id);
+            conn.execute(
+                "UPDATE folders SET name = ?1 WHERE id = ?2",
+                params![clean_name, folder_id],
+            ).ok();
+            let new_rel = get_folder_relative_path(&conn, folder_id);
+
+            // Renommage physique du dossier sur le disque
+            if let (Some(old_p), Some(new_p)) = (old_rel, new_rel) {
+                let old_abs = state.config.documents_dir.join(&old_p);
+                let new_abs = state.config.documents_dir.join(&new_p);
+                if old_abs.exists() {
+                    let _ = std::fs::rename(&old_abs, &new_abs);
+                }
+                let old_prefix = old_p.to_string_lossy().to_string();
+                let new_prefix = new_p.to_string_lossy().to_string();
+                let _ = conn.execute(
+                    "UPDATE documents SET filename = ?1 || substr(filename, length(?2) + 1) WHERE folder_id = ?3 AND filename LIKE ?2 || '/%'",
+                    params![new_prefix, old_prefix, folder_id],
+                );
+            }
+        }
     }
 
     if let Some(ref color) = payload.color {
@@ -160,8 +224,17 @@ pub async fn delete_folder(
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
+    let rel = get_folder_relative_path(&conn, folder_id);
     conn.execute("DELETE FROM folders WHERE id = ?1", params![folder_id])
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response())?;
+
+    // Suppression physique du sous-dossier correspondant sur le disque
+    if let Some(rel_path) = rel {
+        let abs_dir = state.config.documents_dir.join(rel_path);
+        if abs_dir.exists() {
+            let _ = std::fs::remove_dir_all(abs_dir);
+        }
+    }
 
     Ok(Json(serde_json::json!({"status": "ok"})))
 }

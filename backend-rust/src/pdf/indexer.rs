@@ -391,6 +391,48 @@ pub fn extract_cleaned_title(
 }
 
 /// Réinitialise l'indexation de tous les documents tout en conservant scrupuleusement l'arborescence (folders)
+/// Helper récursif pour mapper l'arborescence réelle des dossiers du disque dans la table folders
+fn sync_physical_folders_to_db(
+    conn: &Connection,
+    base_dir: &Path,
+    current_dir: &Path,
+    parent_folder_id: Option<i64>,
+    folder_id_map: &mut std::collections::HashMap<PathBuf, i64>,
+) {
+    let entries = match std::fs::read_dir(current_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let mut sub_dirs = Vec::new();
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            sub_dirs.push(p);
+        }
+    }
+    sub_dirs.sort();
+
+    for path in sub_dirs {
+        let folder_name = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        let clean_name: String = folder_name.nfc().collect();
+        let res = conn.execute(
+            "INSERT INTO folders (name, parent_id, color) VALUES (?1, ?2, '#3b82f6')",
+            params![clean_name, parent_folder_id],
+        );
+        if res.is_ok() {
+            let folder_id = conn.last_insert_rowid();
+            if let Ok(rel) = path.strip_prefix(base_dir) {
+                folder_id_map.insert(rel.to_path_buf(), folder_id);
+            }
+            sync_physical_folders_to_db(conn, base_dir, &path, Some(folder_id), folder_id_map);
+        }
+    }
+}
+
+/// Réinitialise l'indexation de tous les documents : le système de fichiers est la source unique de vérité.
 pub fn reindex_all_library(
     conn: &Connection,
     _pdf_engine: &PdfEngine,
@@ -400,36 +442,28 @@ pub fn reindex_all_library(
         return Ok(Vec::new());
     }
 
-    // 1. Mémoriser les associations existantes (filename -> folder_id) pour préserver l'arborescence
-    let mut folder_map = std::collections::HashMap::new();
-    if let Ok(mut stmt) = conn.prepare("SELECT filename, folder_id FROM documents") {
-        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?))) {
-            for (f, fid) in rows.flatten() {
-                folder_map.insert(f.clone(), fid);
-                if let Some(base) = Path::new(&f).file_name().and_then(|s| s.to_str()) {
-                    folder_map.insert(base.to_string(), fid);
-                }
-            }
-        }
-    }
-
-    // 2. Assurer la présence des schémas / tables avant réinitialisation (rétrocompatibilité bases existantes)
+    // 1. Assurer la présence des schémas / tables indispensables
     let _ = conn.execute_batch(crate::db::schema::CREATE_FOLDERS_TABLE);
     let _ = conn.execute_batch(crate::db::schema::CREATE_DOCUMENTS_TABLE);
     let _ = conn.execute_batch(crate::db::schema::CREATE_PAGES_TABLE);
     let _ = conn.execute_batch(crate::db::schema::CREATE_FTS5_TABLE);
-    let _ = conn.execute_batch(crate::db::schema::CREATE_ANNOTATIONS_TABLE);
 
-    // Vider les tables dépendantes d'indexation sans toucher à folders de manière résiliente
+    // 2. Vider intégralement la base SQLite (y compris dossiers et annotations)
     let _ = conn.execute("DELETE FROM pages", []);
-    let _ = conn.execute("DELETE FROM document_annotations", []);
     let _ = conn.execute("DELETE FROM documents", []);
+    let _ = conn.execute("DELETE FROM folders", []);
+    let _ = conn.execute("DROP TABLE IF EXISTS document_annotations", []);
     let _ = conn.execute("INSERT INTO pages_fts(pages_fts) VALUES('rebuild')", []);
     let _ = conn.execute("INSERT INTO documents_fts(documents_fts) VALUES('rebuild')", []);
 
-    // 3. Scanner récursivement le répertoire des documents physiques et insérer directement pour mise en file d'attente
+    // 3. Recréer fidèlement l'arborescence des dossiers à partir du système de fichiers
+    let mut folder_id_map = std::collections::HashMap::new();
+    sync_physical_folders_to_db(conn, &config.documents_dir, &config.documents_dir, None, &mut folder_id_map);
+
+    // 4. Scanner récursivement le répertoire des documents physiques
     let mut queued_ids = Vec::new();
     let all_pdfs = collect_pdf_files_recursive(&config.documents_dir, &config.documents_dir);
+
     for (path, norm_fname) in all_pdfs {
         if let Ok(meta) = std::fs::metadata(&path) {
             let file_size = meta.len() as i64;
@@ -438,22 +472,11 @@ pub fn reindex_all_library(
             }
             let base_name = path.file_name().and_then(|f| f.to_str()).unwrap_or(&norm_fname);
             let norm_base: String = base_name.nfc().collect();
-            let folder_id = folder_map.get(&norm_fname).or_else(|| folder_map.get(&norm_base)).copied().flatten().or_else(|| {
-                Path::new(&norm_fname)
-                    .parent()
-                    .and_then(|p| p.to_str())
-                    .filter(|p| !p.is_empty())
-                    .and_then(|sub_dir| {
-                        conn.query_row("SELECT id FROM folders WHERE name = ?1", params![sub_dir], |r| r.get(0)).ok()
-                            .or_else(|| {
-                                conn.execute("INSERT INTO folders (name, color) VALUES (?1, '#3b82f6')", params![sub_dir])
-                                    .ok()
-                                    .map(|_| conn.last_insert_rowid())
-                            })
-                    })
-            });
 
-            // Titre temporaire initial basé sur le nom du fichier; le worker d'indexation extraira le titre propre
+            // Déterminer le folder_id physique à partir du dossier parent réel
+            let parent_rel = Path::new(&norm_fname).parent().filter(|p| !p.as_os_str().is_empty());
+            let folder_id = parent_rel.and_then(|p| folder_id_map.get(p)).copied();
+
             let stem = Path::new(&norm_base)
                 .file_stem()
                 .and_then(|s| s.to_str())

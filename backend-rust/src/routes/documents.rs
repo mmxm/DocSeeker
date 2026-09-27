@@ -181,6 +181,56 @@ pub async fn update_document(
     Ok(Json(serde_json::json!({"status": "ok"})))
 }
 
+fn move_doc_physical(
+    conn: &rusqlite::Connection,
+    config: &crate::config::Config,
+    doc_id: i64,
+    target_folder_id: Option<i64>,
+) -> std::result::Result<(), String> {
+    let current_fname: String = conn.query_row(
+        "SELECT filename FROM documents WHERE id = ?1",
+        params![doc_id],
+        |r| r.get(0),
+    ).map_err(|e| e.to_string())?;
+
+    let base_name = std::path::Path::new(&current_fname)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or(current_fname.clone());
+
+    // Calculer le nouveau chemin relatif et le répertoire de destination physique
+    let (new_rel_fname, dest_dir) = match target_folder_id {
+        Some(fid) => {
+            if let Some(folder_rel) = crate::routes::folders::get_folder_relative_path(conn, fid) {
+                let folder_rel_str = folder_rel.to_string_lossy().to_string();
+                let full_rel = format!("{}/{}", folder_rel_str, base_name);
+                let full_dest = config.documents_dir.join(&folder_rel);
+                (full_rel, full_dest)
+            } else {
+                (base_name.clone(), config.documents_dir.clone())
+            }
+        }
+        None => (base_name.clone(), config.documents_dir.clone()),
+    };
+
+    // Déplacer physiquement le fichier sur le disque
+    if let Some(src_path) = crate::pdf::indexer::resolve_pdf_path(&config.documents_dir, &current_fname) {
+        let _ = std::fs::create_dir_all(&dest_dir);
+        let dest_file_path = dest_dir.join(&base_name);
+        if src_path != dest_file_path {
+            let _ = std::fs::rename(&src_path, &dest_file_path);
+        }
+    }
+
+    // Mettre à jour l'enregistrement dans la base
+    conn.execute(
+        "UPDATE documents SET folder_id = ?1, filename = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?3",
+        params![target_folder_id, new_rel_fname, doc_id],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 pub async fn move_document(
     State(state): State<Arc<AppState>>,
     Path(doc_id): Path<i64>,
@@ -190,10 +240,8 @@ pub async fn move_document(
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
-    conn.execute(
-        "UPDATE documents SET folder_id = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-        params![payload.folder_id, doc_id],
-    ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response())?;
+    move_doc_physical(&conn, &state.config, doc_id, payload.folder_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response())?;
 
     Ok(Json(serde_json::json!({"status": "ok", "doc_id": doc_id, "folder_id": payload.folder_id})))
 }
@@ -207,10 +255,7 @@ pub async fn batch_move_documents(
     })?;
 
     for id in &payload.doc_ids {
-        let _ = conn.execute(
-            "UPDATE documents SET folder_id = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-            params![payload.folder_id, id],
-        );
+        let _ = move_doc_physical(&conn, &state.config, *id, payload.folder_id);
     }
 
     Ok(Json(serde_json::json!({"status": "ok", "moved_count": payload.doc_ids.len()})))
