@@ -56,10 +56,10 @@ const realDbPath = path.resolve("./data/db.sqlite");
 if (fs.existsSync(realDbPath)) {
   const db = new DatabaseSync(realDbPath, { readOnly: true });
   
-  // Trouver le document 023 (ou document contenant 'grossesse')
+  // Trouver le document 023 Grossesse normale
   const doc = db.prepare(`
     SELECT id, title, filename FROM documents 
-    WHERE (filename LIKE '%023%' OR title LIKE '%grossesse%') 
+    WHERE filename LIKE '%023%Grossesse%' OR filename LIKE '%023%grossesse%'
     LIMIT 1
   `).get();
 
