@@ -1762,7 +1762,8 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         const res = await fetch("/api/documents/reindex-all", { method: "POST" });
         if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || `HTTP ${res.status}`);
         }
         const data = await res.json();
         const total = data.total_queued || 0;
@@ -1770,7 +1771,7 @@ document.addEventListener("DOMContentLoaded", () => {
         loadFoldersAndDocuments();
       } catch (err) {
         console.error("Erreur lors de la demande de réindexation :", err);
-        showToast("Erreur lors du lancement de la réindexation", "error");
+        showToast(`Erreur réindexation : ${err.message || "Erreur serveur"}`, "error", 6000);
       } finally {
         settingsReindexAllBtn.disabled = false;
         settingsReindexAllBtn.textContent = originalText;

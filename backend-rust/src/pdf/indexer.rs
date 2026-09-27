@@ -384,14 +384,19 @@ pub fn reindex_all_library(
         }
     }
 
-    // 2. Vider les tables dépendantes d'indexation sans toucher à folders
-    conn.execute_batch(
-        "DELETE FROM pages;
-         DELETE FROM document_annotations;
-         DELETE FROM documents;
-         INSERT INTO pages_fts(pages_fts) VALUES('rebuild');
-         INSERT INTO documents_fts(documents_fts) VALUES('rebuild');"
-    ).map_err(|e| format!("Erreur lors de la réinitialisation de la base : {}", e))?;
+    // 2. Assurer la présence des schémas / tables avant réinitialisation (rétrocompatibilité bases existantes)
+    let _ = conn.execute_batch(crate::db::schema::CREATE_FOLDERS_TABLE);
+    let _ = conn.execute_batch(crate::db::schema::CREATE_DOCUMENTS_TABLE);
+    let _ = conn.execute_batch(crate::db::schema::CREATE_PAGES_TABLE);
+    let _ = conn.execute_batch(crate::db::schema::CREATE_FTS5_TABLE);
+    let _ = conn.execute_batch(crate::db::schema::CREATE_ANNOTATIONS_TABLE);
+
+    // Vider les tables dépendantes d'indexation sans toucher à folders de manière résiliente
+    let _ = conn.execute("DELETE FROM pages", []);
+    let _ = conn.execute("DELETE FROM document_annotations", []);
+    let _ = conn.execute("DELETE FROM documents", []);
+    let _ = conn.execute("INSERT INTO pages_fts(pages_fts) VALUES('rebuild')", []);
+    let _ = conn.execute("INSERT INTO documents_fts(documents_fts) VALUES('rebuild')", []);
 
     // 3. Scanner récursivement le répertoire des documents physiques et insérer directement pour mise en file d'attente
     let mut queued_ids = Vec::new();
