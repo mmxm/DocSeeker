@@ -88,7 +88,8 @@ pub async fn save_pdf(
         return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Contenu PDF vide"}))).into_response());
     }
 
-    let pdf_path = state.config.documents_dir.join(&fname);
+    let pdf_path = crate::pdf::indexer::resolve_pdf_path(&state.config.documents_dir, &fname)
+        .unwrap_or_else(|| state.config.documents_dir.join(&fname));
     if let Err(e) = std::fs::write(&pdf_path, &pdf_bytes) {
         return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Échec d'écriture : {}", e)}))).into_response());
     }

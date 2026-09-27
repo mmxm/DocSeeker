@@ -484,7 +484,7 @@ async fn test_api_online_search_scoring_and_ranking() {
     let title_res: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(title_res["results"].as_array().unwrap().len(), 1);
 
-    // 3. GET /api/doc-search?doc_id=1&q=hemorragie
+    // 3. GET /api/doc-search?doc_id=1&q=hemorragie (terme sans accent)
     let req = Request::builder()
         .uri("/api/doc-search?doc_id=1&q=hemorragie")
         .header(header::COOKIE, &cookie_header)
@@ -497,6 +497,30 @@ async fn test_api_online_search_scoring_and_ranking() {
     assert_eq!(doc_res["total_occurrences"], 1);
     let occs = doc_res["occurrences"].as_array().unwrap();
     assert_eq!(occs[0]["page_number"], 1);
+
+    // 4. GET /api/doc-search?doc_id=1&q=hémorragie (AVEC accent aigu)
+    let req = Request::builder()
+        .uri("/api/doc-search?doc_id=1&q=h%C3%A9morragie")
+        .header(header::COOKIE, &cookie_header)
+        .body(Body::empty())
+        .unwrap();
+    let res = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let doc_res: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(doc_res["total_occurrences"], 1, "La recherche intra-doc avec accent 'hémorragie' doit trouver l'occurrence");
+
+    // 5. GET /api/doc-search?doc_id=1&q=aiguë (AVEC tréma)
+    let req = Request::builder()
+        .uri("/api/doc-search?doc_id=1&q=aigu%C3%AB")
+        .header(header::COOKIE, &cookie_header)
+        .body(Body::empty())
+        .unwrap();
+    let res = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let doc_res: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(doc_res["total_occurrences"], 1, "La recherche intra-doc avec tréma 'aiguë' doit trouver l'occurrence");
 }
 
 #[tokio::test]
@@ -788,3 +812,79 @@ fn test_offline_engine_high_volume_real_corpus() {
     ).unwrap();
     assert_eq!(pages_fts_after, 0);
 }
+
+#[tokio::test]
+async fn test_recursive_directory_scan_and_reindex() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("test.sqlite");
+    let docs_dir = tmp.path().join("documents");
+    let covers_dir = tmp.path().join("covers");
+    let cache_dir = tmp.path().join("cache");
+    std::fs::create_dir_all(&docs_dir).unwrap();
+    std::fs::create_dir_all(&covers_dir).unwrap();
+    std::fs::create_dir_all(&cache_dir).unwrap();
+
+    // Créer un sous-dossier "Pneumologie" avec un PDF valide
+    let pneumo_dir = docs_dir.join("Pneumologie");
+    std::fs::create_dir_all(&pneumo_dir).unwrap();
+    let pdf_in_sub = pneumo_dir.join("ITEM_159_TUBERCULOSE.pdf");
+    // Écrire un header PDF minimal valide (> 5 octets avec %PDF-)
+    std::fs::write(&pdf_in_sub, b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n").unwrap();
+
+    // PDF à la racine
+    let pdf_at_root = docs_dir.join("025 - Grossesse.pdf");
+    std::fs::write(&pdf_at_root, b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n").unwrap();
+
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute_batch(&get_full_schema_sql()).unwrap();
+
+    let config = Config {
+        host: "127.0.0.1".to_string(),
+        port: 8080,
+        data_dir: tmp.path().to_path_buf(),
+        db_path,
+        documents_dir: docs_dir.clone(),
+        covers_dir,
+        cache_dir,
+        max_upload_size: 100 * 1024 * 1024,
+        session_duration_days: 30,
+        default_admin_password: None,
+    };
+
+    // 1. Tester la collecte récursive
+    let collected = docseeker_backend::pdf::indexer::collect_pdf_files_recursive(&docs_dir, &docs_dir);
+    assert_eq!(collected.len(), 2, "Doit collecter le PDF à la racine ET le PDF dans Pneumologie/");
+
+    let has_sub = collected.iter().any(|(_, rel)| rel.contains("Pneumologie"));
+    assert!(has_sub, "Le chemin relatif doit contenir le sous-dossier 'Pneumologie'");
+
+    // 2. Tester resolve_pdf_path
+    let resolved = docseeker_backend::pdf::indexer::resolve_pdf_path(&docs_dir, "Pneumologie/ITEM_159_TUBERCULOSE.pdf");
+    assert!(resolved.is_some());
+    assert!(resolved.unwrap().exists());
+
+    // Résolution résiliente par nom de base si sans préfixe
+    let resolved_base = docseeker_backend::pdf::indexer::resolve_pdf_path(&docs_dir, "ITEM_159_TUBERCULOSE.pdf");
+    assert!(resolved_base.is_some());
+    assert!(resolved_base.unwrap().exists());
+
+    // 3. Tester reindex_all_library
+    let queued = docseeker_backend::pdf::indexer::reindex_all_library(&conn, &GLOBAL_PDF_ENGINE, &config).unwrap();
+    assert_eq!(queued.len(), 2, "Les 2 documents doivent être mis en file lors de la réindexation complète");
+
+    // Vérifier que le dossier 'Pneumologie' a été automatiquement créé et associé
+    let pneumo_folder_id: Option<i64> = conn.query_row(
+        "SELECT id FROM folders WHERE name = 'Pneumologie'",
+        [],
+        |r| r.get(0),
+    ).ok();
+    assert!(pneumo_folder_id.is_some(), "Le dossier 'Pneumologie' doit être créé dans la table folders");
+
+    let doc_in_folder: Option<i64> = conn.query_row(
+        "SELECT folder_id FROM documents WHERE filename LIKE '%Pneumologie%'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(doc_in_folder, pneumo_folder_id, "Le document doit être rattaché au dossier Pneumologie");
+}
+

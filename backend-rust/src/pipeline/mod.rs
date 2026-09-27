@@ -238,17 +238,19 @@ impl IndexingPipeline {
             }
         };
 
-        let file_path = config.documents_dir.join(&filename);
-        if !file_path.exists() {
-            if let Ok(conn) = db.lock() {
-                let _ = conn.execute(
-                    "UPDATE documents SET status = 'failed', error_message = 'Fichier physique introuvable sur le disque', updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
-                    params![doc_id],
-                );
+        let file_path = match crate::pdf::indexer::resolve_pdf_path(&config.documents_dir, &filename) {
+            Some(p) => p,
+            None => {
+                if let Ok(conn) = db.lock() {
+                    let _ = conn.execute(
+                        "UPDATE documents SET status = 'failed', error_message = 'Fichier physique introuvable sur le disque', updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+                        params![doc_id],
+                    );
+                }
+                warn!("[Pipeline] Fichier introuvable pour doc {}: {:?}", doc_id, filename);
+                return;
             }
-            warn!("[Pipeline] Fichier introuvable pour doc {}: {:?}", doc_id, file_path);
-            return;
-        }
+        };
 
         // Marquer comme indexing
         let now_ts = SystemTime::now()

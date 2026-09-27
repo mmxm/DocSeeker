@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 use rusqlite::{params, Connection, Result};
@@ -85,17 +85,30 @@ pub fn index_pdf_file(
         )
         .ok();
 
+    let inferred_folder_id: Option<i64> = Path::new(original_filename)
+        .parent()
+        .and_then(|p| p.to_str())
+        .filter(|p| !p.is_empty())
+        .and_then(|sub_dir| {
+            conn.query_row("SELECT id FROM folders WHERE name = ?1", params![sub_dir], |r| r.get(0)).ok()
+                .or_else(|| {
+                    conn.execute("INSERT INTO folders (name, color) VALUES (?1, '#3b82f6')", params![sub_dir])
+                        .ok()
+                        .map(|_| conn.last_insert_rowid())
+                })
+        });
+
     let doc_id = if let Some(id) = existing_id {
         conn.execute("DELETE FROM pages WHERE doc_id = ?1", params![id]).map_err(|e| e.to_string())?;
         conn.execute(
-            "UPDATE documents SET title = ?1, file_hash = ?2, total_pages = ?3, file_size = ?4, status = 'ready', error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?5",
-            params![title, file_hash, metadata.total_pages, file_size, id],
+            "UPDATE documents SET title = ?1, file_hash = ?2, total_pages = ?3, file_size = ?4, folder_id = COALESCE(folder_id, ?5), status = 'ready', error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?6",
+            params![title, file_hash, metadata.total_pages, file_size, inferred_folder_id, id],
         ).map_err(|e| e.to_string())?;
         id
     } else {
         conn.execute(
-            "INSERT INTO documents (filename, title, file_hash, total_pages, file_size, status, error_message) VALUES (?1, ?2, ?3, ?4, ?5, 'ready', NULL)",
-            params![original_filename, title, file_hash, metadata.total_pages, file_size],
+            "INSERT INTO documents (filename, title, file_hash, total_pages, file_size, folder_id, status, error_message) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ready', NULL)",
+            params![original_filename, title, file_hash, metadata.total_pages, file_size, inferred_folder_id],
         ).map_err(|e| e.to_string())?;
         conn.last_insert_rowid()
     };
@@ -181,6 +194,67 @@ pub fn remove_document(conn: &Connection, config: &Config, doc_id: i64) -> Resul
     Ok(true)
 }
 
+/// Collecte récursivement tous les fichiers PDF dans un dossier et ses sous-dossiers.
+/// Retourne une liste de tuples (chemin_absolu, chemin_relatif_normalisé).
+pub fn collect_pdf_files_recursive(dir: &Path, base: &Path) -> Vec<(PathBuf, String)> {
+    let mut results = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                results.extend(collect_pdf_files_recursive(&path, base));
+            } else if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    if ext.eq_ignore_ascii_case("pdf") {
+                        if let Ok(meta) = std::fs::metadata(&path) {
+                            if meta.len() >= 5 {
+                                if let Ok(rel) = path.strip_prefix(base) {
+                                    let rel_str = rel.to_string_lossy().to_string();
+                                    let norm_fname: String = rel_str.nfc().collect();
+                                    results.push((path, norm_fname));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    results
+}
+
+/// Résout un chemin de fichier PDF, qu'il soit stocké sous forme relative directe,
+/// avec sous-dossier ou simplement par son nom de base (fallback résilient).
+pub fn resolve_pdf_path(base_dir: &Path, fname: &str) -> Option<PathBuf> {
+    let direct = base_dir.join(fname);
+    if direct.exists() {
+        return Some(direct);
+    }
+    // Fallback: chercher récursivement si le fichier a été déplacé dans un sous-dossier
+    // ou enregistré sans son préfixe de dossier
+    if let Some(target_name) = Path::new(fname).file_name() {
+        fn find_in_dir(dir: &Path, target: &std::ffi::OsStr) -> Option<PathBuf> {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_dir() {
+                        if let Some(found) = find_in_dir(&p, target) {
+                            return Some(found);
+                        }
+                    } else if p.is_file() {
+                        if p.file_name() == Some(target) {
+                            return Some(p);
+                        }
+                    }
+                }
+            }
+            None
+        }
+        return find_in_dir(base_dir, target_name);
+    }
+    None
+}
+
 pub fn scan_and_sync_documents(
     conn: &Connection,
     pdf_engine: &PdfEngine,
@@ -203,35 +277,23 @@ pub fn scan_and_sync_documents(
 
     if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))) {
         for (f, h) in rows.flatten() {
-            existing_files.insert(f);
+            existing_files.insert(f.clone());
+            if let Some(base) = Path::new(&f).file_name().and_then(|s| s.to_str()) {
+                existing_files.insert(base.to_string());
+            }
             if let Some(hash) = h {
                 existing_hashes.insert(hash);
             }
         }
     }
 
+    let all_pdfs = collect_pdf_files_recursive(&config.documents_dir, &config.documents_dir);
     let mut candidate_paths = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&config.documents_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if ext.eq_ignore_ascii_case("pdf") {
-                        if let Ok(meta) = std::fs::metadata(&path) {
-                            if meta.len() < 5 {
-                                warn!("[Sync] Fichier PDF ignoré car vide (< 5 octets) : {:?}", path);
-                                continue;
-                            }
-                        }
-                        if let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
-                            let norm_fname: String = fname.nfc().collect();
-                            if !existing_files.contains(&norm_fname) && !existing_files.contains(fname) {
-                                candidate_paths.push((path, norm_fname));
-                            }
-                        }
-                    }
-                }
-            }
+    for (path, norm_fname) in all_pdfs {
+        let base_name = path.file_name().and_then(|f| f.to_str()).unwrap_or(&norm_fname);
+        let norm_base: String = base_name.nfc().collect();
+        if !existing_files.contains(&norm_fname) && !existing_files.contains(&norm_base) {
+            candidate_paths.push((path, norm_fname));
         }
     }
 
@@ -314,7 +376,10 @@ pub fn reindex_all_library(
     if let Ok(mut stmt) = conn.prepare("SELECT filename, folder_id FROM documents") {
         if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?))) {
             for (f, fid) in rows.flatten() {
-                folder_map.insert(f, fid);
+                folder_map.insert(f.clone(), fid);
+                if let Some(base) = Path::new(&f).file_name().and_then(|s| s.to_str()) {
+                    folder_map.insert(base.to_string(), fid);
+                }
             }
         }
     }
@@ -328,42 +393,47 @@ pub fn reindex_all_library(
          INSERT INTO documents_fts(documents_fts) VALUES('rebuild');"
     ).map_err(|e| format!("Erreur lors de la réinitialisation de la base : {}", e))?;
 
-    // 3. Scanner le répertoire des documents physiques et insérer directement pour mise en file d'attente
+    // 3. Scanner récursivement le répertoire des documents physiques et insérer directement pour mise en file d'attente
     let mut queued_ids = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&config.documents_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if ext.eq_ignore_ascii_case("pdf") {
-                        if let Ok(meta) = std::fs::metadata(&path) {
-                            let file_size = meta.len() as i64;
-                            if file_size < 5 {
-                                continue;
-                            }
-                            if let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
-                                let norm_fname: String = fname.nfc().collect();
-                                let folder_id = folder_map.get(&norm_fname).copied().flatten();
-                                // Titre temporaire initial basé sur le nom du fichier; le worker d'indexation extraira le titre propre
-                                let stem = Path::new(&norm_fname)
-                                    .file_stem()
-                                    .and_then(|s| s.to_str())
-                                    .unwrap_or(&norm_fname);
-                                let clean_stem: String = stem.nfc().collect();
-                                let initial_title = clean_stem.replace('_', " ").trim().to_string();
+    let all_pdfs = collect_pdf_files_recursive(&config.documents_dir, &config.documents_dir);
+    for (path, norm_fname) in all_pdfs {
+        if let Ok(meta) = std::fs::metadata(&path) {
+            let file_size = meta.len() as i64;
+            if file_size < 5 {
+                continue;
+            }
+            let base_name = path.file_name().and_then(|f| f.to_str()).unwrap_or(&norm_fname);
+            let norm_base: String = base_name.nfc().collect();
+            let folder_id = folder_map.get(&norm_fname).or_else(|| folder_map.get(&norm_base)).copied().flatten().or_else(|| {
+                Path::new(&norm_fname)
+                    .parent()
+                    .and_then(|p| p.to_str())
+                    .filter(|p| !p.is_empty())
+                    .and_then(|sub_dir| {
+                        conn.query_row("SELECT id FROM folders WHERE name = ?1", params![sub_dir], |r| r.get(0)).ok()
+                            .or_else(|| {
+                                conn.execute("INSERT INTO folders (name, color) VALUES (?1, '#3b82f6')", params![sub_dir])
+                                    .ok()
+                                    .map(|_| conn.last_insert_rowid())
+                            })
+                    })
+            });
 
-                                let insert_res = conn.execute(
-                                    "INSERT INTO documents (filename, title, file_size, folder_id, status) VALUES (?1, ?2, ?3, ?4, 'pending')",
-                                    params![norm_fname, initial_title, file_size, folder_id],
-                                );
-                                if let Ok(_) = insert_res {
-                                    let new_id = conn.last_insert_rowid();
-                                    queued_ids.push(new_id);
-                                }
-                            }
-                        }
-                    }
-                }
+            // Titre temporaire initial basé sur le nom du fichier; le worker d'indexation extraira le titre propre
+            let stem = Path::new(&norm_base)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&norm_base);
+            let clean_stem: String = stem.nfc().collect();
+            let initial_title = clean_stem.replace('_', " ").trim().to_string();
+
+            let insert_res = conn.execute(
+                "INSERT INTO documents (filename, title, file_size, folder_id, status) VALUES (?1, ?2, ?3, ?4, 'pending')",
+                params![norm_fname, initial_title, file_size, folder_id],
+            );
+            if let Ok(_) = insert_res {
+                let new_id = conn.last_insert_rowid();
+                queued_ids.push(new_id);
             }
         }
     }

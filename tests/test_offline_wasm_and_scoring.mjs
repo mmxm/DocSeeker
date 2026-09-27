@@ -243,6 +243,61 @@ assert.ok(batchResult.total_occurrences > 0, "Le traitement batch Wasm doit trou
 assert.ok(batchResult.occurrences.length > 0, "Le traitement batch Wasm doit retourner des occurrences");
 console.log(`✅ Traitement batch Wasm intra-document validé : ${batchResult.total_occurrences} occurrence(s) extraite(s) en 1 seul appel.`);
 
+// 9 bis. Test spécifique de la recherche intra-document avec caractères accentués (fréquent, hémorragie)
+console.log("\n--- TEST RECHERCHE INTRA-DOCUMENT AVEC ACCENTS (FRÉQUENT & HÉMORRAGIE) ---");
+const testAccentedDocId = 999999n;
+insertDocStmt.run(
+  Number(testAccentedDocId),
+  "test_accents.pdf",
+  "Document Test Accents",
+  "hash_accents",
+  null,
+  3,
+  1024,
+  new Date().toISOString(),
+  new Date().toISOString()
+);
+
+const wordsAccented = JSON.stringify([
+  [100.0, 200.0, 150.0, 215.0, "Fréquent", 0, 1],
+  [155.0, 200.0, 220.0, 215.0, "symptôme", 0, 1],
+  [100.0, 230.0, 180.0, 245.0, "Hémorragie", 0, 2],
+  [185.0, 230.0, 240.0, 245.0, "aiguë", 0, 2]
+]);
+
+insertPageStmt.run(
+  Number(testAccentedDocId),
+  3,
+  "Tableau clinique : Fréquent symptôme. Risque d'hémorragie aiguë.",
+  wordsAccented
+);
+
+// Recherche avec "fréquent"
+const docSearchAccentedJson = build_doc_search_sql_wasm(testAccentedDocId, "fréquent");
+const docSearchAccentedData = JSON.parse(docSearchAccentedJson);
+const accentedMatches = clientDb.prepare(docSearchAccentedData.sql).all();
+assert.ok(accentedMatches.length > 0, "Doit trouver la page 3 pour la recherche 'fréquent'");
+
+const batchAccentedResult = JSON.parse(batch_find_and_process_doc_occurrences_wasm(
+  JSON.stringify(accentedMatches.map(r => [Number(r.page_number), r.words_json, Number(r.page_bm25) || 0.0])),
+  JSON.stringify(docSearchAccentedData.terms),
+  docSearchAccentedData.query_hash,
+  testAccentedDocId,
+  842.0,
+  null,
+  null
+));
+assert.ok(batchAccentedResult.total_occurrences > 0, "Le traitement Wasm doit extraire l'occurrence 'fréquent'");
+assert.equal(batchAccentedResult.occurrences[0].page_number, 3);
+console.log(`✅ Recherche intra-document avec accent ('fréquent') validée : ${batchAccentedResult.total_occurrences} occurrence(s) sur page 3.`);
+
+// Recherche avec "hémorragie"
+const docSearchHemoJson = build_doc_search_sql_wasm(testAccentedDocId, "hémorragie");
+const docSearchHemoData = JSON.parse(docSearchHemoJson);
+const hemoMatches = clientDb.prepare(docSearchHemoData.sql).all();
+assert.ok(hemoMatches.length > 0, "Doit trouver la page 3 pour 'hémorragie'");
+console.log(`✅ Recherche intra-document avec accent ('hémorragie') validée : ${hemoMatches.length} page(s) trouvée(s).`);
+
 // 10. Test de non-régression & Parité Absolue : 'insuffisance rénale aigue' dans Néphrologie (doc #544)
 console.log("\n--- TEST PARITÉ STRICTE HORS-LIGNE : 'insuffisance rénale aigue' DANS NÉPHROLOGIE (#544) ---");
 const nephroDoc = realDb.prepare("SELECT id, filename, title, file_hash, folder_id, total_pages, file_size, created_at, updated_at FROM documents WHERE id = 544").get();

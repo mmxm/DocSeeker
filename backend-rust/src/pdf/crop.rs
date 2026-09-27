@@ -55,11 +55,13 @@ pub fn generate_crops_for_page(
     let doc_cache_dir = config.cache_dir.join(format!("doc_{}", doc_id));
     std::fs::create_dir_all(&doc_cache_dir).ok();
 
-    let pdf_path = config.documents_dir.join(filename);
-    if !pdf_path.exists() {
-        warn!("[Crop] Fichier PDF introuvable : {:?}", pdf_path);
-        return None;
-    }
+    let pdf_path = match crate::pdf::indexer::resolve_pdf_path(&config.documents_dir, filename) {
+        Some(p) => p,
+        None => {
+            warn!("[Crop] Fichier PDF introuvable pour filename : {}", filename);
+            return None;
+        }
+    };
 
     let words_data: Vec<WordEntry> = serde_json::from_str(words_json).unwrap_or_default();
     let terms: Vec<String> = terms_str

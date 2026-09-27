@@ -79,10 +79,10 @@ pub async fn get_cover(
             None => return (StatusCode::NOT_FOUND, "Document introuvable en base").into_response(),
         };
 
-        let file_path = state.config.documents_dir.join(&fname);
-        if !file_path.exists() {
-            return (StatusCode::NOT_FOUND, "Fichier PDF introuvable sur disque").into_response();
-        }
+        let file_path = match crate::pdf::indexer::resolve_pdf_path(&state.config.documents_dir, &fname) {
+            Some(p) => p,
+            None => return (StatusCode::NOT_FOUND, "Fichier PDF introuvable sur disque").into_response(),
+        };
 
         let state_clone = Arc::clone(&state);
         let cover_path_clone = cover_webp.clone();
@@ -248,10 +248,10 @@ pub async fn get_pdf(
         None => return (StatusCode::NOT_FOUND, "Document introuvable en base").into_response(),
     };
 
-    let pdf_path = state.config.documents_dir.join(&fname);
-    if !pdf_path.exists() {
-        return (StatusCode::NOT_FOUND, "Fichier physique introuvable").into_response();
-    }
+    let pdf_path = match crate::pdf::indexer::resolve_pdf_path(&state.config.documents_dir, &fname) {
+        Some(p) => p,
+        None => return (StatusCode::NOT_FOUND, "Fichier physique introuvable").into_response(),
+    };
 
     let file_size = match tokio::fs::metadata(&pdf_path).await {
         Ok(meta) => meta.len(),

@@ -282,9 +282,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if !missing.is_empty() {
                             info!("[Couvertures] {} couverture(s) manquante(s) détectée(s), génération en tâche de fond...", missing.len());
                             for (id, fname) in missing {
-                                let pdf_path = bg_config.documents_dir.join(&fname);
-                                let cover_path = bg_config.covers_dir.join(format!("{}.webp", id));
-                                if pdf_path.exists() {
+                                if let Some(pdf_path) = docseeker_backend::pdf::indexer::resolve_pdf_path(&bg_config.documents_dir, &fname) {
+                                    let cover_path = bg_config.covers_dir.join(format!("{}.webp", id));
                                     if let Err(e) = bg_engine.render_cover(&pdf_path, &cover_path) {
                                         warn!("[Couvertures] Échec génération couverture doc {} : {}", id, e);
                                     }
