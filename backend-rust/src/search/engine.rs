@@ -112,7 +112,13 @@ pub fn search_titles(
         conn.query_row(&wrapped, [], |r| r.get(0)).unwrap_or(0)
     };
 
-    let mut stmt = conn.prepare(&query_sql)?;
+    let mut stmt = match conn.prepare(&query_sql) {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = conn.execute_batch(crate::db::schema::CREATE_FTS5_TABLE);
+            conn.prepare(&query_sql)?
+        }
+    };
 
     let rows = stmt.query_map([], |row| {
         Ok((
@@ -256,7 +262,14 @@ pub fn search_documents(
         Ok(list)
     };
 
-    let sql_rows = run_sql(&search_sql_data.sql)?;
+    let sql_rows = match run_sql(&search_sql_data.sql) {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::warn!("[Search] Requête FTS5 échouée, tentative auto-réparation schéma : {}", err);
+            let _ = conn.execute_batch(crate::db::schema::CREATE_FTS5_TABLE);
+            run_sql(&search_sql_data.sql)?
+        }
+    };
 
     if sql_rows.is_empty() {
         return Ok(SearchResponse {
