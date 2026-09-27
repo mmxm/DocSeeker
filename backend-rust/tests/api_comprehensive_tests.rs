@@ -868,6 +868,25 @@ async fn test_recursive_directory_scan_and_reindex() {
     assert!(resolved_base.is_some());
     assert!(resolved_base.unwrap().exists());
 
+    // Test résolution croisée Unicode (NFD sur disque macOS vs requête NFC Linux/Web)
+    use unicode_normalization::UnicodeNormalization;
+    let accented_nfd: String = "Grossesse_extra_utérine_test.pdf".nfd().collect();
+    let nfd_file = docs_dir.join(&accented_nfd);
+    std::fs::write(&nfd_file, b"%PDF-1.4 dummy accented content").unwrap();
+
+    let query_nfc: String = "Grossesse_extra_utérine_test.pdf".nfc().collect();
+    let resolved_nfc = docseeker_backend::pdf::indexer::resolve_pdf_path(&docs_dir, &query_nfc);
+    assert!(resolved_nfc.is_some(), "resolve_pdf_path doit trouver le fichier NFD sur disque avec une requête NFC");
+    assert!(resolved_nfc.unwrap().exists());
+
+    // Test résolution dans un sous-dossier avec accent
+    let sub_accented = pneumo_dir.join(&accented_nfd);
+    std::fs::write(&sub_accented, b"%PDF-1.4 dummy sub accented content").unwrap();
+    let resolved_sub_base = docseeker_backend::pdf::indexer::resolve_pdf_path(&docs_dir, &query_nfc);
+    assert!(resolved_sub_base.is_some(), "resolve_pdf_path doit retrouver par nom de base un fichier avec accents dans un sous-dossier");
+    let _ = std::fs::remove_file(&nfd_file);
+    let _ = std::fs::remove_file(&sub_accented);
+
     // 3. Tester reindex_all_library
     let queued = docseeker_backend::pdf::indexer::reindex_all_library(&conn, &GLOBAL_PDF_ENGINE, &config).unwrap();
     assert_eq!(queued.len(), 2, "Les 2 documents doivent être mis en file lors de la réindexation complète");

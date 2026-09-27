@@ -176,7 +176,8 @@ pub fn remove_document(conn: &Connection, config: &Config, doc_id: i64) -> Resul
     conn.execute("DELETE FROM documents WHERE id = ?1", params![doc_id]).map_err(|e| e.to_string())?;
 
     // Supprimer le fichier PDF
-    let pdf_path = config.documents_dir.join(&fname);
+    let pdf_path = resolve_pdf_path(&config.documents_dir, &fname)
+        .unwrap_or_else(|| config.documents_dir.join(&fname));
     if pdf_path.exists() {
         let _ = std::fs::remove_file(pdf_path);
     }
@@ -223,36 +224,64 @@ pub fn collect_pdf_files_recursive(dir: &Path, base: &Path) -> Vec<(PathBuf, Str
     results
 }
 
-/// Résout un chemin de fichier PDF, qu'il soit stocké sous forme relative directe,
-/// avec sous-dossier ou simplement par son nom de base (fallback résilient).
+/// Résout un chemin de fichier PDF de façon ultra-résiliente :
+/// - Vérification directe (base_dir / fname)
+/// - Normalisation Unicode croisée (NFD vs NFC) indispensable entre macOS (APFS NFD) et Linux/Synology (ext4/btrfs raw bytes)
+/// - Recherche récursive dans les sous-dossiers si le fichier a été déplacé ou enregistré sans son préfixe
+/// - Tolérance casse (case-insensitive) si nécessaire
 pub fn resolve_pdf_path(base_dir: &Path, fname: &str) -> Option<PathBuf> {
+    // 1. Essai direct tel quel
     let direct = base_dir.join(fname);
     if direct.exists() {
         return Some(direct);
     }
-    // Fallback: chercher récursivement si le fichier a été déplacé dans un sous-dossier
-    // ou enregistré sans son préfixe de dossier
-    if let Some(target_name) = Path::new(fname).file_name() {
-        fn find_in_dir(dir: &Path, target: &std::ffi::OsStr) -> Option<PathBuf> {
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let p = entry.path();
-                    if p.is_dir() {
-                        if let Some(found) = find_in_dir(&p, target) {
-                            return Some(found);
-                        }
-                    } else if p.is_file() {
-                        if p.file_name() == Some(target) {
-                            return Some(p);
-                        }
+
+    // 2. Variantes directes Unicode NFD (macOS) et NFC (Linux/Web)
+    let nfd_name: String = fname.nfd().collect();
+    let direct_nfd = base_dir.join(&nfd_name);
+    if direct_nfd.exists() {
+        return Some(direct_nfd);
+    }
+
+    let nfc_name: String = fname.nfc().collect();
+    let direct_nfc = base_dir.join(&nfc_name);
+    if direct_nfc.exists() {
+        return Some(direct_nfc);
+    }
+
+    // 3. Fallback : scan récursif avec comparaison Unicode normalisée (NFC) et insensible à la casse
+    let target_base_nfc: String = Path::new(fname)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| fname.to_string())
+        .nfc()
+        .collect();
+
+    fn find_in_dir_recursive(dir: &Path, target_nfc: &str) -> Option<PathBuf> {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return None,
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                if let Some(found) = find_in_dir_recursive(&p, target_nfc) {
+                    return Some(found);
+                }
+            } else if p.is_file() {
+                if let Some(name) = p.file_name() {
+                    let name_str = name.to_string_lossy();
+                    let name_nfc: String = name_str.nfc().collect();
+                    if name_nfc == target_nfc || name_nfc.eq_ignore_ascii_case(target_nfc) {
+                        return Some(p);
                     }
                 }
             }
-            None
         }
-        return find_in_dir(base_dir, target_name);
+        None
     }
-    None
+
+    find_in_dir_recursive(base_dir, &target_base_nfc)
 }
 
 pub fn scan_and_sync_documents(
