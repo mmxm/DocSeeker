@@ -1743,6 +1743,41 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // Bouton Réindexer toute la bibliothèque (serveur)
+  const settingsReindexAllBtn = document.getElementById("settingsReindexAllBtn");
+  if (settingsReindexAllBtn) {
+    settingsReindexAllBtn.addEventListener("click", async () => {
+      const confirmed = confirm(
+        "Êtes-vous sûr de vouloir réindexer toute la bibliothèque ?\n\n" +
+        "• Vos dossiers et leur arborescence seront scrupuleusement conservés.\n" +
+        "• Tous les titres seront ré-analysés avec la dernière version du moteur.\n" +
+        "• L'indexation complète tournera en tâche de fond sur le serveur."
+      );
+      if (!confirmed) return;
+
+      settingsReindexAllBtn.disabled = true;
+      const originalText = settingsReindexAllBtn.textContent;
+      settingsReindexAllBtn.textContent = "Réinitialisation en cours...";
+
+      try {
+        const res = await fetch("/api/documents/reindex-all", { method: "POST" });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        const total = data.total_queued || 0;
+        showToast(`Réindexation lancée : ${total} document(s) mis en file d'attente`, "success", 5000);
+        loadFoldersAndDocuments();
+      } catch (err) {
+        console.error("Erreur lors de la demande de réindexation :", err);
+        showToast("Erreur lors du lancement de la réindexation", "error");
+      } finally {
+        settingsReindexAllBtn.disabled = false;
+        settingsReindexAllBtn.textContent = originalText;
+      }
+    });
+  }
+
   const settingsLoginModalBtn = document.getElementById("settingsLoginModalBtn");
   if (settingsLoginModalBtn) {
     settingsLoginModalBtn.addEventListener("click", () => showLoginModal());
@@ -5959,13 +5994,11 @@ document.addEventListener("DOMContentLoaded", () => {
           } catch (e) {}
         }
 
-        let viewerUrl = `/pdfjs/web/viewer.html?v=5.11&verbosity=0&file=${encodeURIComponent(pdfTargetUrl)}#pagemode=none&page=${targetPage}`;
+        let viewerUrl = `/pdfjs/web/viewer.html?v=5.12&verbosity=0&file=${encodeURIComponent(pdfTargetUrl)}#pagemode=none&page=${targetPage}`;
         // CANAL 4 : le hash ne porte QUE la recherche de l'onglet cible.
         // Jamais la requête d'un autre document (le global).
         if (effectiveSearchQuery) {
           viewerUrl += `&search=${encodeURIComponent(effectiveSearchQuery)}`;
-        } else {
-          viewerUrl += `&search=`;
         }
 
         let isWarm = false;
@@ -6074,11 +6107,9 @@ document.addEventListener("DOMContentLoaded", () => {
                   pdfTargetUrl = new URL(pdfTargetUrl, window.location.origin).href;
                 } catch (e) {}
               }
-              viewerUrl = `/pdfjs/web/viewer.html?v=5.11&verbosity=0&file=${encodeURIComponent(pdfTargetUrl)}#pagemode=none&page=${targetPage}`;
+              viewerUrl = `/pdfjs/web/viewer.html?v=5.12&verbosity=0&file=${encodeURIComponent(pdfTargetUrl)}#pagemode=none&page=${targetPage}`;
               if (effectiveSearchQuery) {
                 viewerUrl += `&search=${encodeURIComponent(effectiveSearchQuery)}`;
-              } else {
-                viewerUrl += `&search=`;
               }
             }
           }

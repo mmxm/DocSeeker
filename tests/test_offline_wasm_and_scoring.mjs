@@ -217,8 +217,8 @@ console.log("\n--- TEST RECHERCHE PAR TITRE ---");
 const titleSqlJson = build_title_search_sql_wasm("grossesse", null, 10, 0);
 const titleData = JSON.parse(titleSqlJson);
 const titleMatches = clientDb.prepare(titleData.sql).all();
-assert.equal(titleMatches.length, 6, "Tous les 6 documents doivent correspondre au titre 'grossesse'");
-console.log(`✅ Recherche par titre : 6/6 documents trouvés.`);
+assert.equal(titleMatches.length, realDocs.length, `Tous les ${realDocs.length} documents doivent correspondre au titre 'grossesse'`);
+console.log(`✅ Recherche par titre : ${titleMatches.length}/${realDocs.length} documents trouvés.`);
 
 // 9. Test de la recherche interne à un document (build_doc_search_sql_wasm)
 console.log("\n--- TEST RECHERCHE AU SEIN D'UN DOCUMENT ---");

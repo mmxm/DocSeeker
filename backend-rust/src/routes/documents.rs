@@ -11,7 +11,7 @@ use tokio::io::AsyncWriteExt;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::AppState;
-use crate::pdf::indexer::{remove_document, scan_and_sync_documents};
+use crate::pdf::indexer::{reindex_all_library, remove_document, scan_and_sync_documents};
 
 #[derive(Serialize)]
 pub struct DocumentListItem {
@@ -502,6 +502,28 @@ pub async fn reindex_document(
 ) -> Result<Json<serde_json::Value>, Response> {
     state.pipeline.enqueue(doc_id);
     Ok(Json(serde_json::json!({"status": "queued", "doc_id": doc_id})))
+}
+
+pub async fn reindex_all_documents(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let queued_ids = {
+        let conn = state.db.get().map_err(|_| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
+        })?;
+        reindex_all_library(&conn, &state.pdf_engine, &state.config)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response())?
+    };
+
+    let total = queued_ids.len();
+    for id in queued_ids {
+        state.pipeline.enqueue(id);
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "total_queued": total
+    })))
 }
 
 pub async fn sync_documents_handler(

@@ -261,3 +261,123 @@ pub fn scan_and_sync_documents(
 
     (added.len(), added)
 }
+
+/// Extrait le titre propre selon la logique la plus récente
+pub fn extract_cleaned_title(
+    pdf_engine: &PdfEngine,
+    file_path: &Path,
+    original_filename: &str,
+    custom_title: Option<&str>,
+) -> String {
+    let stem = Path::new(original_filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(original_filename);
+
+    let clean_base_title: String = stem.nfc().collect();
+    let clean_base_title = clean_base_title.replace('_', " ").trim().to_string();
+
+    let meta_title = pdf_engine
+        .extract_document_metadata(file_path)
+        .map(|m| {
+            let nfc: String = m.meta_title.nfc().collect();
+            nfc
+        })
+        .unwrap_or_default();
+
+    if let Some(ct) = custom_title {
+        ct.to_string()
+    } else if !meta_title.is_empty()
+        && meta_title.len() > 2
+        && !["microsoft", "word", "powerpoint", "untitled"]
+            .iter()
+            .any(|&prefix| meta_title.to_lowercase().starts_with(prefix))
+    {
+        meta_title
+    } else {
+        clean_base_title
+    }
+}
+
+/// Réinitialise l'indexation de tous les documents tout en conservant scrupuleusement l'arborescence (folders)
+pub fn reindex_all_library(
+    conn: &Connection,
+    _pdf_engine: &PdfEngine,
+    config: &Config,
+) -> Result<Vec<i64>, String> {
+    if !config.documents_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    // 1. Mémoriser les associations existantes (filename -> folder_id) pour préserver l'arborescence
+    let mut folder_map = std::collections::HashMap::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT filename, folder_id FROM documents") {
+        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?))) {
+            for (f, fid) in rows.flatten() {
+                folder_map.insert(f, fid);
+            }
+        }
+    }
+
+    // 2. Vider les tables dépendantes d'indexation sans toucher à folders
+    conn.execute_batch(
+        "DELETE FROM pages;
+         DELETE FROM document_annotations;
+         DELETE FROM documents;
+         INSERT INTO pages_fts(pages_fts) VALUES('rebuild');
+         INSERT INTO documents_fts(documents_fts) VALUES('rebuild');"
+    ).map_err(|e| format!("Erreur lors de la réinitialisation de la base : {}", e))?;
+
+    // 3. Scanner le répertoire des documents physiques et insérer directement pour mise en file d'attente
+    let mut queued_ids = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&config.documents_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    if ext.eq_ignore_ascii_case("pdf") {
+                        if let Ok(meta) = std::fs::metadata(&path) {
+                            let file_size = meta.len() as i64;
+                            if file_size < 5 {
+                                continue;
+                            }
+                            if let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
+                                let norm_fname: String = fname.nfc().collect();
+                                let folder_id = folder_map.get(&norm_fname).copied().flatten();
+                                // Titre temporaire initial basé sur le nom du fichier; le worker d'indexation extraira le titre propre
+                                let stem = Path::new(&norm_fname)
+                                    .file_stem()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or(&norm_fname);
+                                let clean_stem: String = stem.nfc().collect();
+                                let initial_title = clean_stem.replace('_', " ").trim().to_string();
+
+                                let insert_res = conn.execute(
+                                    "INSERT INTO documents (filename, title, file_size, folder_id, status) VALUES (?1, ?2, ?3, ?4, 'pending')",
+                                    params![norm_fname, initial_title, file_size, folder_id],
+                                );
+                                if let Ok(_) = insert_res {
+                                    let new_id = conn.last_insert_rowid();
+                                    queued_ids.push(new_id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Nettoyer les couvertures pour forcer la regénération propre
+    if let Ok(entries) = std::fs::read_dir(&config.covers_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                let _ = std::fs::remove_file(p);
+            }
+        }
+    }
+
+    info!("[ReindexAll] Réinitialisation terminée : {} document(s) prêts pour indexation complète", queued_ids.len());
+    Ok(queued_ids)
+}

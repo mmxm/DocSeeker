@@ -45,6 +45,7 @@ pub fn create_api_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/documents/:id", patch(documents::update_document).delete(documents::delete_document_handler))
         .route("/documents/:id/move", patch(documents::move_document))
         .route("/documents/batch-move", post(documents::batch_move_documents))
+        .route("/documents/reindex-all", post(documents::reindex_all_documents))
         .route("/documents/:id/reindex", post(documents::reindex_document))
         .route("/check-hash/:file_hash", get(documents::check_hash))
         .route("/upload", post(documents::upload_document).layer(DefaultBodyLimit::max(1024 * 1024 * 1024)))

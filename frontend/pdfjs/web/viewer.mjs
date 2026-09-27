@@ -834,7 +834,7 @@ const defaultOptions = {
     kind: OptionKind.WORKER
   },
   workerSrc: {
-    value: "../build/pdf.worker.mjs?v=5.11",
+    value: "../build/pdf.worker.mjs?v=5.12",
     kind: OptionKind.WORKER
   }
 };
@@ -1114,12 +1114,18 @@ class PDFLinkService {
     if (hash.includes("=")) {
       const params = parseQueryString(hash);
       if (params.has("search")) {
-        const query = params.get("search").replaceAll('"', ""),
-          phrase = params.get("phrase") === "true";
-        this.eventBus.dispatch("findfromurlhash", {
-          source: this,
-          query: phrase ? query : query.match(/\S+/g)
-        });
+        const rawSearch = params.get("search");
+        const query = rawSearch ? rawSearch.replaceAll('"', "").trim() : "";
+        if (query) {
+          const phrase = params.get("phrase") === "true";
+          const queryTerms = phrase ? query : query.match(/\S+/g);
+          if (queryTerms && (Array.isArray(queryTerms) ? queryTerms.length > 0 : true)) {
+            this.eventBus.dispatch("findfromurlhash", {
+              source: this,
+              query: queryTerms
+            });
+          }
+        }
       }
       if (params.has("page")) {
         pageNumber = params.get("page") | 0 || 1;
@@ -14892,6 +14898,9 @@ function onImageAltTextSettings() {
   });
 }
 function onFindFromUrlHash(evt) {
+  if (!evt || !evt.query || (Array.isArray(evt.query) && evt.query.length === 0)) {
+    return;
+  }
   this.eventBus.dispatch("find", {
     source: evt.source,
     type: "",
