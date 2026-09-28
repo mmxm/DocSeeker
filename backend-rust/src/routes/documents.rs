@@ -624,8 +624,28 @@ pub async fn reindex_document(
     State(state): State<Arc<AppState>>,
     Path(doc_id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, Response> {
+    let mut updated_title = None;
+    if let Ok(conn) = state.db.get() {
+        if let Ok(fname) = conn.query_row("SELECT filename FROM documents WHERE id = ?1", params![doc_id], |r| r.get::<_, String>(0)) {
+            let stem = std::path::Path::new(&fname)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&fname);
+            let clean_base_title: String = stem.nfc().collect();
+            let clean_base_title = clean_base_title.replace('_', " ").trim().to_string();
+            let _ = conn.execute(
+                "UPDATE documents SET title = ?1, status = 'pending', error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                params![clean_base_title, doc_id],
+            );
+            updated_title = Some(clean_base_title);
+        }
+    }
     state.pipeline.enqueue(doc_id);
-    Ok(Json(serde_json::json!({"status": "queued", "doc_id": doc_id})))
+    Ok(Json(serde_json::json!({
+        "status": "queued",
+        "doc_id": doc_id,
+        "title": updated_title,
+    })))
 }
 
 pub async fn reindex_all_documents(
