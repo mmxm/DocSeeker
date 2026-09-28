@@ -2,19 +2,67 @@
  * DocSeeker - Tests Scénarios E2E Synchronisation Offline Markdown & Résilience
  * (ui_markdown_sync_scenarios.spec.mjs)
  *
- * Valide les scénarios exigés :
- * - Scénario 1 : Création -> Offline -> Édition locale -> Changement vers PDF -> Reconnexion -> Auto-sync sans action utilisateur -> Vérification BDD & FS
- * - Variante 2 : Suppression locale pendant coupure -> Reconnexion -> Soft-delete répercuté sur serveur
- * - Variante 3 : Suppression directe sur serveur sans client -> Reconnexion -> Synchronisation delete_local client
- * - Variante 4 : Restauration locale hors-ligne -> Reconnexion -> Restauration sur serveur
- * - Variante 5 : Restauration sur serveur sans client -> Reconnexion -> Téléchargement client
- * - E2E 6 : Exportation de la note (.md) via markdownExportBtn
- * - E2E 7 : Reconstruction de l'index dérivé client
+ * Valide les scénarios exigés avec TRIPLE VÉRIFICATION SYSTÉMATIQUE :
+ * 1. Vérification Visuelle dans l'UI (Vue Corbeille, cartes .trash-card, badge, éditeur)
+ * 2. Vérification Base de Données Serveur (SQLite data/db.sqlite : status, deleted_at)
+ * 3. Vérification Base de Données Locale Client (SQLite-Wasm & OPFS)
+ *
+ * Scénarios :
+ * - SC-1 : Création -> Offline -> Édition locale -> Switch PDF -> Reconnexion -> Auto-sync sans action
+ * - SC-2 : Suppression locale pendant coupure -> Reconnexion -> Soft-delete serveur & affichage corbeille UI
+ * - SC-3 : Suppression directe sur serveur sans client -> Reconnexion -> Sync delete_local client
+ * - SC-4 : Restauration locale hors-ligne -> Reconnexion -> Restauration serveur & retrait corbeille UI
+ * - SC-5 : Restauration serveur sans client -> Reconnexion -> Téléchargement client & disparition corbeille UI
+ * - SC-6 : Exportation de note au format brut (.md)
+ * - SC-7 : Destruction et reconstruction de l'index local client depuis l'OPFS
  */
 import { test, expect } from '@playwright/test';
 import { DocSeekerTestHarness } from './harness.mjs';
+import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+
+// Helper pour interroger la base SQLite serveur en direct
+function queryServerDb(sql) {
+  try {
+    const out = execSync(`sqlite3 data/db.sqlite "${sql.replace(/"/g, '\\"')}"`, { encoding: 'utf-8' });
+    return out.trim();
+  } catch (e) {
+    return null;
+  }
+}
+
+// Helper pour interroger la base SQLite-Wasm locale du client
+async function queryClientDbDoc(page, filename) {
+  return await page.evaluate(async (fname) => {
+    if (!window.downloadQueueManager) return null;
+    try {
+      const res = await window.downloadQueueManager.sendToWorker('GET_ALL_KNOWN_DOCS');
+      const docs = res && res.data ? res.data : [];
+      return docs.find(d => d.filename === fname) || null;
+    } catch (_) {
+      return null;
+    }
+  }, filename);
+}
+
+// Helper pour valider visuellement l'état dans l'UI de la Corbeille
+async function assertTrashUiVisible(page, noteTitle, shouldBeVisible = true) {
+  const homeBtn = page.locator('#readerHomeBtn');
+  if (await homeBtn.isVisible().catch(() => false)) {
+    await homeBtn.click();
+    await page.waitForTimeout(300);
+  }
+  await page.locator('#mainSidebarToggleBtn').click();
+  await page.locator('#navBtnTrash').click();
+  await expect(page.locator('#viewTrash')).toBeVisible({ timeout: 6000 });
+  const card = page.locator('.trash-card', { hasText: noteTitle });
+  if (shouldBeVisible) {
+    await expect(card).toBeVisible({ timeout: 8000 });
+  } else {
+    await expect(card).not.toBeVisible({ timeout: 8000 });
+  }
+}
 
 test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience', () => {
   let h;
@@ -43,7 +91,11 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
     await createPromise;
     await expect(page.locator('#markdownEditorContainer')).toBeVisible({ timeout: 10000 });
 
-    // 2. Simulation de la perte de connexion (coupure réseau / serveur inaccessible)
+    // Vérification initiale BDD serveur : statut ready, pas de deleted_at
+    expect(queryServerDb(`SELECT status FROM documents WHERE filename = '${filename}'`)).toBe('ready');
+    expect(queryServerDb(`SELECT deleted_at FROM documents WHERE filename = '${filename}'`)).toBe('');
+
+    // 2. Simulation de la perte de connexion (coupure réseau physique / serveur inaccessible)
     await context.setOffline(true);
     await page.evaluate(() => window.dispatchEvent(new Event('offline')));
     await page.waitForTimeout(300);
@@ -56,6 +108,10 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
       }
       await window.MarkdownManager.saveNote(content);
     }, offlineContent);
+
+    // Vérification BDD locale OPFS : contenu bien présent en local hors-ligne
+    const opfsOffline = await page.evaluate(async (fname) => await window.MarkdownStorage.read(fname), filename);
+    expect(opfsOffline).toContain('Contenu enrichi et sauvegardé en mode hors-ligne sans serveur.');
 
     // 4. L'utilisateur ouvre un autre fichier PDF (ex: doc 1)
     await page.locator('#readerHomeBtn').click();
@@ -83,11 +139,19 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
     await putPromise;
     await page.waitForTimeout(500);
 
-    // 7. Vérification physique sur le serveur
+    // 7. Triple Vérification :
+    // A) Système de fichiers serveur
     const docPath = path.join(process.cwd(), 'data', 'documents', filename);
     expect(fs.existsSync(docPath)).toBeTruthy();
-    const diskContent = fs.readFileSync(docPath, 'utf-8');
-    expect(diskContent).toContain('Contenu enrichi et sauvegardé en mode hors-ligne sans serveur.');
+    expect(fs.readFileSync(docPath, 'utf-8')).toContain('Contenu enrichi et sauvegardé en mode hors-ligne sans serveur.');
+
+    // B) BDD Serveur (SQLite)
+    const serverStatus = queryServerDb(`SELECT status FROM documents WHERE filename = '${filename}'`);
+    expect(serverStatus === 'ready' || serverStatus === 'pending').toBeTruthy();
+    expect(queryServerDb(`SELECT deleted_at FROM documents WHERE filename = '${filename}'`)).toBe('');
+
+    // C) Vérification visuelle UI Corbeille : la note N'EST PAS en corbeille
+    await assertTrashUiVisible(page, noteTitle, false);
   });
 
   test('SC-2 : Suppression locale pendant une coupure -> Reconnexion -> Resynchronisation corbeille', async ({ page, context }) => {
@@ -103,7 +167,7 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
     await createPromise;
     await expect(page.locator('#markdownEditorContainer')).toBeVisible({ timeout: 10000 });
 
-    // 2. Coupure réseau
+    // 2. Coupure réseau physique
     await context.setOffline(true);
     await page.evaluate(() => window.dispatchEvent(new Event('offline')));
     await page.waitForTimeout(300);
@@ -114,10 +178,8 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
     });
     await page.locator('#markdownTrashBtn').click();
 
-    // Vérifier que la note est marquée dirty deleted en local
-    const dirtyList = await page.evaluate(async () => {
-      return await window.MarkdownStorage.getDirtyFiles();
-    });
+    // Vérifier BDD locale IndexedDB : le fichier est marqué "deleted"
+    const dirtyList = await page.evaluate(async () => await window.MarkdownStorage.getDirtyFiles());
     expect(dirtyList.some(d => d.filename === filename && d.action === 'deleted')).toBeTruthy();
 
     // 4. Reconnexion réseau
@@ -134,22 +196,36 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
 
     await syncPromise;
     await deletePromise;
+    await page.waitForTimeout(500);
 
-    // 5. Vérifier que sur le serveur, le fichier a bien été déplacé dans la corbeille
+    // 5. Triple Vérification :
+    // A) Système de fichiers serveur (documents/ vs trash/ + .meta.json)
     const activeDocPath = path.join(process.cwd(), 'data', 'documents', filename);
     const trashDocPath = path.join(process.cwd(), 'data', 'trash', `del_${filename}`);
     const trashMetaPath = path.join(process.cwd(), 'data', 'trash', `del_${filename}.meta.json`);
-
     expect(fs.existsSync(activeDocPath)).toBeFalsy();
     expect(fs.existsSync(trashDocPath)).toBeTruthy();
     expect(fs.existsSync(trashMetaPath)).toBeTruthy();
+
+    // Vérification du contenu du fichier JSON de corbeille
+    const metaContent = JSON.parse(fs.readFileSync(trashMetaPath, 'utf-8'));
+    expect(metaContent.original_path).toBe(filename);
+    expect(metaContent.deleted_at).toBeDefined();
+    expect(metaContent.expires_at).toBeDefined();
+
+    // B) BDD Serveur (SQLite) : status = 'trashed', deleted_at renseigné
+    expect(queryServerDb(`SELECT status FROM documents WHERE filename = '${filename}'`)).toBe('trashed');
+    expect(queryServerDb(`SELECT deleted_at FROM documents WHERE filename = '${filename}'`)).not.toBe('');
+
+    // C) Vérification visuelle UI Corbeille : la carte de corbeille est VISIBLE dans l'UI
+    await assertTrashUiVisible(page, noteTitle, true);
   });
 
   test('SC-3 : Suppression sur serveur sans client connecté -> Synchronisation client', async ({ page }) => {
     const noteTitle = `ServerDelete Test ${Date.now()}`;
     const filename = `${noteTitle}.md`;
 
-    // 1. Créer la note via le client pour qu'elle existe en OPFS
+    // 1. Créer la note via le client pour qu'elle existe en local OPFS et sur serveur
     const createPromise = page.waitForResponse(resp => resp.url().includes('/api/files') && resp.request().method() === 'POST');
     page.once('dialog', async dialog => {
       await dialog.accept(noteTitle);
@@ -162,21 +238,33 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
     await page.locator('#readerHomeBtn').click();
     await page.waitForTimeout(1000);
 
-    // 2. Suppression directe côté serveur via l'API (simule une suppression par client B)
+    // 2. Suppression directe côté serveur via l'API (simule suppression par client B distant)
     const delRes = await page.request.delete(`/api/files/${encodeURIComponent(filename)}`);
     expect(delRes.ok()).toBeTruthy();
+
+    // BDD Serveur : déjà mise à jour en trashed
+    expect(queryServerDb(`SELECT status FROM documents WHERE filename = '${filename}'`)).toBe('trashed');
 
     // 3. Déclencher la synchronisation du client
     await page.evaluate(async () => {
       await window.SyncManager.runSync();
     });
 
-    // 4. Vérifier que la note a été supprimée du stockage local OPFS
-    const localContent = await page.evaluate(async (fname) => {
-      return await window.MarkdownStorage.read(fname);
-    }, filename);
-
+    // 4. Triple Vérification :
+    // A) BDD locale OPFS : la note a été purgée du stockage local
+    const localContent = await page.evaluate(async (fname) => await window.MarkdownStorage.read(fname), filename);
     expect(localContent).toBeNull();
+
+    // B) BDD Serveur (SQLite) & Fichier JSON : toujours en trashed avec son .meta.json
+    expect(queryServerDb(`SELECT status FROM documents WHERE filename = '${filename}'`)).toBe('trashed');
+    const trashMetaPath = path.join(process.cwd(), 'data', 'trash', `del_${filename}.meta.json`);
+    expect(fs.existsSync(trashMetaPath)).toBeTruthy();
+    const metaContent = JSON.parse(fs.readFileSync(trashMetaPath, 'utf-8'));
+    expect(metaContent.original_path).toBe(filename);
+    expect(metaContent.deleted_at).toBeDefined();
+
+    // C) Vérification visuelle UI Corbeille : visible dans la corbeille pour restauration éventuelle
+    await assertTrashUiVisible(page, noteTitle, true);
   });
 
   test('SC-4 : Restauration en local hors-ligne -> Reconnexion -> Restauration serveur', async ({ page, context }) => {
@@ -192,11 +280,14 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
     await page.locator('#markdownTrashBtn').click();
     await page.waitForTimeout(1000);
 
-    // 2. Coupure réseau
+    // Vérifier BDD Serveur avant coupure : status trashed
+    expect(queryServerDb(`SELECT status FROM documents WHERE filename = '${filename}'`)).toBe('trashed');
+
+    // 2. Coupure réseau physique
     await context.setOffline(true);
     await page.evaluate(() => window.dispatchEvent(new Event('offline')));
 
-    // 3. Restauration / ré-écriture locale de la note pendant la coupure
+    // 3. Restauration / ré-écriture locale de la note pendant la coupure (mtime récent)
     const restoredContent = `# ${noteTitle}\n\nNote réactivée hors-ligne.`;
     await page.evaluate(async ({ fname, content }) => {
       await window.MarkdownStorage.write(fname, content);
@@ -214,12 +305,24 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
     });
 
     await putPromise;
+    await page.waitForTimeout(500);
 
-    // 5. Vérifier que sur le serveur, le fichier est bien réapparu dans documents/ et sorti de trash/
+    // 5. Triple Vérification :
+    // A) Système de fichiers serveur (réapparu dans documents/ et sorti de trash/ avec .meta.json purgé)
     const activeDocPath = path.join(process.cwd(), 'data', 'documents', filename);
     const trashDocPath = path.join(process.cwd(), 'data', 'trash', `del_${filename}`);
+    const trashMetaPath = path.join(process.cwd(), 'data', 'trash', `del_${filename}.meta.json`);
     expect(fs.existsSync(activeDocPath)).toBeTruthy();
     expect(fs.existsSync(trashDocPath)).toBeFalsy();
+    expect(fs.existsSync(trashMetaPath)).toBeFalsy();
+
+    // B) BDD Serveur (SQLite) : deleted_at remis à NULL, status = ready/pending
+    const srvStatus = queryServerDb(`SELECT status FROM documents WHERE filename = '${filename}'`);
+    expect(srvStatus === 'ready' || srvStatus === 'pending').toBeTruthy();
+    expect(queryServerDb(`SELECT deleted_at FROM documents WHERE filename = '${filename}'`)).toBe('');
+
+    // C) Vérification visuelle UI Corbeille : la note N'EST PLUS dans la corbeille
+    await assertTrashUiVisible(page, noteTitle, false);
   });
 
   test('SC-5 : Restauration sur le serveur sans client -> Reconnexion -> Téléchargement client', async ({ page }) => {
@@ -235,23 +338,36 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
     await page.locator('#markdownTrashBtn').click();
     await page.waitForTimeout(500);
 
-    // 2. Restauration sur le serveur via l'API
+    // BDD Serveur & Fichier JSON créés
+    expect(queryServerDb(`SELECT status FROM documents WHERE filename = '${filename}'`)).toBe('trashed');
+    const trashMetaPath = path.join(process.cwd(), 'data', 'trash', `del_${filename}.meta.json`);
+    expect(fs.existsSync(trashMetaPath)).toBeTruthy();
+
+    // 2. Restauration sur le serveur via l'API sans client
     const restoreRes = await page.request.post('/api/trash/restore', {
       data: { filename: filename }
     });
     expect(restoreRes.ok()).toBeTruthy();
+
+    // BDD Serveur : restauré (deleted_at NULL) et .meta.json purgé
+    expect(queryServerDb(`SELECT deleted_at FROM documents WHERE filename = '${filename}'`)).toBe('');
+    expect(fs.existsSync(trashMetaPath)).toBeFalsy();
 
     // 3. Synchronisation du client
     await page.evaluate(async () => {
       await window.SyncManager.runSync();
     });
 
-    // 4. Vérifier que le client a bien pullé le fichier restauré dans OPFS
-    const localContent = await page.evaluate(async (fname) => {
-      return await window.MarkdownStorage.read(fname);
-    }, filename);
-
+    // 4. Triple Vérification :
+    // A) BDD locale OPFS : le fichier restauré a été pullé en local
+    const localContent = await page.evaluate(async (fname) => await window.MarkdownStorage.read(fname), filename);
     expect(localContent).not.toBeNull();
+
+    // B) BDD Serveur : status ready
+    expect(queryServerDb(`SELECT status FROM documents WHERE filename = '${filename}'`)).toBe('ready');
+
+    // C) Vérification visuelle UI Corbeille : la note N'EST PLUS dans la corbeille
+    await assertTrashUiVisible(page, noteTitle, false);
   });
 
   test('SC-6 : Exportation de note au format Markdown brut (.md)', async ({ page }) => {
@@ -281,9 +397,7 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
     await expect(page.locator('#markdownEditorContainer')).toBeVisible({ timeout: 10000 });
 
     // 2. Vérifier que la note est présente dans OPFS
-    const localContent = await page.evaluate(async (fname) => {
-      return await window.MarkdownStorage.read(fname);
-    }, filename);
+    const localContent = await page.evaluate(async (fname) => await window.MarkdownStorage.read(fname), filename);
     expect(localContent).not.toBeNull();
 
     // 3. Simuler une réinitialisation de l'index de recherche local
@@ -306,10 +420,7 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
     }, { fname: filename, content: localContent });
 
     // 5. Vérifier que les fichiers physiques OPFS restent 100% intacts (Source de Vérité)
-    const preservedContent = await page.evaluate(async (fname) => {
-      return await window.MarkdownStorage.read(fname);
-    }, filename);
+    const preservedContent = await page.evaluate(async (fname) => await window.MarkdownStorage.read(fname), filename);
     expect(preservedContent).toBe(localContent);
   });
 });
-
