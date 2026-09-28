@@ -223,6 +223,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const selectionCountText = document.getElementById("selectionCountText");
   const batchMoveBtn = document.getElementById("batchMoveBtn");
   const batchCutBtn = document.getElementById("batchCutBtn");
+  const batchReindexBtn = document.getElementById("batchReindexBtn");
   const batchCacheBtn = document.getElementById("batchCacheBtn");
   const batchUncacheBtn = document.getElementById("batchUncacheBtn");
   const batchDeleteBtn = document.getElementById("batchDeleteBtn");
@@ -904,7 +905,11 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!activeContextMenuDoc) return;
       const { id, title } = activeContextMenuDoc;
       closeContextMenu();
-      handleReindexDocument(id, title, null);
+      if (selectedDocIds.has(id) && selectedDocIds.size > 1) {
+        batchReindexBtn?.click();
+      } else {
+        handleReindexDocument(id, title, null);
+      }
     });
   }
 
@@ -2040,6 +2045,46 @@ document.addEventListener("DOMContentLoaded", () => {
     if (selectedDocIds.size === 0) return;
     openBatchMoveModal(Array.from(selectedDocIds));
   });
+
+  if (batchReindexBtn) {
+    batchReindexBtn.addEventListener("click", async () => {
+      const count = selectedDocIds.size;
+      if (count === 0) return;
+      if (!confirm(`Réindexer les ${count} document${count > 1 ? 's' : ''} sélectionné${count > 1 ? 's' : ''} ?\n(Leurs titres seront réinitialisés d'après leurs noms de fichiers et leur indexation sera relancée)`)) return;
+
+      const idsToReindex = Array.from(selectedDocIds);
+      clearSelection();
+
+      batchReindexBtn.disabled = true;
+      try {
+        const res = await apiFetch("/api/documents/batch-reindex", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ doc_ids: idsToReindex })
+        });
+        if (res.ok) {
+          showToast(`Réindexation de ${idsToReindex.length} document(s) lancée avec succès !`, "success");
+        } else {
+          // Fallback individuel
+          for (const id of idsToReindex) {
+            await apiFetch(`/api/documents/${id}/reindex`, { method: "POST" });
+          }
+          showToast(`Réindexation de ${idsToReindex.length} document(s) lancée !`, "success");
+        }
+
+        if (currentSearchQuery) {
+          performSearch(currentSearchQuery);
+        } else {
+          loadFoldersAndDocuments();
+        }
+      } catch (err) {
+        console.error(err);
+        showToast("Erreur lors de la réindexation par lot", "error");
+      } finally {
+        batchReindexBtn.disabled = false;
+      }
+    });
+  }
 
   if (batchCacheBtn) {
     batchCacheBtn.addEventListener("click", async () => {
@@ -5463,7 +5508,15 @@ document.addEventListener("DOMContentLoaded", () => {
   function _executeLoadDocumentInViewer(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0, targetOccId = null, targetScrollTop = null, targetOccIndex = null) {
     const numericDocId = Number(docId);
     const thisLoadSeq = ++currentViewerLoadSeq;
+    const targetTab = (typeof tabManager !== 'undefined')
+      ? tabManager.openTabs.find(t => Number(t.docId) === numericDocId)
+      : null;
+    const matchedDoc = Array.isArray(currentLoadedDocs) ? currentLoadedDocs.find(d => Number(d.id) === numericDocId) : null;
+    const maxKnownPages = (matchedDoc && matchedDoc.total_pages > 0) ? matchedDoc.total_pages : (targetTab && targetTab.totalPages > 0 ? targetTab.totalPages : 0);
     targetPage = parseInt(targetPage, 10) || 1;
+    if (maxKnownPages > 0 && targetPage > maxKnownPages) {
+      targetPage = maxKnownPages;
+    }
     const isSameDoc = (Number(currentActiveDocId) === numericDocId);
     if (!isSameDoc && currentActiveDocId && window.pdfCacheManager) {
       window.pdfCacheManager.pauseDownload(currentActiveDocId);
@@ -5471,12 +5524,6 @@ document.addEventListener("DOMContentLoaded", () => {
     currentActiveDocId = numericDocId;
     window.currentActiveDocId = numericDocId;
     currentActiveDocTitle = docTitle;
-
-    // CANAL 2 : la requête intra-doc vient de l'ONGLET cible, jamais du global.
-    // Un onglet ouvert sans recherche (vignette, accueil) démarre avec "".
-    const targetTab = (typeof tabManager !== 'undefined')
-      ? tabManager.openTabs.find(t => Number(t.docId) === numericDocId)
-      : null;
     const effectiveSearchQuery = (targetTab && targetTab.searchQuery) || "";
 
     // Le streaming HTTP 206 et le cache natif HTTP du navigateur gèrent le chargement et la mise en cache de manière optimale sans collision réseau.

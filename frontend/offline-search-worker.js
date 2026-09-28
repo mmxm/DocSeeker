@@ -37,8 +37,8 @@ let db = null;
 let sqlite3Module = null;
 let isReady = false;
 let initPromise = null;
-// Une seule tentative de réparation par session de worker (anti-boucle).
-let repairedThisSession = false;
+// Anti-boucle : au plus une réparation complète toutes les 5 secondes.
+let lastRepairTimestamp = 0;
 
 // Types d'opérations qui modifient la base : en cas de corruption, on répare
 // puis on retente une fois avant d'abandonner.
@@ -113,11 +113,11 @@ function tryRebuildFts() {
 //  4. suppression du fichier + réinitialisation à neuf.
 // Retourne true si une base utilisable est en place.
 async function repairDatabase() {
-  if (repairedThisSession) {
-    // Une escalade complète a déjà eu lieu cette session : ne pas boucler.
+  const now = Date.now();
+  if (now - lastRepairTimestamp < 5000) {
     return !!db;
   }
-  repairedThisSession = true;
+  lastRepairTimestamp = now;
 
   console.warn('[OfflineSearchWorker] Réparation de la base locale...');
   try { if (db) db.exec('ROLLBACK'); } catch (_) { /* pas de transaction en cours */ }
@@ -425,6 +425,16 @@ function syncLibraryMeta(documents) {
         db.exec(`DELETE FROM documents WHERE status = 'meta-only' AND id NOT IN (${idList});`);
       } catch (e) {
         console.warn('[OfflineSearchWorker] Erreur purge orphelins meta-only:', e);
+        if (isCorruptionError(e)) {
+          try {
+            db.exec(`INSERT INTO documents_fts(documents_fts) VALUES('rebuild');`);
+            db.exec(`DELETE FROM documents WHERE status = 'meta-only' AND id NOT IN (${idList});`);
+            console.log('[OfflineSearchWorker] Purge orphelins réussie après rebuild documents_fts');
+          } catch (retryErr) {
+            console.warn('[OfflineSearchWorker] Retry purge après rebuild FTS échoué:', retryErr);
+            if (isCorruptionError(retryErr)) throw retryErr;
+          }
+        }
       }
     }
 
@@ -452,6 +462,11 @@ function syncLibraryMeta(documents) {
         });
       } catch (e) {
         console.warn('[OfflineSearchWorker] Reconcile stale filename:', e);
+        if (isCorruptionError(e)) {
+          try {
+            db.exec(`INSERT INTO documents_fts(documents_fts) VALUES('rebuild');`);
+          } catch (_) { }
+        }
       }
 
       try {
@@ -469,6 +484,12 @@ function syncLibraryMeta(documents) {
         });
       } catch (err) {
         console.warn(`[OfflineSearchWorker] Sync meta doc ${d.id} (${fname}):`, err);
+        if (isCorruptionError(err)) {
+          try {
+            db.exec(`INSERT INTO documents_fts(documents_fts) VALUES('rebuild');`);
+          } catch (_) { }
+          throw err;
+        }
       }
     }
   });

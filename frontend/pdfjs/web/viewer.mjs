@@ -11113,8 +11113,12 @@ class PDFViewer {
     if (!this.pdfDocument) {
       return;
     }
+    if (this.pagesCount > 0) {
+      if (val > this.pagesCount) val = this.pagesCount;
+      if (val < 1) val = 1;
+    }
     if (!this._setCurrentPageNumber(val, true)) {
-      console.error(`currentPageNumber: "${val}" is not a valid page.`);
+      console.warn(`currentPageNumber: "${val}" is not a valid page.`);
     }
   }
   _setCurrentPageNumber(val, resetCurrentPageView = false) {

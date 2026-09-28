@@ -46,6 +46,11 @@ pub struct BatchMovePayload {
 }
 
 #[derive(Deserialize)]
+pub struct BatchReindexPayload {
+    pub doc_ids: Vec<i64>,
+}
+
+#[derive(Deserialize)]
 pub struct UpdateDocumentPayload {
     pub title: Option<String>,
     /// Nombre de pages réel remonté par le lecteur PDF.js (source de vérité)
@@ -645,6 +650,38 @@ pub async fn reindex_document(
         "status": "queued",
         "doc_id": doc_id,
         "title": updated_title,
+    })))
+}
+
+pub async fn batch_reindex_documents(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<BatchReindexPayload>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let conn = state.db.get().map_err(|_| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
+    })?;
+
+    let mut queued = 0;
+    for &doc_id in &payload.doc_ids {
+        if let Ok(fname) = conn.query_row("SELECT filename FROM documents WHERE id = ?1", params![doc_id], |r| r.get::<_, String>(0)) {
+            let stem = std::path::Path::new(&fname)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&fname);
+            let clean_base_title: String = stem.nfc().collect();
+            let clean_base_title = clean_base_title.replace('_', " ").trim().to_string();
+            let _ = conn.execute(
+                "UPDATE documents SET title = ?1, status = 'pending', error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                params![clean_base_title, doc_id],
+            );
+            state.pipeline.enqueue(doc_id);
+            queued += 1;
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "total_queued": queued,
     })))
 }
 
