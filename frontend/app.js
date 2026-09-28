@@ -4975,23 +4975,34 @@ document.addEventListener("DOMContentLoaded", () => {
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Erreur lors du renommage");
+        throw new Error(err.error || err.detail || "Erreur lors du renommage");
       }
+
+      const resData = await res.json().catch(() => ({}));
+      const finalTitle = resData.title || newTitle;
+      const finalFilename = resData.filename;
 
       clearFolderDocsCache();
 
       // Mettre à jour dans les données en mémoire
       const docItem = currentLoadedDocs.find(d => d.id === docIdToRename);
       if (docItem) {
-        docItem.title = newTitle;
+        docItem.title = finalTitle;
+        if (finalFilename) docItem.filename = finalFilename;
       }
       if (Array.isArray(rawLoadedDocs)) {
         const rawItem = rawLoadedDocs.find(d => d.id === docIdToRename);
-        if (rawItem) rawItem.title = newTitle;
+        if (rawItem) {
+          rawItem.title = finalTitle;
+          if (finalFilename) rawItem.filename = finalFilename;
+        }
       }
       if (lastSearchResultsData && Array.isArray(lastSearchResultsData.results)) {
         const searchItem = lastSearchResultsData.results.find(d => d.id === docIdToRename);
-        if (searchItem) searchItem.title = newTitle;
+        if (searchItem) {
+          searchItem.title = finalTitle;
+          if (finalFilename) searchItem.filename = finalFilename;
+        }
       }
 
       // Mettre à jour dans le DOM si présent
@@ -4999,16 +5010,16 @@ document.addEventListener("DOMContentLoaded", () => {
       if (card) {
         const titleEl = card.querySelector(".doc-title-main");
         if (titleEl) {
-          titleEl.textContent = newTitle;
-          titleEl.title = newTitle;
+          titleEl.textContent = finalTitle;
+          titleEl.title = finalTitle;
         }
       }
 
       // Si ouvert dans le visualiseur
       if (currentActiveDocId === docIdToRename) {
-        currentActiveDocTitle = newTitle;
-        if (viewerDocTitle) viewerDocTitle.textContent = newTitle;
-        if (docDetailTitle) docDetailTitle.textContent = newTitle;
+        currentActiveDocTitle = finalTitle;
+        if (viewerDocTitle) viewerDocTitle.textContent = finalTitle;
+        if (docDetailTitle) docDetailTitle.textContent = finalTitle;
       }
 
       closeRenameModal();

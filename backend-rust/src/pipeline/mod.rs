@@ -286,7 +286,14 @@ impl IndexingPipeline {
                     return;
                 }
             };
-            index_pdf_file(&conn, pdf_engine, config, &file_path, &filename, None)
+            index_pdf_file(
+                &conn,
+                pdf_engine,
+                config,
+                &file_path,
+                &filename,
+                if title.is_empty() { None } else { Some(&title) },
+            )
         };
 
         if let Ok(conn) = db.lock() {

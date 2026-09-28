@@ -160,12 +160,87 @@ pub async fn update_document(
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
+    let mut response_title = None;
+    let mut response_filename = None;
+
     if let Some(ref title) = payload.title {
-        let clean_title: String = title.trim().nfc().collect();
-        conn.execute(
-            "UPDATE documents SET title = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-            params![clean_title, doc_id],
-        ).ok();
+        let raw_title = title.trim();
+        if raw_title.is_empty() {
+            return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Le titre ne peut pas être vide"}))).into_response());
+        }
+
+        // Nettoyer l'extension .pdf si saisie par l'utilisateur
+        let title_stem = if raw_title.to_lowercase().ends_with(".pdf") {
+            &raw_title[..raw_title.len() - 4]
+        } else {
+            raw_title
+        };
+        let clean_title: String = title_stem.trim().nfc().collect();
+        if clean_title.is_empty() {
+            return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Le titre ne peut pas être vide"}))).into_response());
+        }
+        if clean_title.contains('/') || clean_title.contains('\\') || clean_title.contains("..") {
+            return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Le titre contient des caractères interdits (/ ou \\)"}))).into_response());
+        }
+
+        // Récupérer le fichier actuel en base
+        let current_fname: String = conn.query_row(
+            "SELECT filename FROM documents WHERE id = ?1",
+            params![doc_id],
+            |r| r.get(0),
+        ).map_err(|_| {
+            (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Document introuvable"}))).into_response()
+        })?;
+
+        // Conserver le dossier parent physique actuel
+        let new_file_base = format!("{}.pdf", clean_title);
+        let new_relative_fname = match std::path::Path::new(&current_fname).parent() {
+            Some(p) if !p.as_os_str().is_empty() => p.join(&new_file_base).to_string_lossy().to_string(),
+            _ => new_file_base,
+        };
+        let norm_new_fname: String = new_relative_fname.nfc().collect();
+
+        if norm_new_fname != current_fname {
+            // Vérifier les doublons de nom de fichier
+            let collision: Option<i64> = conn.query_row(
+                "SELECT id FROM documents WHERE filename = ?1 AND id != ?2",
+                params![norm_new_fname, doc_id],
+                |r| r.get(0),
+            ).ok();
+            if collision.is_some() {
+                return Err((StatusCode::CONFLICT, Json(serde_json::json!({"error": "Un document portant ce nom de fichier existe déjà dans ce dossier"}))).into_response());
+            }
+
+            // Renommage physique du fichier sur le disque du volume
+            if let Some(src_path) = crate::pdf::indexer::resolve_pdf_path(&state.config.documents_dir, &current_fname) {
+                let dest_path = state.config.documents_dir.join(&norm_new_fname);
+                if let Some(parent) = dest_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if src_path != dest_path {
+                    if let Err(e) = std::fs::rename(&src_path, &dest_path) {
+                        tracing::warn!("[Documents] Échec du renommage physique {} -> {} : {}", src_path.display(), dest_path.display(), e);
+                        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Impossible de renommer le fichier sur le disque : {}", e)}))).into_response());
+                    }
+                    tracing::info!("[Documents] Fichier renommé physiquement sur le disque : {} -> {}", src_path.display(), dest_path.display());
+                }
+            }
+
+            conn.execute(
+                "UPDATE documents SET title = ?1, filename = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?3",
+                params![clean_title, norm_new_fname, doc_id],
+            ).map_err(|e| {
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response()
+            })?;
+        } else {
+            conn.execute(
+                "UPDATE documents SET title = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                params![clean_title, doc_id],
+            ).ok();
+        }
+
+        response_title = Some(clean_title);
+        response_filename = Some(norm_new_fname);
     }
 
     // Correction du nombre de pages par la valeur exacte lue par PDF.js
@@ -178,7 +253,11 @@ pub async fn update_document(
         }
     }
 
-    Ok(Json(serde_json::json!({"status": "ok"})))
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "title": response_title,
+        "filename": response_filename,
+    })))
 }
 
 fn move_doc_physical(

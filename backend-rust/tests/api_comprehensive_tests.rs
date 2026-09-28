@@ -907,3 +907,86 @@ async fn test_recursive_directory_scan_and_reindex() {
     assert_eq!(doc_in_folder, pneumo_folder_id, "Le document doit être rattaché au dossier Pneumologie");
 }
 
+#[tokio::test]
+async fn test_document_physical_rename_and_title_integrity() {
+    let (state, token) = setup_test_state();
+    let router = create_api_router(Arc::clone(&state)).with_state(Arc::clone(&state));
+    let cookie_header = format!("docseeker_session={}", token);
+
+    // 1. Créer un fichier physique réel dans config.documents_dir
+    let original_fname = "025 - Imagerie - Grossesse extra-uterine.pdf";
+    let physical_src = state.config.documents_dir.join(original_fname);
+    std::fs::write(&physical_src, b"%PDF-1.4 dummy pdf content for rename test").unwrap();
+    assert!(physical_src.exists());
+
+    // 2. Insérer le document dans SQLite avec des pages associées
+    {
+        let conn = state.db.get().unwrap();
+        conn.execute(
+            "INSERT INTO documents (id, filename, title, file_hash, folder_id, status, total_pages, file_size) \
+             VALUES (999, ?1, 'Ancien Titre', 'hash_999', 1, 'ready', 5, 1234)",
+            rusqlite::params![original_fname],
+        ).unwrap();
+
+        conn.execute(
+            "INSERT INTO pages (doc_id, page_number, text_content, words_json) VALUES (999, 1, 'Grossesse extra-uterine item 25', '[]')",
+            [],
+        ).unwrap();
+    }
+
+    // 3. Renommer le document via PATCH /api/documents/999
+    let new_title = "025 - Imagerie - GEU Renomme";
+    let req = Request::builder()
+        .method("PATCH")
+        .uri("/api/documents/999")
+        .header(header::COOKIE, &cookie_header)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::json!({"title": new_title}).to_string()))
+        .unwrap();
+
+    let res = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let resp: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(resp["title"], new_title);
+    assert_eq!(resp["filename"], format!("{}.pdf", new_title));
+
+    // 4. Vérifier que le fichier physique a été renommé sur le disque
+    let physical_dest = state.config.documents_dir.join(format!("{}.pdf", new_title));
+    assert!(physical_dest.exists(), "Le fichier physique renommé doit exister sur le disque");
+    assert!(!physical_src.exists(), "L'ancien fichier physique ne doit plus exister");
+
+    // 5. Vérifier que la base SQLite maintient l'intégrité parfaite (relations pages, fts)
+    {
+        let conn = state.db.get().unwrap();
+        let (db_title, db_filename): (String, String) = conn.query_row(
+            "SELECT title, filename FROM documents WHERE id = 999",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert_eq!(db_title, new_title);
+        assert_eq!(db_filename, format!("{}.pdf", new_title));
+
+        // Vérifier que les pages sont toujours bien associées au doc_id 999
+        let page_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pages WHERE doc_id = 999",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(page_count, 1, "Les pages doivent toujours être reliées au doc_id 999");
+
+        // Vérifier la recherche plein texte sur les pages
+        let fts_matches: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pages_fts WHERE text_content MATCH 'Grossesse'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert!(fts_matches >= 1, "L'index FTS5 doit toujours fonctionner pour ce document");
+    }
+
+    // Nettoyage
+    let _ = std::fs::remove_file(physical_dest);
+}
+
+

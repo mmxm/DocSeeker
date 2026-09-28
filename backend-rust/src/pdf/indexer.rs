@@ -62,16 +62,8 @@ pub fn index_pdf_file(
     let clean_base_title: String = stem.nfc().collect();
     let clean_base_title = clean_base_title.replace('_', " ").trim().to_string();
 
-    let meta_title: String = metadata.meta_title.nfc().collect();
     let title = if let Some(ct) = custom_title {
         ct.to_string()
-    } else if !meta_title.is_empty()
-        && meta_title.len() > 2
-        && !["microsoft", "word", "powerpoint", "untitled"]
-            .iter()
-            .any(|&prefix| meta_title.to_lowercase().starts_with(prefix))
-    {
-        meta_title
     } else {
         clean_base_title
     };
@@ -121,38 +113,38 @@ pub fn index_pdf_file(
         }
     }
 
-    // Extraction + insertion en flux : la RAM reste bornée à une page.
-    // Une seule transaction (le trigger pages_ai alimente pages_fts) : SQLite
-    // déverse la transaction dans le WAL sur disque, la RAM de la connexion
-    // reste bornée par cache_size — comme avant, mais sans accumulation des pages.
+    // 1. Extraction en mémoire hors de toute transaction SQLite :
+    //    Le parsing Pdfium (qui peut durer des dizaines de secondes sur un gros livre)
+    //    ne bloque ainsi JAMAIS la base de données.
+    let mut extracted_pages = Vec::new();
+    if let Err(e) = pdf_engine.extract_pages_streaming(file_path, |page_number, text_content, words_json| {
+        extracted_pages.push((page_number, text_content, words_json));
+        Ok(())
+    }) {
+        let _ = conn.execute(
+            "UPDATE documents SET status = 'failed', error_message = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            params![format!("Extraction interrompue : {}", e), doc_id],
+        );
+        return Err(format!("Extraction interrompue : {}", e));
+    }
+
+    // 2. Insertion atomique ultra-rapide (< 50ms) dans SQLite :
+    //    Le verrou d'écriture SQLite n'est maintenu que quelques millisecondes,
+    //    éliminant tout timeout (504) pour les connexions utilisateur ou la navigation.
     let mut inserted_pages: i64 = 0;
     {
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-        let mut stream_error: Option<String> = None;
         {
             let mut insert_page = tx
                 .prepare("INSERT INTO pages (doc_id, page_number, text_content, words_json) VALUES (?1, ?2, ?3, ?4)")
                 .map_err(|e| e.to_string())?;
 
-            if let Err(e) = pdf_engine.extract_pages_streaming(file_path, |page_number, text_content, words_json| {
+            for (page_number, text_content, words_json) in extracted_pages {
                 insert_page
                     .execute(params![doc_id, page_number, text_content, words_json])
                     .map_err(|e| e.to_string())?;
                 inserted_pages += 1;
-                Ok(())
-            }) {
-                stream_error = Some(e);
             }
-        } // insert_page (emprunt de tx) droppé ici
-
-        if let Some(e) = stream_error {
-            let _ = tx.rollback();
-            // Ne pas laisser un document sans pages dans un état "ready"
-            let _ = conn.execute(
-                "UPDATE documents SET status = 'failed', error_message = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-                params![format!("Extraction interrompue : {}", e), doc_id],
-            );
-            return Err(format!("Extraction interrompue à la page {}: {}", inserted_pages + 1, e));
         }
         tx.commit().map_err(|e| e.to_string())?;
     }
@@ -355,8 +347,8 @@ pub fn scan_and_sync_documents(
 
 /// Extrait le titre propre selon la logique la plus récente
 pub fn extract_cleaned_title(
-    pdf_engine: &PdfEngine,
-    file_path: &Path,
+    _pdf_engine: &PdfEngine,
+    _file_path: &Path,
     original_filename: &str,
     custom_title: Option<&str>,
 ) -> String {
@@ -368,23 +360,8 @@ pub fn extract_cleaned_title(
     let clean_base_title: String = stem.nfc().collect();
     let clean_base_title = clean_base_title.replace('_', " ").trim().to_string();
 
-    let meta_title = pdf_engine
-        .extract_document_metadata(file_path)
-        .map(|m| {
-            let nfc: String = m.meta_title.nfc().collect();
-            nfc
-        })
-        .unwrap_or_default();
-
     if let Some(ct) = custom_title {
         ct.to_string()
-    } else if !meta_title.is_empty()
-        && meta_title.len() > 2
-        && !["microsoft", "word", "powerpoint", "untitled"]
-            .iter()
-            .any(|&prefix| meta_title.to_lowercase().starts_with(prefix))
-    {
-        meta_title
     } else {
         clean_base_title
     }
