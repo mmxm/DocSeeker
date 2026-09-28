@@ -412,23 +412,64 @@ function syncFolders(folders) {
 // consultable sans réseau. Les docs réellement indexés ('ready') ne sont
 // jamais rétrogradés par la synchro.
 function syncLibraryMeta(documents) {
-  if (!db) return;
-  const upsertMetaSql = get_upsert_doc_meta_sql();
+  if (!db || !Array.isArray(documents)) return;
+
+  const validDocs = documents.filter(d => d && d.id);
+  const currentIds = new Set(validDocs.map(d => d.id));
+
   db.transaction(() => {
-    for (const d of (documents || [])) {
-      if (!d || !d.id) continue;
-      db.exec({
-        sql: upsertMetaSql,
-        bind: [
-          d.id,
-          d.filename || `doc-${d.id}.pdf`,
-          d.title || d.filename || `Document ${d.id}`,
-          (d.folder_id === undefined ? null : d.folder_id),
-          d.total_pages || 0,
-          d.file_size || 0,
-          d.created_at || null
-        ]
-      });
+    // 1. Purger les anciens miroirs 'meta-only' qui n'existent plus sur le serveur (ex: après réindexation)
+    if (currentIds.size > 0) {
+      const idList = Array.from(currentIds).join(',');
+      try {
+        db.exec(`DELETE FROM documents WHERE status = 'meta-only' AND id NOT IN (${idList});`);
+      } catch (e) {
+        console.warn('[OfflineSearchWorker] Erreur purge orphelins meta-only:', e);
+      }
+    }
+
+    const upsertMetaSql = get_upsert_doc_meta_sql();
+
+    for (const d of validDocs) {
+      const fname = d.filename || `doc-${d.id}.pdf`;
+
+      // 2. Éviter le conflit d'unicité (SQLITE_CONSTRAINT_UNIQUE rc=2067) sur documents.filename :
+      // Si un ancien document miroir existe avec le même nom de fichier mais un ID obsolète, le supprimer
+      try {
+        db.exec({
+          sql: "DELETE FROM documents WHERE filename = ? AND id != ? AND status = 'meta-only';",
+          bind: [fname, d.id]
+        });
+
+        // Si le document a déjà été téléchargé localement ('ready') mais que son ID a changé sur le serveur :
+        db.exec({
+          sql: "UPDATE pages SET doc_id = ? WHERE doc_id = (SELECT id FROM documents WHERE filename = ? AND id != ?);",
+          bind: [d.id, fname, d.id]
+        });
+        db.exec({
+          sql: "UPDATE documents SET id = ? WHERE filename = ? AND id != ?;",
+          bind: [d.id, fname, d.id]
+        });
+      } catch (e) {
+        console.warn('[OfflineSearchWorker] Reconcile stale filename:', e);
+      }
+
+      try {
+        db.exec({
+          sql: upsertMetaSql,
+          bind: [
+            d.id,
+            fname,
+            d.title || d.filename || `Document ${d.id}`,
+            (d.folder_id === undefined ? null : d.folder_id),
+            d.total_pages || 0,
+            d.file_size || 0,
+            d.created_at || null
+          ]
+        });
+      } catch (err) {
+        console.warn(`[OfflineSearchWorker] Sync meta doc ${d.id} (${fname}):`, err);
+      }
     }
   });
 }
