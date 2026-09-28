@@ -28,6 +28,8 @@ const APP_SHELL_ASSETS = [
   ...VERSIONED_ASSETS,
   '/favicon.ico',
   '/placeholder-cover.png',
+  '/vendor/milkdown.js',
+  '/vendor/milkdown.css',
   '/wasm/search_wasm/search_wasm.js',
   '/wasm/search_wasm/search_wasm_bg.wasm',
   '/wasm/sqlite/index.mjs',

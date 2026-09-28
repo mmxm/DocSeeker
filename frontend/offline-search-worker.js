@@ -385,6 +385,61 @@ function insertDocumentBundle(bundle) {
   return true;
 }
 
+function stripMarkdown(md) {
+  if (!md) return '';
+  return md
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/(\*\*|__)(.*?)\1/g, '$2')
+    .replace(/(\*|_)(.*?)\1/g, '$2')
+    .replace(/~~(.*?)~~/g, '$1')
+    .replace(/`{1,3}[^`]*`{1,3}/g, '')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s*[-+*]\s+/gm, '')
+    .replace(/^\s*\d+\.\s+/gm, '')
+    .replace(/^\s*>\s+/gm, '')
+    .replace(/\|/g, ' ')
+    .replace(/---+/g, '')
+    .trim();
+}
+
+function indexMarkdownDocument({ docId, filename, title, content }) {
+  if (!db || !filename) return false;
+  const cleanText = stripMarkdown(content);
+  const now = new Date().toISOString();
+  const numericId = Number(docId) || Math.floor(Math.random() * 1000000000);
+
+  db.transaction(() => {
+    // 1. Insertion ou mise à jour du document markdown
+    db.exec({
+      sql: `INSERT INTO documents (id, filename, title, total_pages, file_size, status, doc_type, created_at, updated_at)
+            VALUES (?1, ?2, ?3, 1, ?4, 'ready', 'markdown', ?5, ?5)
+            ON CONFLICT(id) DO UPDATE SET
+              filename = excluded.filename,
+              title = excluded.title,
+              file_size = excluded.file_size,
+              status = 'ready',
+              doc_type = 'markdown',
+              updated_at = excluded.updated_at`,
+      bind: [numericId, filename, title || filename, (content || '').length, now]
+    });
+
+    // 2. Nettoyage des anciennes pages pour ce document
+    db.exec({
+      sql: get_delete_doc_pages_sql(),
+      bind: [numericId]
+    });
+
+    // 3. Insertion de la page unique (déclenche trigger FTS5 automatique)
+    db.exec({
+      sql: get_insert_page_sql(),
+      bind: [numericId, 1, cleanText, "[]"]
+    });
+  });
+
+  return true;
+}
+
 // Ingestion ou synchronisation des dossiers : SQL mutualisé
 function syncFolders(folders) {
   if (!db || !Array.isArray(folders)) return;
@@ -868,6 +923,11 @@ self.onmessage = async (e) => {
     switch (type) {
       case 'INSERT_BUNDLE': {
         const ok = await runWriteWithRepair(type, () => insertDocumentBundle(payload.bundle));
+        self.postMessage({ id, success: ok });
+        break;
+      }
+      case 'INDEX_MARKDOWN_DOC': {
+        const ok = await runWriteWithRepair(type, () => indexMarkdownDocument(payload));
         self.postMessage({ id, success: ok });
         break;
       }

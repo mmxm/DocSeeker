@@ -4754,3 +4754,365 @@ body.dark-theme .in-doc-drawer-header {
   background: var(--bg-surface);
   border-bottom-color: var(--border-color);
 }
+
+/* ==========================================================================
+   ÉDITEUR MARKDOWN WYSIWYG (Milkdown & Typora-like) & CORBEILLE
+   ========================================================================== */
+.markdown-editor-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--bg-surface, #ffffff);
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+  overflow: hidden;
+}
+
+.markdown-editor-header {
+  height: 52px;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+  background: var(--bg-surface, #ffffff);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.markdown-meta-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.markdown-badge-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #ffffff;
+  box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
+  user-select: none;
+}
+
+.markdown-title-input {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-main, #0f172a);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 6px 10px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.markdown-title-input:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.03));
+}
+
+.markdown-title-input:focus {
+  background: var(--bg-surface, #ffffff);
+  border-color: var(--accent, #3b82f6);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.markdown-status-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.markdown-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted, #64748b);
+  padding: 4px 10px;
+  border-radius: 20px;
+  background: var(--bg-card, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+}
+
+.status-dot.orange {
+  background-color: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
+}
+
+.milkdown-scroll-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 30px 40px 100px;
+  scroll-behavior: smooth;
+  background-color: var(--bg-surface, #ffffff);
+}
+
+.milkdown-wrapper {
+  max-width: 820px;
+  margin: 0 auto;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.7;
+  color: var(--text-main, #1e293b);
+  min-height: 400px;
+}
+
+/* Milkdown Typography & Styling */
+.milkdown .editor {
+  outline: none !important;
+  font-size: 16px;
+}
+
+.milkdown h1 {
+  font-size: 2em;
+  font-weight: 800;
+  margin: 1.2em 0 0.6em;
+  letter-spacing: -0.02em;
+  color: var(--text-main, #0f172a);
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+  padding-bottom: 0.3em;
+}
+
+.milkdown h2 {
+  font-size: 1.5em;
+  font-weight: 700;
+  margin: 1.2em 0 0.5em;
+  color: var(--text-main, #1e293b);
+}
+
+.milkdown h3 {
+  font-size: 1.25em;
+  font-weight: 600;
+  margin: 1em 0 0.4em;
+  color: var(--text-main, #334155);
+}
+
+.milkdown p {
+  margin: 0.8em 0;
+}
+
+.milkdown blockquote {
+  border-left: 4px solid var(--accent, #3b82f6);
+  padding: 8px 16px;
+  margin: 1.2em 0;
+  background: var(--accent-light, rgba(59, 130, 246, 0.05));
+  border-radius: 0 8px 8px 0;
+  color: var(--text-muted, #475569);
+}
+
+.milkdown code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9em;
+  background: var(--bg-card, #f1f5f9);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--accent, #2563eb);
+}
+
+.milkdown pre {
+  background: #0f172a;
+  color: #f8fafc;
+  padding: 16px 20px;
+  border-radius: 10px;
+  overflow-x: auto;
+  margin: 1.2em 0;
+}
+
+.milkdown pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+.milkdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5em 0;
+}
+
+.milkdown th, .milkdown td {
+  border: 1px solid var(--border-color, #e2e8f0);
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.milkdown th {
+  background: var(--bg-card, #f8fafc);
+  font-weight: 600;
+}
+
+.milkdown img {
+  max-width: 100%;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  margin: 1em 0;
+}
+
+/* Badge Markdown sur les cartes documents */
+.doc-card-badge-md {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  background: rgba(37, 99, 235, 0.9);
+  color: #ffffff;
+  backdrop-filter: blur(4px);
+  z-index: 2;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* ==========================================================================
+   VUE CORBEILLE (Trash UI)
+   ========================================================================== */
+.trash-container {
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.trash-items-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.trash-card {
+  background: var(--bg-surface, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.trash-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+  border-color: var(--border-hover, #cbd5e1);
+}
+
+.trash-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.trash-card-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--bg-card, #f1f5f9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted, #64748b);
+  flex-shrink: 0;
+}
+
+.trash-card-icon.md {
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+}
+
+.trash-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.trash-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-main, #0f172a);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+}
+
+.trash-card-path {
+  font-size: 11px;
+  color: var(--text-muted, #94a3b8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trash-card-meta {
+  font-size: 12px;
+  color: var(--text-muted, #64748b);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--bg-card, #f8fafc);
+  border-radius: 6px;
+}
+
+.trash-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.trash-card-actions .btn {
+  flex: 1;
+}
+
+/* Dark mode overrides for Markdown & Trash */
+body.dark-theme .markdown-editor-container,
+body.dark-theme .markdown-editor-header,
+body.dark-theme .milkdown-scroll-container {
+  background-color: var(--bg-surface);
+}
+
+body.dark-theme .markdown-title-input {
+  color: #f1f5f9;
+}
+
+body.dark-theme .milkdown-wrapper {
+  color: #e2e8f0;
+}
+
+body.dark-theme .milkdown h1,
+body.dark-theme .milkdown h2,
+body.dark-theme .milkdown h3 {
+  color: #f8fafc;
+}
+
+body.dark-theme .milkdown blockquote {
+  background: rgba(59, 130, 246, 0.1);
+  color: #94a3b8;
+}
+
+body.dark-theme .milkdown code {
+  background: #1e293b;
+  color: #60a5fa;
+}
+
+body.dark-theme .trash-card {
+  background: var(--bg-surface);
+  border-color: var(--border-color);
+}
+
+body.dark-theme .trash-card-meta {
+  background: #0f172a;
+}

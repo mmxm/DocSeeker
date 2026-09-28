@@ -8,6 +8,7 @@
   <title>DocSeeker - Bibliothèque & Recherche PDF</title>
   <meta name="app-version" content="__ASSET_VERSION__">
   <link rel="stylesheet" href="/style.css?v=__ASSET_VERSION__">
+  <link rel="stylesheet" href="/vendor/milkdown.css">
   <link rel="icon" href="/favicon.ico">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.json">
@@ -85,6 +86,23 @@
             <span class="nav-item-title">Réglages</span>
             <span class="nav-item-desc">Serveur, thème et stockage</span>
           </div>
+        </button>
+
+        <!-- Onglet 4 : Corbeille (Soft-Delete unifié) -->
+        <button id="navBtnTrash" class="sidebar-nav-item" data-tab="trash">
+          <div class="nav-item-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              <line x1="10" y1="11" x2="10" y2="17"></line>
+              <line x1="14" y1="11" x2="14" y2="17"></line>
+            </svg>
+          </div>
+          <div class="nav-item-content">
+            <span class="nav-item-title">Corbeille</span>
+            <span class="nav-item-desc">Restauration (30 jours)</span>
+          </div>
+          <span id="navTrashBadge" class="nav-item-badge" style="display: none;">0</span>
         </button>
       </nav>
 
@@ -240,6 +258,14 @@
             <line x1="9" y1="14" x2="15" y2="14"></line>
           </svg>
           <span class="btn-label-responsive">Nouveau dossier</span>
+        </button>
+
+        <button id="newMarkdownNoteBtn" class="btn btn-secondary btn-icon-text" title="Créer une nouvelle note Markdown" aria-label="Nouvelle note">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+          </svg>
+          <span class="btn-label-responsive">Nouvelle note</span>
         </button>
 
         <!-- Indicateur du pipeline d'indexation en arrière-plan -->
@@ -590,6 +616,34 @@
         </div>
       </section>
 
+      <!-- VUE PRINCIPALE 4 : Corbeille (Restauration 30 jours) -->
+      <section class="main-view-section" id="viewTrash" style="display: none;">
+        <div class="view-panel-header">
+          <div class="view-panel-title-group">
+            <h2>Corbeille</h2>
+            <p class="view-panel-subtitle">Les fichiers supprimés sont conservés 30 jours avant suppression définitive</p>
+          </div>
+          <button id="emptyTrashBtn" class="btn btn-outline-danger btn-icon-text" title="Vider toute la corbeille">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+            <span>Vider la corbeille</span>
+          </button>
+        </div>
+        <div id="trashContainer" class="trash-container">
+          <div id="trashEmptyState" class="empty-state" style="display: none;">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+            <h3>La corbeille est vide</h3>
+            <p>Aucun document ou note n'a été supprimé récemment.</p>
+          </div>
+          <div id="trashItemsList" class="trash-items-grid"></div>
+        </div>
+      </section>
+
       <!-- Séparateur de redimensionnement Split View (Desktop) -->
       <div class="split-resizer" id="splitResizer" title="Glisser pour redimensionner les panneaux"></div>
 
@@ -728,9 +782,32 @@
             <div id="inDocDrawerOccurrencesList" class="in-doc-occurrences-list"></div>
           </div>
 
-          <!-- Zone du Visualiseur PDF -->
+          <!-- Zone du Visualiseur PDF & Markdown -->
           <div class="viewer-body">
             <iframe id="pdfFrame" class="pdf-iframe" src="about:blank" frameborder="0"></iframe>
+            <div id="markdownEditorContainer" class="markdown-editor-container" style="display: none;">
+              <div class="markdown-editor-header">
+                <div class="markdown-meta-group">
+                  <span class="markdown-badge-tag">NOTE MD</span>
+                  <input type="text" id="markdownTitleInput" class="markdown-title-input" placeholder="Titre de la note" autocomplete="off" />
+                </div>
+                <div class="markdown-status-group">
+                  <span id="markdownStatusIndicator" class="markdown-status-pill">
+                    <span class="status-dot green" id="markdownStatusDot"></span>
+                    <span id="markdownStatusText">Enregistré</span>
+                  </span>
+                  <button id="markdownTrashBtn" class="btn btn-icon btn-sm" title="Mettre à la corbeille" aria-label="Mettre à la corbeille">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="3 6 5 6 21 6"></polyline>
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <div class="milkdown-scroll-container">
+                <div id="milkdownRoot" class="milkdown-wrapper"></div>
+              </div>
+            </div>
           </div>
         </div>
       </aside>
@@ -1038,6 +1115,7 @@
 
   <script src="/pdf-cache.js?v=__ASSET_VERSION__"></script>
   <script src="/download-queue-manager.js?v=__ASSET_VERSION__"></script>
+  <script src="/vendor/milkdown.js"></script>
   <script src="/app.js?v=__ASSET_VERSION__"></script>
 </body>
 </html>

@@ -391,12 +391,15 @@ document.addEventListener("DOMContentLoaded", () => {
   const navBtnDocuments = document.getElementById("navBtnDocuments");
   const navBtnDownloads = document.getElementById("navBtnDownloads");
   const navBtnSettings = document.getElementById("navBtnSettings");
+  const navBtnTrash = document.getElementById("navBtnTrash");
   const navDownloadsBadge = document.getElementById("navDownloadsBadge");
+  const navTrashBadge = document.getElementById("navTrashBadge");
 
   // Vues Principales
   const viewDocuments = document.getElementById("resultsPane");
   const viewDownloads = document.getElementById("viewDownloads");
   const viewSettings = document.getElementById("viewSettings");
+  const viewTrash = document.getElementById("viewTrash");
 
   // Reader Goodnotes
   const readerTopTabBar = document.getElementById("readerTopTabBar");
@@ -1365,14 +1368,14 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function switchMainView(tabName) {
-    [navBtnDocuments, navBtnDownloads, navBtnSettings].forEach(b => {
+    [navBtnDocuments, navBtnDownloads, navBtnSettings, navBtnTrash].forEach(b => {
       if (b) b.classList.toggle("active", b.getAttribute("data-tab") === tabName);
     });
 
     // La classe .active pilote l'affichage en CSS (règles home-tab-active) :
-    // elle garantit que Réglages / Transferts sont visibles depuis le volet
+    // elle garantit que Réglages / Transferts / Corbeille sont visibles depuis le volet
     // même quand aucun onglet lecteur n'est ouvert.
-    [[viewDocuments, "documents"], [viewDownloads, "downloads"], [viewSettings, "settings"]].forEach(([el, name]) => {
+    [[viewDocuments, "documents"], [viewDownloads, "downloads"], [viewSettings, "settings"], [viewTrash, "trash"]].forEach(([el, name]) => {
       if (el) el.classList.toggle("active", tabName === name);
     });
 
@@ -1385,12 +1388,17 @@ document.addEventListener("DOMContentLoaded", () => {
       viewSettings.style.display = (tabName === "settings") ? "flex" : "none";
       if (tabName === "settings") refreshSettingsView();
     }
+    if (viewTrash) {
+      viewTrash.style.display = (tabName === "trash") ? "flex" : "none";
+      if (tabName === "trash" && window.TrashManager) window.TrashManager.loadTrash();
+    }
     toggleMainSidebar(false);
   }
 
   if (navBtnDocuments) navBtnDocuments.addEventListener("click", () => switchMainView("documents"));
   if (navBtnDownloads) navBtnDownloads.addEventListener("click", () => switchMainView("downloads"));
   if (navBtnSettings) navBtnSettings.addEventListener("click", () => switchMainView("settings"));
+  if (navBtnTrash) navBtnTrash.addEventListener("click", () => switchMainView("trash"));
 
   // Statut Réseau discret dans le Header
   function updateNetworkPillUI() {
@@ -3882,12 +3890,16 @@ document.addEventListener("DOMContentLoaded", () => {
       ? highlightTitle(doc.title, query)
       : escapeHtml(doc.title);
 
+    const isMd = doc.doc_type === 'markdown' ||
+                 (doc.filename && (doc.filename.endsWith('.md') || doc.filename.endsWith('.markdown'))) ||
+                 (doc.title && (doc.title.endsWith('.md') || doc.title.endsWith('.markdown')));
+
     if (!isSearch) {
       // Affichage Goodnotes unifié (ligne continue élégante comme sur mobile)
       card.className = `goodnotes-item-row document-row doc-card ${selectedDocIds.has(doc.id) ? 'selected' : ''} ${statusCardClass}`;
       card.innerHTML = `
         <input type="checkbox" class="doc-selection-checkbox goodnotes-row-checkbox" data-id="${doc.id}" ${selectedDocIds.has(doc.id) ? 'checked' : ''} title="Sélectionner ce document" />
-        <div class="goodnotes-row-icon document ${isCached ? 'cached' : ''}">
+        <div class="goodnotes-row-icon document ${isMd ? 'md' : ''} ${isCached ? 'cached' : ''}">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
             <polyline points="14 2 14 8 20 8"></polyline>
@@ -3898,7 +3910,7 @@ document.addEventListener("DOMContentLoaded", () => {
         <div class="goodnotes-row-main">
           <div class="goodnotes-row-title doc-title-main" title="${escapeHtml(doc.title)}">${displayTitle}</div>
           <div class="goodnotes-row-meta">
-            <span>${isIndexing ? (doc.status === 'indexing' ? '⏳ Indexation...' : '⌛ En attente') : (isFailed ? '❌ Échec' : `${doc.total_pages || 1} page${(doc.total_pages || 1) > 1 ? 's' : ''}`)}</span>
+            <span>${isIndexing ? (doc.status === 'indexing' ? '⏳ Indexation...' : '⌛ En attente') : (isFailed ? '❌ Échec' : (isMd ? '<span class="doc-badge-pill" style="font-size:10px; padding:1px 5px; background:rgba(37,99,235,0.15); color:var(--accent); font-weight:700;">MD</span> Note' : `${doc.total_pages || 1} page${(doc.total_pages || 1) > 1 ? 's' : ''}`))}</span>
             ${doc.file_size ? `<span>•</span><span>${formatBytes(doc.file_size)}</span>` : ''}
             ${doc.created_at ? `<span>•</span><span>${new Date(doc.created_at).toLocaleDateString('fr-FR')}</span>` : ''}
             ${(doc.offline_ready === false) ? '<span class="meta-not-offline" title="Ce document nest pas téléchargé : connexion requise pour le consulter.">⚠ Non consultable hors-ligne</span>' : ''}
@@ -3955,7 +3967,7 @@ document.addEventListener("DOMContentLoaded", () => {
           <div class="doc-meta-badges">
             ${doc.is_top_result ? `<span class="doc-badge-pill top-badge" title="Score de pertinence le plus élevé">★ Plus pertinent</span>` : ''}
             <span class="doc-badge-pill highlight">${doc.total_occurrences} occ.</span>
-            ${isIndexing ? `<span class="doc-badge-pill" style="background:rgba(37,99,235,0.1); color:var(--accent);">${doc.status === 'indexing' ? '⏳ Indexation...' : '⌛ En attente'}</span>` : `<span class="doc-badge-pill">${doc.total_pages} p.</span>`}
+            ${isIndexing ? `<span class="doc-badge-pill" style="background:rgba(37,99,235,0.1); color:var(--accent);">${doc.status === 'indexing' ? '⏳ Indexation...' : '⌛ En attente'}</span>` : (isMd ? `<span class="doc-badge-pill" style="background:rgba(37,99,235,0.15); color:var(--accent); font-weight:700;">MD</span>` : `<span class="doc-badge-pill">${doc.total_pages} p.</span>`)}
             
             <button class="doc-cache-btn ${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? 'cached' : ''}" data-id="${doc.id}" title="${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? 'Disponible hors-ligne' : 'Télécharger pour consultation hors-ligne'}" aria-label="Cache hors-ligne">
               ${window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id) ? `
@@ -3981,6 +3993,7 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
         <div class="doc-card-body">
           <div class="doc-cover-wrapper" title="${isIndexing ? 'Document en cours d\'indexation...' : (isFailed ? 'Échec d\'indexation' : 'Ouvrir le document')}">
+            ${isMd ? '<span class="doc-card-badge-md">MD</span>' : ''}
             ${isIndexing ? `
               <div class="doc-indexing-overlay">
                 <span class="spin-indicator"></span>
@@ -6012,6 +6025,27 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
+    // Dispatch selon le type de document (Markdown vs PDF)
+    const isMarkdownDoc = (matchedDoc && matchedDoc.doc_type === 'markdown') ||
+                          (matchedDoc && matchedDoc.filename && (matchedDoc.filename.endsWith('.md') || matchedDoc.filename.endsWith('.markdown'))) ||
+                          (docTitle && (docTitle.endsWith('.md') || docTitle.endsWith('.markdown')));
+
+    if (isMarkdownDoc) {
+      if (pdfFrame) pdfFrame.style.display = "none";
+      const mdContainer = document.getElementById("markdownEditorContainer");
+      if (mdContainer) mdContainer.style.display = "flex";
+
+      const filename = matchedDoc ? matchedDoc.filename : (docTitle.endsWith('.md') ? docTitle : `${docTitle}.md`);
+      if (window.MarkdownManager) {
+        window.MarkdownManager.loadNote(numericDocId, filename, docTitle);
+      }
+      return;
+    } else {
+      if (pdfFrame) pdfFrame.style.display = "block";
+      const mdContainer = document.getElementById("markdownEditorContainer");
+      if (mdContainer) mdContainer.style.display = "none";
+    }
+
     if (isSameDoc && pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
       goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
       hookIframePinchZoomIsolation();
@@ -7172,7 +7206,809 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // =========================================================================
+  // STOCKAGE PHYSIQUE LOCAL DES NOTES MARKDOWN (OPFS + IndexedDB dirty files)
+  // =========================================================================
+  const MarkdownStorage = {
+    _opfsDir: null,
+
+    async getDir() {
+      if (this._opfsDir) return this._opfsDir;
+      if (typeof navigator !== "undefined" && navigator.storage && typeof navigator.storage.getDirectory === "function") {
+        try {
+          const root = await navigator.storage.getDirectory();
+          this._opfsDir = await root.getDirectoryHandle("docseeker_md", { create: true });
+          return this._opfsDir;
+        } catch (e) {
+          console.warn("[MarkdownStorage] Erreur accès OPFS docseeker_md:", e);
+        }
+      }
+      return null;
+    },
+
+    encodeName(filename) {
+      return filename.replace(/\//g, "⁄");
+    },
+
+    decodeName(safeName) {
+      return safeName.replace(/⁄/g, "/");
+    },
+
+    async write(filename, content) {
+      try {
+        const dir = await this.getDir();
+        if (dir) {
+          const safeName = this.encodeName(filename);
+          const handle = await dir.getFileHandle(safeName, { create: true });
+          const writable = await handle.createWritable();
+          await writable.write(content);
+          await writable.close();
+        } else {
+          localStorage.setItem(`docseeker_md_${filename}`, content);
+        }
+      } catch (e) {
+        console.warn("[MarkdownStorage] Erreur écriture OPFS:", e);
+        try { localStorage.setItem(`docseeker_md_${filename}`, content); } catch (_) {}
+      }
+    },
+
+    async read(filename) {
+      try {
+        const dir = await this.getDir();
+        if (dir) {
+          const safeName = this.encodeName(filename);
+          const handle = await dir.getFileHandle(safeName);
+          const file = await handle.getFile();
+          return await file.text();
+        }
+      } catch (_) {}
+      return localStorage.getItem(`docseeker_md_${filename}`);
+    },
+
+    async delete(filename) {
+      try {
+        const dir = await this.getDir();
+        if (dir) {
+          const safeName = this.encodeName(filename);
+          await dir.removeEntry(safeName);
+        }
+      } catch (_) {}
+      localStorage.removeItem(`docseeker_md_${filename}`);
+    },
+
+    async listFiles() {
+      const files = [];
+      try {
+        const dir = await this.getDir();
+        if (dir && typeof dir.values === "function") {
+          for await (const entry of dir.values()) {
+            if (entry.kind === "file") {
+              const filename = this.decodeName(entry.name);
+              try {
+                const f = await entry.getFile();
+                files.push({
+                  filename,
+                  mtime: new Date(f.lastModified).toISOString(),
+                  file_size: f.size
+                });
+              } catch (_) {}
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[MarkdownStorage] Erreur listing OPFS:", e);
+      }
+      return files;
+    },
+
+    _openDb() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open("docseeker_sync_db", 1);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains("dirty_files")) {
+            db.createObjectStore("dirty_files", { keyPath: "filename" });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    },
+
+    async markDirty(filename, action = "modified") {
+      try {
+        const db = await this._openDb();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction("dirty_files", "readwrite");
+          const store = tx.objectStore("dirty_files");
+          store.put({
+            filename,
+            action,
+            mtime: new Date().toISOString()
+          });
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        });
+      } catch (e) {
+        console.warn("[MarkdownStorage] Erreur markDirty:", e);
+      }
+    },
+
+    async unmarkDirty(filename) {
+      try {
+        const db = await this._openDb();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction("dirty_files", "readwrite");
+          const store = tx.objectStore("dirty_files");
+          store.delete(filename);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        });
+      } catch (e) {
+        console.warn("[MarkdownStorage] Erreur unmarkDirty:", e);
+      }
+    },
+
+    async getDirtyFiles() {
+      try {
+        const db = await this._openDb();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction("dirty_files", "readonly");
+          const store = tx.objectStore("dirty_files");
+          const req = store.getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+        });
+      } catch (e) {
+        return [];
+      }
+    }
+  };
+  window.MarkdownStorage = MarkdownStorage;
+
+  // =========================================================================
+  // GESTIONNAIRE DE SYNCHRONISATION FILESYSTEM (SyncManager)
+  // =========================================================================
+  const SyncManager = {
+    isSyncing: false,
+
+    async runSync() {
+      if (this.isSyncing || !navigator.onLine) return;
+      this.isSyncing = true;
+      try {
+        const dirtyList = await MarkdownStorage.getDirtyFiles();
+        const dirtyMap = new Map(dirtyList.map(d => [d.filename, d]));
+
+        const localFiles = await MarkdownStorage.listFiles();
+        const manifestFiles = localFiles.map(f => {
+          const dirty = dirtyMap.get(f.filename);
+          return {
+            filename: f.filename,
+            mtime: dirty ? dirty.mtime : f.mtime,
+            status: dirty ? dirty.action : "ready"
+          };
+        });
+
+        for (const d of dirtyList) {
+          if (!manifestFiles.some(f => f.filename === d.filename)) {
+            manifestFiles.push({
+              filename: d.filename,
+              mtime: d.mtime,
+              status: d.action
+            });
+          }
+        }
+
+        const res = await fetch("/api/sync/manifest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            files: manifestFiles,
+            trash: []
+          })
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const plan = await res.json();
+
+        // 1. PUSH : le client envoie les fichiers locaux modifiés au serveur
+        for (const filename of (plan.push || [])) {
+          const content = await MarkdownStorage.read(filename);
+          if (content !== null) {
+            const putRes = await fetch(`/api/files/${encodeURIComponent(filename)}`, {
+              method: "PUT",
+              headers: { "Content-Type": "text/markdown; charset=utf-8" },
+              body: content
+            });
+            if (putRes.ok) {
+              await MarkdownStorage.unmarkDirty(filename);
+            }
+          }
+        }
+
+        // 2. PULL : le client télécharge les versions serveur plus récentes
+        for (const item of (plan.pull || [])) {
+          const fname = item.filename;
+          if (fname.endsWith(".md") || fname.endsWith(".markdown") || fname.endsWith(".txt")) {
+            const getRes = await fetch(`/api/files/${encodeURIComponent(fname)}`);
+            if (getRes.ok) {
+              const txt = await getRes.text();
+              await MarkdownStorage.write(fname, txt);
+              await MarkdownStorage.unmarkDirty(fname);
+            }
+          }
+        }
+
+        // 3. DELETE_LOCAL : supprimer localement les fichiers supprimés côté serveur
+        for (const filename of (plan.delete_local || [])) {
+          await MarkdownStorage.delete(filename);
+          await MarkdownStorage.unmarkDirty(filename);
+        }
+
+        console.info("[SyncManager] Synchronisation différentielle terminée avec succès");
+      } catch (err) {
+        console.warn("[SyncManager] Erreur synchronisation :", err);
+      } finally {
+        this.isSyncing = false;
+      }
+    }
+  };
+  window.SyncManager = SyncManager;
+
+  window.addEventListener("online", () => {
+    showToast("Connexion rétablie : synchronisation en cours...", "info");
+    SyncManager.runSync();
+  });
+
+  // =========================================================================
+  // GESTIONNAIRE DE NOTES MARKDOWN (WYSIWYG Milkdown & Offline-First)
+  // =========================================================================
+  const MarkdownManager = {
+    currentDocId: null,
+    currentFilename: null,
+    currentTitle: null,
+    editorInstance: null,
+    saveTimer: null,
+
+    init() {
+      const newNoteBtn = document.getElementById("newMarkdownNoteBtn");
+      if (newNoteBtn) {
+        newNoteBtn.addEventListener("click", () => this.promptCreateNote());
+      }
+
+      const titleInput = document.getElementById("markdownTitleInput");
+      if (titleInput) {
+        titleInput.addEventListener("change", () => this.handleTitleRename());
+        titleInput.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            titleInput.blur();
+          }
+        });
+      }
+
+      const trashBtn = document.getElementById("markdownTrashBtn");
+      if (trashBtn) {
+        trashBtn.addEventListener("click", () => this.trashCurrentNote());
+      }
+
+      // Drag and drop & paste d'images
+      const mdContainer = document.getElementById("markdownEditorContainer");
+      if (mdContainer) {
+        mdContainer.addEventListener("paste", (e) => this.handlePaste(e));
+        mdContainer.addEventListener("dragover", (e) => e.preventDefault());
+        mdContainer.addEventListener("drop", (e) => this.handleDrop(e));
+      }
+    },
+
+    async promptCreateNote() {
+      const title = prompt("Titre de la nouvelle note :", "Nouvelle note");
+      if (!title || !title.trim()) return;
+
+      const cleanTitle = title.trim();
+      const filename = cleanTitle.endsWith(".md") ? cleanTitle : `${cleanTitle}.md`;
+      const initialContent = `# ${cleanTitle}\n\n`;
+
+      // Sauvegarde locale immédiate dans OPFS
+      await MarkdownStorage.write(filename, initialContent);
+
+      if (!navigator.onLine) {
+        await MarkdownStorage.markDirty(filename, "created");
+        showToast("Note créée hors-ligne", "info");
+        const fakeId = Date.now();
+        openDocumentInSplitView(fakeId, cleanTitle, 1, []);
+        this.loadNote(fakeId, filename, cleanTitle, initialContent);
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/files", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filename: filename,
+            content: initialContent
+          })
+        });
+
+        if (res.status === 409) {
+          showToast("Une note portant ce nom existe déjà.", "error");
+          return;
+        }
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || `Erreur HTTP ${res.status}`);
+        }
+
+        const data = await res.json();
+        showToast("Note créée avec succès", "success");
+
+        if (typeof loadDocuments === "function") {
+          loadDocuments(currentFolderId, false);
+        }
+
+        if (Array.isArray(currentLoadedDocs)) {
+          currentLoadedDocs.push({
+            id: data.doc_id,
+            filename: filename,
+            title: cleanTitle,
+            doc_type: "markdown",
+            status: "ready"
+          });
+        }
+
+        if (data.doc_id) {
+          openDocumentInSplitView(data.doc_id, cleanTitle, 1, []);
+          this.loadNote(data.doc_id, filename, cleanTitle, initialContent);
+        }
+      } catch (err) {
+        console.error("[Markdown] Erreur création note distante :", err);
+        await MarkdownStorage.markDirty(filename, "created");
+        showToast("Note enregistrée localement (hors-ligne)", "warning");
+        const fakeId = Date.now();
+        if (Array.isArray(currentLoadedDocs)) {
+          currentLoadedDocs.push({
+            id: fakeId,
+            filename: filename,
+            title: cleanTitle,
+            doc_type: "markdown",
+            status: "ready"
+          });
+        }
+        openDocumentInSplitView(fakeId, cleanTitle, 1, []);
+        this.loadNote(fakeId, filename, cleanTitle, initialContent);
+      }
+    },
+
+    async loadNote(docId, filename, title, preloadedContent = null) {
+      this.currentDocId = docId;
+      this.currentFilename = filename;
+      this.currentTitle = title;
+
+      const titleInput = document.getElementById("markdownTitleInput");
+      if (titleInput) {
+        titleInput.value = title;
+      }
+
+      this.setStatus("loading", "Chargement...");
+
+      let content = preloadedContent;
+
+      if (!content) {
+        // 1. Lire d'abord en local OPFS (persistance offline)
+        const local = await MarkdownStorage.read(filename);
+        if (local !== null) {
+          content = local;
+        }
+
+        // 2. Si connecté, fetcher la dernière version serveur
+        if (navigator.onLine) {
+          try {
+            const res = await fetch(`/api/files/${encodeURIComponent(filename)}`);
+            if (res.ok) {
+              const remoteText = await res.text();
+              // Si pas de conflit dirty, la version distante prévaut
+              content = remoteText;
+              await MarkdownStorage.write(filename, remoteText);
+            }
+          } catch (e) {
+            console.warn("[Markdown] Erreur récupération note distante, repli sur local:", e);
+          }
+        }
+      }
+
+      if (!content) {
+        content = `# ${title}\n\n`;
+      }
+
+      const root = document.getElementById("milkdownRoot");
+      if (!root) return;
+
+      if (this.editorInstance && typeof this.editorInstance.destroy === "function") {
+        try { this.editorInstance.destroy(); } catch (e) {}
+      }
+      root.innerHTML = "";
+
+      try {
+        if (typeof window.createMilkdown === "function") {
+          this.editorInstance = await window.createMilkdown(root, {
+            initialValue: content,
+            onChange: (md) => this.onContentChange(md)
+          });
+        } else {
+          root.innerHTML = `<textarea class="fallback-md-textarea" style="width:100%; height:500px; padding:16px; border:1px solid var(--border-color); border-radius:8px; font-family:monospace;">${escapeHtml(content)}</textarea>`;
+          const ta = root.querySelector("textarea");
+          ta.addEventListener("input", () => this.onContentChange(ta.value));
+        }
+        this.setStatus("saved", "Enregistré");
+      } catch (err) {
+        console.error("[Markdown] Erreur init Milkdown:", err);
+        this.setStatus("error", "Erreur éditeur");
+      }
+    },
+
+    onContentChange(markdown) {
+      this.setStatus("saving", "Enregistrement...");
+      if (this.saveTimer) clearTimeout(this.saveTimer);
+
+      this.saveTimer = setTimeout(async () => {
+        await this.saveNote(markdown);
+      }, 1500);
+    },
+
+    async saveNote(markdown) {
+      if (!this.currentFilename) return;
+      const fname = this.currentFilename;
+
+      // 1. Sauvegarde locale OPFS garantie
+      await MarkdownStorage.write(fname, markdown);
+
+      // 2. Réindexation FTS5 locale si offline-worker disponible
+      if (window.downloadQueueManager) {
+        window.downloadQueueManager.sendToWorker("INDEX_MARKDOWN_DOC", {
+          docId: this.currentDocId,
+          filename: fname,
+          title: this.currentTitle,
+          content: markdown
+        }).catch(() => {});
+      }
+
+      // 3. Sauvegarde distante si online
+      if (navigator.onLine) {
+        try {
+          const res = await fetch(`/api/files/${encodeURIComponent(fname)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "text/markdown; charset=utf-8" },
+            body: markdown
+          });
+          if (res.ok) {
+            await MarkdownStorage.unmarkDirty(fname);
+            this.setStatus("saved", "Enregistré");
+            return;
+          }
+        } catch (e) {
+          console.warn("[Markdown] Erreur sauvegarde distante:", e);
+        }
+      }
+
+      // Mode hors-ligne : marquer dirty pour synchro ultérieure
+      await MarkdownStorage.markDirty(fname, "modified");
+      this.setStatus("offline", "Enregistré hors-ligne");
+    },
+
+    async handleTitleRename() {
+      const input = document.getElementById("markdownTitleInput");
+      if (!input || !this.currentDocId) return;
+
+      const newTitle = input.value.trim();
+      if (!newTitle || newTitle === this.currentTitle) return;
+
+      const oldFname = this.currentFilename;
+      const newFname = newTitle.endsWith(".md") ? newTitle : `${newTitle}.md`;
+
+      try {
+        if (navigator.onLine) {
+          const res = await fetch(`/api/documents/${this.currentDocId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: newTitle })
+          });
+
+          if (!res.ok) throw new Error("Échec renommage distant");
+        } else {
+          // Hors-ligne : déplacer dans OPFS et marquer dirty
+          const content = await MarkdownStorage.read(oldFname);
+          if (content !== null) {
+            await MarkdownStorage.write(newFname, content);
+            await MarkdownStorage.delete(oldFname);
+          }
+          await MarkdownStorage.markDirty(oldFname, "deleted");
+          await MarkdownStorage.markDirty(newFname, "created");
+        }
+
+        this.currentTitle = newTitle;
+        this.currentFilename = newFname;
+        showToast("Note renommée", "success");
+
+        const tab = tabManager.openTabs.find(t => Number(t.docId) === Number(this.currentDocId));
+        if (tab) {
+          tab.docTitle = newTitle;
+          tabManager.renderTabs();
+        }
+
+        if (typeof loadDocuments === "function") {
+          loadDocuments(currentFolderId, false);
+        }
+      } catch (e) {
+        showToast("Impossible de renommer la note", "error");
+      }
+    },
+
+    async trashCurrentNote() {
+      if (!this.currentFilename) return;
+      if (!confirm(`Voulez-vous déplacer "${this.currentTitle}" dans la corbeille ?\nVous pourrez la restaurer pendant 30 jours.`)) {
+        return;
+      }
+
+      const fname = this.currentFilename;
+      try {
+        if (navigator.onLine) {
+          const res = await fetch(`/api/files/${encodeURIComponent(fname)}`, {
+            method: "DELETE"
+          });
+          if (res.ok) {
+            await MarkdownStorage.delete(fname);
+            await MarkdownStorage.unmarkDirty(fname);
+          }
+        } else {
+          await MarkdownStorage.markDirty(fname, "deleted");
+        }
+
+        showToast("Note déplacée dans la corbeille", "info");
+        const tab = tabManager.openTabs.find(t => Number(t.docId) === Number(this.currentDocId));
+        if (tab) {
+          tabManager.closeTab(tab.id);
+        }
+        if (typeof loadDocuments === "function") {
+          loadDocuments(currentFolderId, false);
+        }
+      } catch (e) {
+        showToast("Erreur lors de la suppression", "error");
+      }
+    },
+
+    async handlePaste(e) {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf("image") !== -1) {
+          e.preventDefault();
+          const file = items[i].getAsFile();
+          if (file) {
+            await this.uploadAndInsertAsset(file);
+          }
+          break;
+        }
+      }
+    },
+
+    async handleDrop(e) {
+      e.preventDefault();
+      const files = e.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+
+      for (let i = 0; i < files.length; i++) {
+        if (files[i].type.startsWith("image/")) {
+          await this.uploadAndInsertAsset(files[i]);
+          break;
+        }
+      }
+    },
+
+    async uploadAndInsertAsset(file) {
+      if (!this.currentFilename) return;
+      const stem = this.currentFilename.replace(/\.[^/.]+$/, "");
+
+      const formData = new FormData();
+      formData.append("file", file, file.name || "image.png");
+
+      try {
+        showToast("Téléversement de l'image...", "info");
+        const res = await fetch(`/api/assets/${encodeURIComponent(stem)}`, {
+          method: "POST",
+          body: formData
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const assetName = (data.assets && data.assets[0]?.name) || file.name || "image.png";
+          const imageMd = `\n\n![${assetName}](assets/${stem}/${assetName})\n\n`;
+          showToast("Image insérée avec succès", "success");
+
+          // Insérer dans le document actif
+          const currentMd = this.editorInstance && typeof this.editorInstance.getMarkdown === "function"
+            ? this.editorInstance.getMarkdown()
+            : (await MarkdownStorage.read(this.currentFilename) || "");
+          const updatedMd = currentMd + imageMd;
+          await this.saveNote(updatedMd);
+          this.loadNote(this.currentDocId, this.currentFilename, this.currentTitle, updatedMd);
+        } else {
+          showToast("Échec de l'upload de l'image", "error");
+        }
+      } catch (err) {
+        showToast("Échec upload image", "error");
+      }
+    },
+
+    setStatus(status, text) {
+      const dot = document.getElementById("markdownStatusDot");
+      const label = document.getElementById("markdownStatusText");
+      if (!dot || !label) return;
+
+      dot.className = `status-dot ${status === 'saving' ? 'orange' : (status === 'error' ? 'red' : 'green')}`;
+      label.textContent = text;
+    }
+  };
+  window.MarkdownManager = MarkdownManager;
+
+  // =========================================================================
+  // GESTIONNAIRE DE CORBEILLE (TrashManager)
+  // =========================================================================
+  const TrashManager = {
+    async loadTrash() {
+      const container = document.getElementById("trashItemsList");
+      const emptyState = document.getElementById("trashEmptyState");
+      if (!container) return;
+
+      try {
+        const res = await fetch("/api/trash");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const data = await res.json();
+        const items = data.items || [];
+
+        const badge = document.getElementById("navTrashBadge");
+        if (badge) {
+          badge.textContent = items.length;
+          badge.style.display = items.length > 0 ? "inline-block" : "none";
+        }
+
+        if (items.length === 0) {
+          if (emptyState) emptyState.style.display = "block";
+          container.innerHTML = "";
+          return;
+        }
+
+        if (emptyState) emptyState.style.display = "none";
+        container.innerHTML = items.map(item => {
+          const isMd = item.doc_type === "markdown" || item.original_path.endsWith(".md");
+          const delDate = new Date(item.deleted_at).toLocaleDateString("fr-FR", { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+          const expDate = new Date(item.expires_at).toLocaleDateString("fr-FR", { day: 'numeric', month: 'short' });
+
+          return `
+            <div class="trash-card" data-trash-name="${escapeHtml(item.trash_name)}" data-orig-path="${escapeHtml(item.original_path)}">
+              <div class="trash-card-header">
+                <div class="trash-card-icon ${isMd ? 'md' : ''}">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    ${isMd ? '<line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line>' : ''}
+                  </svg>
+                </div>
+                <div class="trash-card-info">
+                  <div class="trash-card-title" title="${escapeHtml(item.original_path)}">${escapeHtml(item.original_path.split('/').pop())}</div>
+                  <div class="trash-card-path">${escapeHtml(item.original_path)}</div>
+                </div>
+              </div>
+              <div class="trash-card-meta">
+                <span>Supprimé le ${delDate}</span>
+                <span>Purge auto le ${expDate}</span>
+                ${item.file_size ? `<span>Taille : ${formatBytes(item.file_size)}</span>` : ''}
+              </div>
+              <div class="trash-card-actions">
+                <button class="btn btn-sm btn-primary btn-restore-trash" data-orig-path="${escapeHtml(item.original_path)}">
+                  Restaurer
+                </button>
+                <button class="btn btn-sm btn-outline-danger btn-purge-trash" data-trash-name="${escapeHtml(item.trash_name)}">
+                  Supprimer
+                </button>
+              </div>
+            </div>
+          `;
+        }).join("");
+
+        container.querySelectorAll(".btn-restore-trash").forEach(btn => {
+          btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const origPath = btn.getAttribute("data-orig-path");
+            this.restore(origPath);
+          });
+        });
+
+        container.querySelectorAll(".btn-purge-trash").forEach(btn => {
+          btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const name = btn.getAttribute("data-trash-name");
+            this.purge(name);
+          });
+        });
+      } catch (err) {
+        console.error("[Trash] Erreur chargement corbeille:", err);
+      }
+    },
+
+    async restore(origPath) {
+      try {
+        const res = await fetch("/api/trash/restore", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filename: origPath })
+        });
+
+        if (res.ok) {
+          showToast(`"${origPath.split('/').pop()}" restauré`, "success");
+          this.loadTrash();
+          if (typeof loadDocuments === "function") {
+            loadDocuments(currentFolderId, false);
+          }
+        } else {
+          showToast("Échec de la restauration", "error");
+        }
+      } catch (e) {
+        showToast("Erreur réseau", "error");
+      }
+    },
+
+    async purge(trashName) {
+      if (!confirm("Voulez-vous supprimer définitivement ce fichier ?\nCette action est irréversible.")) {
+        return;
+      }
+      try {
+        const res = await fetch(`/api/trash/${encodeURIComponent(trashName)}`, {
+          method: "DELETE"
+        });
+        if (res.ok) {
+          showToast("Fichier définitivement supprimé", "info");
+          this.loadTrash();
+        }
+      } catch (e) {
+        showToast("Erreur réseau", "error");
+      }
+    },
+
+    async emptyAll() {
+      if (!confirm("Voulez-vous vider l'intégralité de la corbeille ?\nTous les fichiers supprimés seront définitivement effacés.")) {
+        return;
+      }
+      try {
+        const res = await fetch("/api/trash");
+        if (res.ok) {
+          const data = await res.json();
+          for (const item of (data.items || [])) {
+            await fetch(`/api/trash/${encodeURIComponent(item.trash_name)}`, { method: "DELETE" }).catch(() => {});
+          }
+          showToast("Corbeille vidée", "success");
+          this.loadTrash();
+        }
+      } catch (e) {
+        showToast("Erreur vidage corbeille", "error");
+      }
+    }
+  };
+  window.TrashManager = TrashManager;
+
+  const emptyTrashBtn = document.getElementById("emptyTrashBtn");
+  if (emptyTrashBtn) {
+    emptyTrashBtn.addEventListener("click", () => TrashManager.emptyAll());
+  }
+
   // Initialisation au chargement de l'application
+  MarkdownManager.init();
+  if (navigator.onLine) {
+    SyncManager.runSync();
+  }
   loadAppVersion();
   startPipelinePolling();
 });
