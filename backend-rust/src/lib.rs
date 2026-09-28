@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod config;
 pub mod db;
+pub mod document;
 pub mod pdf;
 pub mod pipeline;
 pub mod routes;

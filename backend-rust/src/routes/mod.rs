@@ -1,5 +1,6 @@
 pub mod annotations;
 pub mod documents;
+pub mod files;
 pub mod folders;
 pub mod media;
 pub mod search;
@@ -65,6 +66,16 @@ pub fn create_api_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         // Annotations
         .route("/documents/:id/annotations", get(annotations::get_annotations).post(annotations::save_annotations))
         .route("/documents/:id/save-pdf", post(annotations::save_pdf))
+        // Filesystem-First : Fichiers, Notes Markdown & Corbeille
+        .route("/files", post(files::create_file_handler))
+        .route("/files/*filename", get(files::get_file_handler).put(files::save_file_handler).delete(files::soft_delete_file_handler))
+        .route("/trash", get(files::list_trash_handler))
+        .route("/trash/restore", post(files::restore_payload_handler))
+        .route("/trash/*filename", delete(files::purge_trash_handler).post(files::restore_file_handler))
+        .route("/assets/:stem", post(files::upload_asset_handler))
+        .route("/assets/:stem/:name", get(files::get_asset_handler))
+        .route("/sync/manifest", post(files::sync_manifest_handler))
+        .route("/rebuild-db", post(files::rebuild_db_handler))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             require_auth_middleware,

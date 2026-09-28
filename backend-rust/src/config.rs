@@ -6,10 +6,12 @@ pub struct Config {
     pub port: u16,
     pub data_dir: PathBuf,
     pub documents_dir: PathBuf,
+    pub trash_dir: PathBuf,
     pub cache_dir: PathBuf,
     pub covers_dir: PathBuf,
     pub db_path: PathBuf,
     pub max_upload_size: usize,
+    pub max_md_upload_size: usize,
     pub session_duration_days: i64,
     pub default_admin_password: Option<String>,
 }
@@ -38,9 +40,16 @@ impl Config {
             });
 
         let documents_dir = base_data_dir.join("documents");
+        let trash_dir = base_data_dir.join("trash");
         let cache_dir = base_data_dir.join("cache_crops");
         let covers_dir = cache_dir.join("covers");
         let db_path = base_data_dir.join("db.sqlite");
+
+        // Taille d'upload max pour les fichiers Markdown : 10 Mo par défaut
+        let max_md_upload_size = std::env::var("MAX_MD_UPLOAD_SIZE")
+            .ok()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .unwrap_or(10 * 1024 * 1024);
 
         // Taille d'upload max par défaut : 2 Go
         let max_upload_size = std::env::var("MAX_UPLOAD_SIZE")
@@ -72,10 +81,12 @@ impl Config {
             port,
             data_dir: base_data_dir,
             documents_dir,
+            trash_dir,
             cache_dir,
             covers_dir,
             db_path,
             max_upload_size,
+            max_md_upload_size,
             session_duration_days,
             default_admin_password,
         }
@@ -84,6 +95,7 @@ impl Config {
     pub fn ensure_directories(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.data_dir)?;
         std::fs::create_dir_all(&self.documents_dir)?;
+        std::fs::create_dir_all(&self.trash_dir)?;
         std::fs::create_dir_all(&self.cache_dir)?;
         std::fs::create_dir_all(&self.covers_dir)?;
         Ok(())

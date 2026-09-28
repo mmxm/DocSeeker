@@ -220,25 +220,25 @@ impl IndexingPipeline {
         config: &Config,
         state: &Arc<Mutex<PipelineState>>,
     ) {
-        let (filename, title) = {
+        let (filename, title, doc_type) = {
             let conn = match db.lock() {
                 Ok(c) => c,
                 Err(_) => return,
             };
 
             let doc_info = conn.query_row(
-                "SELECT filename, title FROM documents WHERE id = ?1",
+                "SELECT filename, title, COALESCE(doc_type, 'pdf') FROM documents WHERE id = ?1",
                 params![doc_id],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?)),
             );
 
             match doc_info {
-                Ok((f, t)) => (f, t.unwrap_or_default()),
+                Ok((f, t, dt)) => (f, t.unwrap_or_default(), dt),
                 Err(_) => return,
             }
         };
 
-        let file_path = match crate::pdf::indexer::resolve_pdf_path(&config.documents_dir, &filename) {
+        let file_path = match crate::document::trash::resolve_file_path(&config.documents_dir, &filename) {
             Some(p) => p,
             None => {
                 if let Ok(conn) = db.lock() {
@@ -275,9 +275,9 @@ impl IndexingPipeline {
             );
         }
 
-        info!("[Pipeline] Début indexation doc {} ({})...", doc_id, filename);
+        info!("[Pipeline] Début indexation doc {} ({}, type: {})...", doc_id, filename, doc_type);
 
-        // Exécution de l'indexation
+        // Exécution de l'indexation selon le type de document
         let index_res = {
             let conn = match db.lock() {
                 Ok(c) => c,
@@ -286,7 +286,11 @@ impl IndexingPipeline {
                     return;
                 }
             };
-            index_pdf_file(&conn, pdf_engine, config, &file_path, &filename, None)
+            if doc_type == "markdown" || filename.ends_with(".md") || filename.ends_with(".markdown") {
+                crate::document::markdown::index_markdown_file(&conn, config, &file_path, &filename)
+            } else {
+                index_pdf_file(&conn, pdf_engine, config, &file_path, &filename, None)
+            }
         };
 
         if let Ok(conn) = db.lock() {

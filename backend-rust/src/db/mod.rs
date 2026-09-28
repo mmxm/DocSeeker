@@ -135,6 +135,8 @@ pub fn init_db(db_path: &Path) -> Result<()> {
     ensure_column(&conn, "documents", "updated_at", "DATETIME")?;
     ensure_column(&conn, "documents", "status", "TEXT DEFAULT 'ready'")?;
     ensure_column(&conn, "documents", "error_message", "TEXT")?;
+    ensure_column(&conn, "documents", "doc_type", "TEXT DEFAULT 'pdf'")?;
+    ensure_column(&conn, "documents", "deleted_at", "DATETIME")?;
 
     info!("Base de données SQLite initialisée avec succès : {:?}", db_path);
     Ok(())

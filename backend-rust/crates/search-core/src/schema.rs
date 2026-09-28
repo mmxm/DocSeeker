@@ -19,12 +19,14 @@ CREATE TABLE IF NOT EXISTS documents (
     title TEXT,
     file_hash TEXT,
     folder_id INTEGER,
+    doc_type TEXT DEFAULT 'pdf',
     status TEXT DEFAULT 'ready',
     error_message TEXT,
     total_pages INTEGER DEFAULT 0,
     file_size INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    deleted_at DATETIME,
     FOREIGN KEY(folder_id) REFERENCES folders(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_documents_file_hash ON documents(file_hash);
@@ -34,6 +36,8 @@ CREATE INDEX IF NOT EXISTS idx_documents_title ON documents(title);
 CREATE INDEX IF NOT EXISTS idx_documents_filename ON documents(filename);
 CREATE INDEX IF NOT EXISTS idx_documents_title_lower ON documents(LOWER(title));
 CREATE INDEX IF NOT EXISTS idx_documents_filename_lower ON documents(LOWER(filename));
+CREATE INDEX IF NOT EXISTS idx_documents_doc_type ON documents(doc_type);
+CREATE INDEX IF NOT EXISTS idx_documents_deleted_at ON documents(deleted_at);
 "#;
 
 pub const CREATE_PAGES_TABLE: &str = r#"

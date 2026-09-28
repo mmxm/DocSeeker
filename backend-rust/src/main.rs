@@ -1,6 +1,5 @@
 use docseeker_backend::*;
 use docseeker_backend::auth::password::{hash_password, verify_password};
-use docseeker_backend::pdf::indexer::scan_and_sync_documents;
 use docseeker_backend::routes::create_api_router;
 use docseeker_backend::static_files::static_handler;
 
@@ -268,7 +267,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let bg_config = state.config.clone();
         tokio::task::spawn_blocking(move || {
             if let Ok(conn) = bg_pool.get() {
-                let (added, files) = scan_and_sync_documents(&conn, &bg_engine, &bg_config);
+                // Purge automatique des documents corbeille expirés (> 30 jours)
+                let _ = docseeker_backend::document::trash::purge_expired_trash(&conn, &bg_config);
+
+                // Synchronisation unifiée de tous les documents physiques (PDF + Markdown)
+                let (added, files) = docseeker_backend::document::scanner::scan_and_sync_all_documents(&conn, &bg_engine, &bg_config);
                 if added > 0 {
                     info!("[DocSeeker] {} document(s) synchronisé(s) en tâche de fond : {:?}", added, files);
                 }
