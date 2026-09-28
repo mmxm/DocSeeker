@@ -7373,18 +7373,28 @@ document.addEventListener("DOMContentLoaded", () => {
     isSyncing: false,
 
     async runSync() {
-      if (this.isSyncing || !navigator.onLine) return;
+      if (this.isSyncing) return;
       this.isSyncing = true;
       try {
+        function toUnixSecs(val) {
+          if (!val) return Math.floor(Date.now() / 1000);
+          if (typeof val === "number") {
+            return val > 1e11 ? Math.floor(val / 1000) : Math.floor(val);
+          }
+          const parsed = Date.parse(val);
+          return !isNaN(parsed) ? Math.floor(parsed / 1000) : Math.floor(Date.now() / 1000);
+        }
+
         const dirtyList = await MarkdownStorage.getDirtyFiles();
         const dirtyMap = new Map(dirtyList.map(d => [d.filename, d]));
 
         const localFiles = await MarkdownStorage.listFiles();
         const manifestFiles = localFiles.map(f => {
           const dirty = dirtyMap.get(f.filename);
+          const rawMtime = dirty ? dirty.mtime : f.mtime;
           return {
             filename: f.filename,
-            mtime: dirty ? dirty.mtime : f.mtime,
+            mtime: toUnixSecs(rawMtime),
             status: dirty ? dirty.action : "ready"
           };
         });
@@ -7393,7 +7403,7 @@ document.addEventListener("DOMContentLoaded", () => {
           if (!manifestFiles.some(f => f.filename === d.filename)) {
             manifestFiles.push({
               filename: d.filename,
-              mtime: d.mtime,
+              mtime: toUnixSecs(d.mtime),
               status: d.action
             });
           }
@@ -7411,8 +7421,17 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const plan = await res.json();
 
-        // 1. PUSH : le client envoie les fichiers locaux modifiés au serveur
+        // 1. PUSH : le client envoie les fichiers locaux modifiés ou supprimés au serveur
         for (const filename of (plan.push || [])) {
+          const dirty = dirtyMap.get(filename);
+          if (dirty && dirty.action === "deleted") {
+            const delRes = await fetch(`/api/files/${encodeURIComponent(filename)}`, { method: "DELETE" });
+            if (delRes.ok) {
+              await MarkdownStorage.unmarkDirty(filename);
+            }
+            continue;
+          }
+
           const content = await MarkdownStorage.read(filename);
           if (content !== null) {
             const putRes = await fetch(`/api/files/${encodeURIComponent(filename)}`, {
@@ -7490,6 +7509,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const trashBtn = document.getElementById("markdownTrashBtn");
       if (trashBtn) {
         trashBtn.addEventListener("click", () => this.trashCurrentNote());
+      }
+
+      const exportBtn = document.getElementById("markdownExportBtn");
+      if (exportBtn) {
+        exportBtn.addEventListener("click", () => this.exportCurrentNote());
       }
 
       // Drag and drop & paste d'images
@@ -7775,6 +7799,41 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       } catch (e) {
         showToast("Erreur lors de la suppression", "error");
+      }
+    },
+
+    async exportCurrentNote() {
+      if (!this.currentFilename) {
+        showToast("Aucune note ouverte à exporter", "warning");
+        return;
+      }
+      try {
+        let content = "";
+        if (this.editorInstance && typeof this.editorInstance.getMarkdown === "function") {
+          content = this.editorInstance.getMarkdown();
+        } else {
+          const root = document.getElementById("milkdownRoot");
+          const ta = root ? root.querySelector("textarea") : null;
+          if (ta) {
+            content = ta.value;
+          } else {
+            content = (await MarkdownStorage.read(this.currentFilename)) || "";
+          }
+        }
+
+        const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = this.currentFilename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast(`Note "${this.currentFilename}" exportée`, "success");
+      } catch (err) {
+        console.error("[Markdown] Erreur lors de l'exportation:", err);
+        showToast("Erreur lors de l'exportation de la note", "error");
       }
     },
 

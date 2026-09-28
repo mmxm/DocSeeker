@@ -45,3 +45,6 @@ lto = "thin"
 codegen-units = 16
 strip = "debuginfo"
 panic = "unwind"
+
+[dev-dependencies]
+filetime = "0.2"

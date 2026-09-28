@@ -130,6 +130,12 @@ pub async fn save_file_handler(
             .into_response();
     }
 
+    // Nettoyer d'éventuels résidus en corbeille (restauration implicite)
+    let trash_target = state.config.trash_dir.join(format!("del_{}", clean_fname));
+    let trash_meta = state.config.trash_dir.join(format!("del_{}.meta.json", clean_fname));
+    let _ = fs::remove_file(&trash_target);
+    let _ = fs::remove_file(&trash_meta);
+
     // Déclencher l'indexation
     let doc_id = match state.db.get() {
         Ok(conn) => {
@@ -145,7 +151,7 @@ pub async fn save_file_handler(
             match existing_id {
                 Some(id) => {
                     let _ = conn.execute(
-                        "UPDATE documents SET status = 'pending', updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+                        "UPDATE documents SET status = 'pending', deleted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
                         params![id],
                     );
                     state.pipeline.enqueue(id);

@@ -8,12 +8,40 @@ use crate::document::scanner::collect_document_files_recursive;
 use crate::document::trash::list_trash;
 use crate::pdf::indexer::compute_file_hash;
 
+fn deserialize_flexible_timestamp<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let v = serde_json::Value::deserialize(deserializer)?;
+    match v {
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(if i > 1_000_000_000_000 { i / 1000 } else { i })
+            } else {
+                Err(D::Error::custom("timestamp numérique invalide"))
+            }
+        }
+        serde_json::Value::String(s) => {
+            if let Ok(ts) = s.parse::<i64>() {
+                Ok(if ts > 1_000_000_000_000 { ts / 1000 } else { ts })
+            } else if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                Ok(dt.timestamp())
+            } else {
+                Err(D::Error::custom("format timestamp non reconnu"))
+            }
+        }
+        _ => Err(D::Error::custom("mtime doit être un nombre ou une chaîne")),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientFileEntry {
     pub filename: String,
     #[serde(default)]
     pub hash: Option<String>,
-    pub mtime: i64, // secondes unix
+    #[serde(deserialize_with = "deserialize_flexible_timestamp")]
+    pub mtime: i64,
     #[serde(default)]
     pub status: Option<String>,
 }
@@ -85,11 +113,28 @@ pub fn compute_sync_plan(config: &Config, req: &SyncManifestRequest) -> SyncPlan
         client_file_names.insert(fname.clone());
 
         if let Some((server_path, server_mtime)) = server_files_map.get(fname) {
+            // Cas où le client a supprimé le fichier en local
+            if client_file.status.as_deref() == Some("deleted") {
+                if client_file.mtime >= *server_mtime {
+                    // La suppression locale client est plus récente que la version serveur -> push (qui déclenchera le DELETE serveur)
+                    push.push(fname.clone());
+                } else {
+                    // Le serveur a une version modifiée après la suppression client -> pull (restauration côté client)
+                    pull.push(PullItem {
+                        filename: fname.clone(),
+                        reason: "server_newer_than_deletion".to_string(),
+                    });
+                }
+                continue;
+            }
+
             // Fichier présent sur les deux
-            if client_file.mtime > *server_mtime + 1 {
-                // Client plus récent -> push
+            let is_client_dirty = matches!(client_file.status.as_deref(), Some("modified") | Some("created"));
+
+            if is_client_dirty || client_file.mtime > *server_mtime {
+                // Client modifié localement ou plus récent -> push
                 push.push(fname.clone());
-            } else if *server_mtime > client_file.mtime + 1 {
+            } else if *server_mtime > client_file.mtime {
                 // Serveur plus récent -> pull
                 pull.push(PullItem {
                     filename: fname.clone(),
@@ -107,7 +152,10 @@ pub fn compute_sync_plan(config: &Config, req: &SyncManifestRequest) -> SyncPlan
             }
         } else if let Some(trash_deleted_at) = server_trash_map.get(fname) {
             // Le fichier est dans la corbeille du serveur
-            if client_file.mtime > *trash_deleted_at {
+            if client_file.status.as_deref() == Some("deleted") {
+                // Déjà supprimé des deux côtés
+                delete_local.push(fname.clone());
+            } else if client_file.mtime > *trash_deleted_at {
                 // Modification client plus récente que la mise en corbeille -> Restauration implicite / push
                 push.push(fname.clone());
             } else {
@@ -115,8 +163,13 @@ pub fn compute_sync_plan(config: &Config, req: &SyncManifestRequest) -> SyncPlan
                 delete_local.push(fname.clone());
             }
         } else {
-            // Absent du serveur et de sa corbeille -> c'est un nouveau fichier créé par le client
-            push.push(fname.clone());
+            // Absent du serveur et de sa corbeille
+            if client_file.status.as_deref() == Some("deleted") {
+                delete_local.push(fname.clone());
+            } else {
+                // C'est un nouveau fichier créé par le client
+                push.push(fname.clone());
+            }
         }
     }
 
