@@ -65,45 +65,115 @@ pub async fn get_cover(
     headers: HeaderMap,
 ) -> Response {
     let cover_webp = state.config.covers_dir.join(format!("{}.webp", doc_id));
-    if !cover_webp.exists() {
-        let filename: Option<String> = {
-            let conn = match state.db.get() {
-                Ok(c) => c,
-                Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur DB").into_response(),
-            };
-            conn.query_row("SELECT filename FROM documents WHERE id = ?1", params![doc_id], |r| r.get(0)).ok()
+    let if_none_match = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
+
+    // 1. FAST-PATH: Servir immédiatement si le fichier WebP existe déjà sur disque
+    if cover_webp.exists() {
+        return serve_file_cache(&cover_webp, "image/webp", if_none_match).await;
+    }
+
+    // 2. Vérification DB : récupérer le nom et l'état du document
+    let (filename, status): (Option<String>, Option<String>) = {
+        let conn = match state.db.get() {
+            Ok(c) => c,
+            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur DB").into_response(),
         };
+        conn.query_row(
+            "SELECT filename, COALESCE(status, 'ready') FROM documents WHERE id = ?1",
+            params![doc_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap_or((None, None))
+    };
 
-        let fname = match filename {
-            Some(f) => f,
-            None => return (StatusCode::NOT_FOUND, "Document introuvable en base").into_response(),
-        };
+    let fname = match filename {
+        Some(f) => f,
+        None => return (StatusCode::NOT_FOUND, "Document introuvable en base").into_response(),
+    };
 
-        let file_path = match crate::pdf::indexer::resolve_pdf_path(&state.config.documents_dir, &fname) {
-            Some(p) => p,
-            None => return (StatusCode::NOT_FOUND, "Fichier PDF introuvable sur disque").into_response(),
-        };
-
-        let state_clone = Arc::clone(&state);
-        let cover_path_clone = cover_webp.clone();
-        let render_res = tokio::task::spawn_blocking(move || {
-            state_clone.pdf_engine.render_cover(&file_path, &cover_path_clone)
-        }).await;
-
-        match render_res {
-            Ok(Ok(())) => {},
-            Ok(Err(e)) => {
-                tracing::warn!("[Media] Échec génération couverture doc {}: {}", doc_id, e);
-                return (StatusCode::NOT_FOUND, "Échec rendu couverture").into_response();
-            },
-            Err(e) => {
-                tracing::warn!("[Media] Erreur tâche bloquante couverture doc {}: {}", doc_id, e);
-                return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur rendu couverture").into_response();
-            }
+    // Si le document est en attente ou en cours d'indexation par le pipeline,
+    // renvoyer immédiatement 202 Accepted sans bloquer sur Pdfium
+    if let Some(ref st) = status {
+        if st == "pending" || st == "indexing" {
+            return (StatusCode::ACCEPTED, "Couverture en cours de génération").into_response();
         }
     }
 
-    let if_none_match = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
+    let file_path = match crate::pdf::indexer::resolve_pdf_path(&state.config.documents_dir, &fname) {
+        Some(p) => p,
+        None => return (StatusCode::NOT_FOUND, "Fichier PDF introuvable sur disque").into_response(),
+    };
+
+    // 3. Coalescence Single-Flight pour la couverture de ce document
+    let flight_key = format!("cover_{}", doc_id);
+    let maybe_wait_notify = {
+        let mut inflight = match state.crop_in_flight.lock() {
+            Ok(guard) => guard,
+            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur lock in-flight").into_response(),
+        };
+        if let Some(notify) = inflight.get(&flight_key) {
+            Some(Arc::clone(notify))
+        } else {
+            inflight.insert(flight_key.clone(), Arc::new(tokio::sync::Notify::new()));
+            None
+        }
+    };
+
+    if let Some(notify) = maybe_wait_notify {
+        notify.notified().await;
+        if cover_webp.exists() {
+            return serve_file_cache(&cover_webp, "image/webp", if_none_match).await;
+        }
+    }
+
+    struct CoverFlightGuard {
+        key: String,
+        state: Arc<AppState>,
+    }
+    impl Drop for CoverFlightGuard {
+        fn drop(&mut self) {
+            if let Ok(mut inflight) = self.state.crop_in_flight.lock() {
+                if let Some(notify) = inflight.remove(&self.key) {
+                    notify.notify_waiters();
+                }
+            }
+        }
+    }
+    let _flight_guard = CoverFlightGuard {
+        key: flight_key,
+        state: Arc::clone(&state),
+    };
+
+    // 4. Concurrence bornée via le sémaphore pour préserver les ressources CPU
+    let _permit = match state.crop_semaphore.clone().acquire_owned().await {
+        Ok(p) => p,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur sémaphore").into_response(),
+    };
+
+    if cover_webp.exists() {
+        drop(_permit);
+        drop(_flight_guard);
+        return serve_file_cache(&cover_webp, "image/webp", if_none_match).await;
+    }
+
+    let state_clone = Arc::clone(&state);
+    let cover_path_clone = cover_webp.clone();
+    let render_res = tokio::task::spawn_blocking(move || {
+        let _permit = _permit;
+        state_clone.pdf_engine.render_cover(&file_path, &cover_path_clone)
+    }).await;
+
+    match render_res {
+        Ok(Ok(())) => {},
+        Ok(Err(e)) => {
+            tracing::warn!("[Media] Échec génération couverture doc {}: {}", doc_id, e);
+            return (StatusCode::NOT_FOUND, "Échec rendu couverture").into_response();
+        },
+        Err(e) => {
+            tracing::warn!("[Media] Erreur tâche bloquante couverture doc {}: {}", doc_id, e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur rendu couverture").into_response();
+        }
+    }
+
     serve_file_cache(&cover_webp, "image/webp", if_none_match).await
 }
 

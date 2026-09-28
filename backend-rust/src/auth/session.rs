@@ -3,8 +3,15 @@ use rand::RngCore;
 use rusqlite::{params, Connection, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration as StdDuration, Instant};
 
 use super::user_agent::ParsedUserAgent;
+
+lazy_static::lazy_static! {
+    static ref VALIDATED_SESSIONS_CACHE: Mutex<HashMap<String, Instant>> = Mutex::new(HashMap::new());
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SessionInfo {
@@ -21,6 +28,36 @@ pub struct SessionInfo {
 pub struct SessionManager;
 
 impl SessionManager {
+    /// Vérifie si le token a été validé récemment en mémoire (< 30 secondes).
+    pub fn is_token_cached_valid(token: &str) -> bool {
+        if let Ok(cache) = VALIDATED_SESSIONS_CACHE.lock() {
+            if let Some(last_validated) = cache.get(token) {
+                if last_validated.elapsed() < StdDuration::from_secs(30) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Enregistre un token valide dans le cache mémoire.
+    pub fn mark_token_valid(token: &str) {
+        if let Ok(mut cache) = VALIDATED_SESSIONS_CACHE.lock() {
+            cache.insert(token.to_string(), Instant::now());
+        }
+    }
+
+    /// Invalide le cache mémoire pour un token spécifique ou pour toutes les sessions.
+    pub fn invalidate_token_cache(token: Option<&str>) {
+        if let Ok(mut cache) = VALIDATED_SESSIONS_CACHE.lock() {
+            if let Some(t) = token {
+                cache.remove(t);
+            } else {
+                cache.clear();
+            }
+        }
+    }
+
     /// Génère un identifiant de session aléatoire de 256 bits (64 caractères hexadécimaux).
     pub fn generate_token() -> String {
         let mut bytes = [0u8; 32];
@@ -51,6 +88,7 @@ impl SessionManager {
             params![token, expires_str, user_agent, ip_address],
         )?;
 
+        Self::mark_token_valid(&token);
         Ok(token)
     }
 
@@ -120,12 +158,14 @@ impl SessionManager {
 
     /// Détruit immédiatement une session par son token brut (déconnexion réelle).
     pub fn revoke_session(conn: &Connection, token: &str) -> Result<()> {
+        Self::invalidate_token_cache(Some(token));
         conn.execute("DELETE FROM sessions WHERE id = ?1", params![token])?;
         Ok(())
     }
 
     /// Révoque une session à partir de son hash public ou de son id brut.
     pub fn revoke_session_by_id_or_hash(conn: &Connection, target_id_or_hash: &str) -> Result<bool> {
+        Self::invalidate_token_cache(None);
         // 1. Essai direct par token brut
         let affected = conn.execute("DELETE FROM sessions WHERE id = ?1", params![target_id_or_hash])?;
         if affected > 0 {
@@ -148,8 +188,10 @@ impl SessionManager {
 
     /// Révoque toutes les sessions, avec option d'exclure la session courante.
     pub fn revoke_all_sessions(conn: &Connection, except_token: Option<&str>) -> Result<usize> {
+        Self::invalidate_token_cache(None);
         if let Some(token) = except_token {
             let affected = conn.execute("DELETE FROM sessions WHERE id != ?1", params![token])?;
+            Self::mark_token_valid(token);
             Ok(affected)
         } else {
             let affected = conn.execute("DELETE FROM sessions", [])?;

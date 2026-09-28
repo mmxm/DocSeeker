@@ -35,6 +35,12 @@ pub async fn require_auth_middleware(
         }
     };
 
+    // 1. Fast-path en mémoire vive : validation instantanée sans toucher à SQLite ni au pool r2d2
+    if SessionManager::is_token_cached_valid(&token) {
+        return next.run(request).await;
+    }
+
+    // 2. Slow-path : vérification en base de données avec restitution immédiate de la connexion
     let is_valid = {
         let conn = match state.db.get() {
             Ok(c) => c,
@@ -51,7 +57,12 @@ pub async fn require_auth_middleware(
         };
 
         match SessionManager::validate_session(&conn, &token) {
-            Ok(valid) => valid,
+            Ok(valid) => {
+                if valid {
+                    SessionManager::mark_token_valid(&token);
+                }
+                valid
+            }
             Err(e) => {
                 eprintln!("[Auth] Erreur validation session: {:?}", e);
                 false

@@ -180,8 +180,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(e.into());
     }
 
-    // Étape 2 : Création du pool de connexions (WAL mode, 8 connexions max)
-    info!("Étape 2 : Création du pool de connexions SQLite (r2d2, max 8)...");
+    // Étape 2 : Création du pool de connexions (WAL mode, 16 connexions max)
+    info!("Étape 2 : Création du pool de connexions SQLite (r2d2, max 16)...");
     let pool = match db::create_pool(&config.db_path) {
         Ok(p) => p,
         Err(e) => {

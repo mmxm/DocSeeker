@@ -3992,7 +3992,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 <span>Échec</span>
               </div>
             ` : ''}
-            <img src="${PLACEHOLDER_COVER_SVG}" data-src="${doc.cover_url}" class="doc-cover-img dynamic-main-crop" alt="Couverture" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
+            <img src="${PLACEHOLDER_COVER_SVG}" ${isIndexing || isFailed ? '' : `data-src="${doc.cover_url}" class="doc-cover-img dynamic-main-crop"`} alt="Couverture" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
           </div>
           <div class="doc-card-vignettes">
             <div class="vignettes-ribbon-container">
