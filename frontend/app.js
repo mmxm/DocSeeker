@@ -2417,8 +2417,15 @@ document.addEventListener("DOMContentLoaded", () => {
     currentActiveOccurrenceIndex = -1;
     updateOccurrenceStepperUI();
     try {
-      if (pdfFrame && pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
-        pdfFrame.contentWindow.PDFViewerApplication.close();
+      const win = pdfFrame?.contentWindow;
+      if (win && win.PDFViewerApplication) {
+        if (win.PDFViewerApplication.findController) {
+          try {
+            win.PDFViewerApplication.findController.setDocument(null);
+            if (win.PDFViewerApplication.findBar) win.PDFViewerApplication.findBar.reset();
+          } catch (e) { }
+        }
+        win.PDFViewerApplication.close();
       }
     } catch (e) { }
     if (window._currentPdfBlobUrl) {
@@ -5209,6 +5216,12 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         const win = pdfFrame?.contentWindow;
         if (win && win.PDFViewerApplication && typeof win.PDFViewerApplication.close === 'function') {
+          if (win.PDFViewerApplication.findController) {
+            try {
+              win.PDFViewerApplication.findController.setDocument(null);
+              if (win.PDFViewerApplication.findBar) win.PDFViewerApplication.findBar.reset();
+            } catch (e) { }
+          }
           win.PDFViewerApplication.close();
         }
       } catch (e) { }

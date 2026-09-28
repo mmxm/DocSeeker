@@ -5526,6 +5526,7 @@ class PDFFindController {
       this.#reset();
     }
     if (!pdfDocument) {
+      this._pdfDocument = null;
       return;
     }
     this._pdfDocument = pdfDocument;
@@ -5635,6 +5636,9 @@ class PDFFindController {
     this._firstPageCapability = Promise.withResolvers();
   }
   get #query() {
+    if (!this.#state) {
+      return "";
+    }
     const {
       query
     } = this.#state;
@@ -5732,6 +5736,9 @@ class PDFFindController {
     return [isUnicode, query];
   }
   #calculateMatch(pageIndex) {
+    if (!this._pdfDocument || !this.#state) {
+      return;
+    }
     const query = this.#query;
     if (query.length === 0) {
       return;
@@ -5780,7 +5787,7 @@ class PDFFindController {
         return `(${queryPart})`;
       }).join("|");
     }
-    if (!query) {
+    if (!query || !this.#state) {
       return undefined;
     }
     const {
@@ -5817,7 +5824,21 @@ class PDFFindController {
       } = Promise.withResolvers();
       this._extractTextPromises[i] = promise;
       deferred = deferred.then(() => {
-        return this._pdfDocument.getPage(i + 1).then(pdfPage => pdfPage.getTextContent(textOptions)).then(textContent => {
+        if (!this._pdfDocument) {
+          resolve();
+          return;
+        }
+        return this._pdfDocument.getPage(i + 1).then(pdfPage => {
+          if (!this._pdfDocument) {
+            resolve();
+            return;
+          }
+          return pdfPage.getTextContent(textOptions);
+        }).then(textContent => {
+          if (!textContent || !this._pdfDocument) {
+            resolve();
+            return;
+          }
           const strBuf = [];
           for (const textItem of textContent.items) {
             strBuf.push(textItem.str);
@@ -5828,6 +5849,10 @@ class PDFFindController {
           [this._pageContents[i], this._pageDiffs[i], this._hasDiacritics[i]] = normalize(strBuf.join(""));
           resolve();
         }, reason => {
+          if (!this._pdfDocument) {
+            resolve();
+            return;
+          }
           console.error(`Unable to get text content for page ${i + 1}`, reason);
           this._pageContents[i] = "";
           this._pageDiffs[i] = null;
@@ -5853,6 +5878,9 @@ class PDFFindController {
     });
   }
   #nextMatch() {
+    if (!this._pdfDocument || !this.#state) {
+      return;
+    }
     const previous = this.#state.findPrevious;
     const currentPageIndex = this._linkService.page - 1;
     const numPages = this._linkService.pagesCount;
@@ -13752,6 +13780,7 @@ const PDFViewerApplication = {
     this.pdfLoadingTask = null;
     if (this.pdfDocument) {
       this.pdfDocument = null;
+      this.findController?.setDocument(null);
       this.pdfThumbnailViewer?.setDocument(null);
       this.pdfViewer.setDocument(null);
       this.pdfLinkService.setDocument(null);
