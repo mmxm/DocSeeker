@@ -36,8 +36,6 @@ CREATE INDEX IF NOT EXISTS idx_documents_title ON documents(title);
 CREATE INDEX IF NOT EXISTS idx_documents_filename ON documents(filename);
 CREATE INDEX IF NOT EXISTS idx_documents_title_lower ON documents(LOWER(title));
 CREATE INDEX IF NOT EXISTS idx_documents_filename_lower ON documents(LOWER(filename));
-CREATE INDEX IF NOT EXISTS idx_documents_doc_type ON documents(doc_type);
-CREATE INDEX IF NOT EXISTS idx_documents_deleted_at ON documents(deleted_at);
 "#;
 
 pub const CREATE_PAGES_TABLE: &str = r#"

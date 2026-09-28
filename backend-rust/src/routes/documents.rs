@@ -11,7 +11,7 @@ use tokio::io::AsyncWriteExt;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::AppState;
-use crate::pdf::indexer::{reindex_all_library, remove_document, scan_and_sync_documents};
+use crate::pdf::indexer::{reindex_all_library, scan_and_sync_documents};
 
 #[derive(Serialize)]
 pub struct DocumentListItem {
@@ -197,8 +197,16 @@ pub async fn update_document(
             (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Document introuvable"}))).into_response()
         })?;
 
-        // Conserver le dossier parent physique actuel
-        let new_file_base = format!("{}.pdf", clean_title);
+        // Conserver l'extension du fichier d'origine (.md, .pdf, etc.)
+        let ext = std::path::Path::new(&current_fname)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("pdf");
+        let new_file_base = if clean_title.ends_with(&format!(".{}", ext)) {
+            clean_title.to_string()
+        } else {
+            format!("{}.{}", clean_title, ext)
+        };
         let new_relative_fname = match std::path::Path::new(&current_fname).parent() {
             Some(p) if !p.as_os_str().is_empty() => p.join(&new_file_base).to_string_lossy().to_string(),
             _ => new_file_base,
@@ -217,7 +225,7 @@ pub async fn update_document(
             }
 
             // Renommage physique du fichier sur le disque du volume
-            if let Some(src_path) = crate::pdf::indexer::resolve_pdf_path(&state.config.documents_dir, &current_fname) {
+            if let Some(src_path) = crate::document::trash::resolve_file_path(&state.config.documents_dir, &current_fname) {
                 let dest_path = state.config.documents_dir.join(&norm_new_fname);
                 if let Some(parent) = dest_path.parent() {
                     let _ = std::fs::create_dir_all(parent);
@@ -228,6 +236,19 @@ pub async fn update_document(
                         return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Impossible de renommer le fichier sur le disque : {}", e)}))).into_response());
                     }
                     tracing::info!("[Documents] Fichier renommé physiquement sur le disque : {} -> {}", src_path.display(), dest_path.display());
+                }
+
+                // Renommage transparent du dossier assets associé si markdown
+                if current_fname.ends_with(".md") || current_fname.ends_with(".markdown") {
+                    let old_stem = std::path::Path::new(&current_fname).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    let new_stem = std::path::Path::new(&norm_new_fname).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    if !old_stem.is_empty() && !new_stem.is_empty() && old_stem != new_stem {
+                        let old_assets = state.config.documents_dir.join("assets").join(old_stem);
+                        let new_assets = state.config.documents_dir.join("assets").join(new_stem);
+                        if old_assets.exists() {
+                            let _ = std::fs::rename(&old_assets, &new_assets);
+                        }
+                    }
                 }
             }
 
@@ -353,11 +374,19 @@ pub async fn delete_document_handler(
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
-    match remove_document(&conn, &state.config, doc_id) {
-        Ok(true) => {
-            Ok(Json(serde_json::json!({"status": "ok", "deleted_id": doc_id})))
+    let filename: Option<String> = conn
+        .query_row("SELECT filename FROM documents WHERE id = ?1", params![doc_id], |r| r.get(0))
+        .ok();
+
+    let fname = match filename {
+        Some(f) => f,
+        None => return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Document introuvable"}))).into_response()),
+    };
+
+    match crate::document::trash::soft_delete(&conn, &state.config, &fname) {
+        Ok(()) => {
+            Ok(Json(serde_json::json!({"status": "ok", "deleted_id": doc_id, "trashed": true})))
         }
-        Ok(false) => Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Document introuvable"}))).into_response()),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response()),
     }
 }
@@ -748,6 +777,7 @@ pub struct OfflineBundleDocument {
     pub id: i64,
     pub filename: String,
     pub title: String,
+    pub doc_type: String,
     pub file_hash: Option<String>,
     pub folder_id: Option<i64>,
     pub total_pages: i64,
@@ -800,7 +830,7 @@ pub async fn get_offline_bundle(
 
     // 1. Récupération des métadonnées du document
     let mut stmt_doc = conn.prepare(
-        "SELECT id, filename, title, file_hash, folder_id, total_pages, file_size, created_at, COALESCE(updated_at, created_at) \
+        "SELECT id, filename, title, COALESCE(doc_type, 'pdf'), file_hash, folder_id, total_pages, file_size, created_at, COALESCE(updated_at, created_at) \
          FROM documents WHERE id = ?1 AND COALESCE(status, 'ready') = 'ready'"
     ).map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response()
@@ -811,12 +841,13 @@ pub async fn get_offline_bundle(
             id: row.get(0)?,
             filename: row.get(1)?,
             title: row.get(2)?,
-            file_hash: row.get(3)?,
-            folder_id: row.get(4)?,
-            total_pages: row.get(5)?,
-            file_size: row.get(6)?,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
+            doc_type: row.get(3)?,
+            file_hash: row.get(4)?,
+            folder_id: row.get(5)?,
+            total_pages: row.get(6)?,
+            file_size: row.get(7)?,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
         })
     }).map_err(|_| {
         (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Document introuvable ou non prêt"}))).into_response()

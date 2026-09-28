@@ -310,3 +310,94 @@ async fn test_rebuild_db_from_filesystem_recovery() {
     let folder_count: i64 = conn.query_row("SELECT COUNT(*) FROM folders WHERE name = 'Cardiologie'", [], |r| r.get(0)).unwrap();
     assert_eq!(folder_count, 1);
 }
+
+#[tokio::test]
+async fn test_markdown_rename_assets_and_soft_delete_handler() {
+    let (state, token, _tmp) = setup_test_app();
+    let router = create_api_router(Arc::clone(&state)).with_state(Arc::clone(&state));
+    let cookie = format!("docseeker_session={}", token);
+
+    // 1. Créer une note Markdown
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/files")
+        .header(header::COOKIE, &cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::json!({
+            "filename": "biologie.md",
+            "content": "# Biologie Cellulaire\n\nNotes de cours."
+        }).to_string()))
+        .unwrap();
+
+    let res = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let doc_id = json["doc_id"].as_i64().unwrap();
+
+    // 2. Créer un faux asset physique pour cette note
+    let assets_dir = state.config.documents_dir.join("assets").join("biologie");
+    std::fs::create_dir_all(&assets_dir).unwrap();
+    std::fs::write(assets_dir.join("cellule.png"), b"FAKE_PNG_BYTES").unwrap();
+
+    // 3. Renommer la note via PATCH /api/documents/:id
+    let req = Request::builder()
+        .method("PATCH")
+        .uri(format!("/api/documents/{}", doc_id))
+        .header(header::COOKIE, &cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::json!({
+            "title": "Biochimie"
+        }).to_string()))
+        .unwrap();
+
+    let res = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Vérifier que le fichier physique et le dossier d'assets ont été renommés
+    assert!(state.config.documents_dir.join("Biochimie.md").exists());
+    assert!(!state.config.documents_dir.join("biologie.md").exists());
+    assert!(state.config.documents_dir.join("assets").join("Biochimie").join("cellule.png").exists());
+    assert!(!state.config.documents_dir.join("assets").join("biologie").exists());
+
+    // Indexer la note pour qu'elle passe au statut 'ready'
+    {
+        let conn = state.db.get().unwrap();
+        docseeker_backend::document::markdown::index_markdown_file(
+            &conn,
+            &state.config,
+            &state.config.documents_dir.join("Biochimie.md"),
+            "Biochimie.md",
+        ).unwrap();
+    }
+
+    // 4. Vérifier GET /api/documents/:id/offline-bundle
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/api/documents/{}/offline-bundle", doc_id))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap();
+
+    let res = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let bundle: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(bundle["document"]["doc_type"], "markdown");
+
+    // 5. Supprimer via DELETE /api/documents/:id
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/documents/{}", doc_id))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap();
+
+    let res = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Vérifier que le document est parti en corbeille (soft-delete)
+    assert!(!state.config.documents_dir.join("Biochimie.md").exists());
+    assert!(state.config.trash_dir.join("del_Biochimie.md").exists());
+    assert!(state.config.trash_dir.join("del_Biochimie.md.meta.json").exists());
+}

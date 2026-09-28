@@ -63,11 +63,17 @@ pub struct DocSearchResponse {
     pub occurrences: Vec<OccurrenceResult>,
 }
 
+fn default_doc_type() -> String {
+    "pdf".to_string()
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct OfflineBundleDocument {
     pub id: i64,
     pub filename: String,
     pub title: String,
+    #[serde(default = "default_doc_type")]
+    pub doc_type: String,
     pub file_hash: Option<String>,
     pub folder_id: Option<i64>,
     pub total_pages: i64,

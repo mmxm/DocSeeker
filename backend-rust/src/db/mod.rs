@@ -138,6 +138,12 @@ pub fn init_db(db_path: &Path) -> Result<()> {
     ensure_column(&conn, "documents", "doc_type", "TEXT DEFAULT 'pdf'")?;
     ensure_column(&conn, "documents", "deleted_at", "DATETIME")?;
 
+    // Création des index sur les colonnes migrées (après s'être assuré de leur existence)
+    conn.execute_batch("
+        CREATE INDEX IF NOT EXISTS idx_documents_doc_type ON documents(doc_type);
+        CREATE INDEX IF NOT EXISTS idx_documents_deleted_at ON documents(deleted_at);
+    ")?;
+
     info!("Base de données SQLite initialisée avec succès : {:?}", db_path);
     Ok(())
 }
