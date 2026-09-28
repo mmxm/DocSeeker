@@ -243,3 +243,86 @@ pub fn find_occurrences_on_page(
 
     results
 }
+
+pub fn find_occurrences_in_text(
+    text: &str,
+    query_terms: &[String],
+    query_hash: &str,
+    doc_id: i64,
+    page_number: i64,
+    bm25_score: f64,
+    encoded_terms: &str,
+) -> Vec<OccurrenceResult> {
+    let norm_terms: Vec<String> = query_terms
+        .iter()
+        .filter(|t| t.trim().len() > 1)
+        .map(|t| normalize_text(t))
+        .collect();
+
+    if norm_terms.is_empty() || text.is_empty() {
+        return Vec::new();
+    }
+
+    let mut results = Vec::new();
+    let mut occ_idx = 0;
+    let lines: Vec<&str> = text.lines().collect();
+    let total_len = text.len().max(1) as f64;
+    let mut current_offset = 0;
+
+    for (line_idx, line) in lines.iter().enumerate() {
+        let norm_line = normalize_text(line);
+        if norm_line.trim().is_empty() {
+            current_offset += line.len() + 1;
+            continue;
+        }
+
+        let mut matched_terms_in_line = Vec::new();
+        for term in &norm_terms {
+            if match_word(&norm_line, term) || norm_line.contains(term.as_str()) {
+                matched_terms_in_line.push(term.clone());
+            }
+        }
+
+        if !matched_terms_in_line.is_empty() {
+            matched_terms_in_line.sort();
+            matched_terms_in_line.dedup();
+
+            let y_ratio = (current_offset as f64 / total_len).clamp(0.0, 1.0);
+            let snippet = if line.len() > 140 {
+                let first_match = matched_terms_in_line.first().unwrap();
+                let pos = norm_line.find(first_match.as_str()).unwrap_or(0);
+                let start = pos.saturating_sub(40);
+                let end = (pos + 100).min(line.len());
+                format!("...{}...", &line[start..end])
+            } else {
+                line.trim().to_string()
+            };
+
+            let crop_url = format!(
+                "/api/crop/{}/{}/{}?h={}&terms={}",
+                doc_id, page_number, occ_idx, query_hash, encoded_terms
+            );
+
+            results.push(OccurrenceResult {
+                page_number,
+                occ_id: occ_idx,
+                crop_url,
+                text_snippet: snippet,
+                distinct_terms_count: matched_terms_in_line.len(),
+                matched_terms: matched_terms_in_line,
+                y_ratio: (y_ratio * 1000.0).round() / 1000.0,
+                y_pos: (line_idx as f64 * 20.0),
+                rect: [0.0, (line_idx as f64 * 20.0), 500.0, ((line_idx + 1) as f64 * 20.0)],
+                highlight_rects: vec![],
+                bm25_score,
+                font_size: 14.0,
+            });
+
+            occ_idx += 1;
+        }
+
+        current_offset += line.len() + 1;
+    }
+
+    results
+}

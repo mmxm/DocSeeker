@@ -265,7 +265,7 @@ pub fn build_doc_search_sql(doc_id: i64, query: &str) -> (String, Vec<String>, S
         .join(" AND ");
 
     let sql = format!(
-        "SELECT p.page_number, p.words_json, bm25(pages_fts) as page_bm25 \
+        "SELECT p.page_number, p.words_json, bm25(pages_fts) as page_bm25, p.text_content \
          FROM pages_fts \
          JOIN pages p ON p.id = pages_fts.rowid \
          WHERE pages_fts MATCH '{match_query}' AND p.doc_id = {doc_id} \

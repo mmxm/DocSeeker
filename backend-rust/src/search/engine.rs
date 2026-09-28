@@ -249,7 +249,7 @@ pub fn search_documents(
                 doc_relevance_score: r.get(7)?,
                 matching_pages_count: r.get(8)?,
                 page_number: r.get(9)?,
-                words_json: r.get(10)?,
+                words_json: r.get::<_, Option<String>>(10)?.unwrap_or_else(|| "[]".to_string()),
                 page_bm25: r.get(11)?,
                 total_docs: r.get::<_, i64>(12)? as usize,
                 total_occurrences: r.get::<_, i64>(13)? as usize,
@@ -335,27 +335,42 @@ pub fn search_within_document(
     let rows = stmt.query_map([], |row| {
         Ok((
             row.get::<_, i64>(0)?,
-            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(1)?.unwrap_or_else(|| "[]".to_string()),
             row.get::<_, f64>(2)?,
+            row.get::<_, Option<String>>(3)?.unwrap_or_default(),
         ))
     })?;
 
     let mut occurrences = Vec::new();
 
     for r in rows.flatten() {
-        let (page_number, words_json, bm25_score) = r;
+        let (page_number, words_json, bm25_score, text_content) = r;
         let words_data: Vec<WordEntry> = serde_json::from_str(&words_json).unwrap_or_default();
-        let occs = find_occurrences_on_page(
-            &words_data,
-            &terms,
-            &query_hash,
-            doc_id,
-            page_number,
-            bm25_score,
-            &encoded_terms,
-            842.0,
-        );
-        occurrences.extend(occs);
+        if !words_data.is_empty() {
+            let occs = find_occurrences_on_page(
+                &words_data,
+                &terms,
+                &query_hash,
+                doc_id,
+                page_number,
+                bm25_score,
+                &encoded_terms,
+                842.0,
+            );
+            occurrences.extend(occs);
+        } else if !text_content.trim().is_empty() {
+            // Note Markdown ou document sans coordonnées géométriques
+            let occs = search_core::matching::find_occurrences_in_text(
+                &text_content,
+                &terms,
+                &query_hash,
+                doc_id,
+                page_number,
+                bm25_score,
+                &encoded_terms,
+            );
+            occurrences.extend(occs);
+        }
     }
 
     let (total_occurrences, paged_occurrences) = search_core::process_doc_search_results(occurrences, offset, limit);

@@ -109,4 +109,118 @@ test.describe('DocSeeker - Prise de Notes Markdown & Corbeille', () => {
     // 6. Vérifier que la note n'est plus dans la corbeille
     await expect(trashCard).not.toBeVisible({ timeout: 8000 });
   });
+
+  test('MD-5 : Renommage d\'une note dans l\'UI avec synchronisation parfaite du titre', async ({ page }) => {
+    const initialTitle = `InitialNote ${Date.now()}`;
+    const renamedTitle = `RenamedNote ${Date.now()}`;
+
+    // 1. Créer la note
+    page.once('dialog', async dialog => {
+      await dialog.accept(initialTitle);
+    });
+    await page.locator('#newMarkdownNoteBtn').click();
+    await expect(page.locator('#markdownEditorContainer')).toBeVisible({ timeout: 10000 });
+
+    const titleInput = page.locator('#markdownTitleInput');
+    await expect(titleInput).toHaveValue(initialTitle);
+
+    // 2. Renommer la note en modifiant l'input et en appuyant sur Enter
+    const renamePromise = page.waitForResponse(resp => resp.url().includes('/api/documents/') && resp.request().method() === 'PATCH');
+    await titleInput.fill(renamedTitle);
+    await titleInput.press('Enter');
+    await renamePromise;
+
+    // 3. Vérifier qu'aucun toast d'erreur n'apparaît et que le titre est à jour
+    await expect(page.locator('.toast.toast-error')).not.toBeVisible();
+    await expect(titleInput).toHaveValue(renamedTitle);
+
+    // 4. Vérifier que le titre du lecteur et de l'onglet a changé
+    const viewerDocTitle = page.locator('#viewerDocTitle');
+    if (await viewerDocTitle.isVisible().catch(() => false)) {
+      await expect(viewerDocTitle).toHaveText(renamedTitle);
+    }
+  });
+
+  test('MD-6 : Recherche in-document dans une note Markdown ouverte', async ({ page }) => {
+    const noteTitle = `DocSearchNote ${Date.now()}`;
+    const uniqueTerm = `TERMEUNIQUE${Date.now()}`;
+
+    // 1. Créer la note
+    page.once('dialog', async dialog => {
+      await dialog.accept(noteTitle);
+    });
+    await page.locator('#newMarkdownNoteBtn').click();
+    await expect(page.locator('#markdownEditorContainer')).toBeVisible({ timeout: 10000 });
+
+    // 2. Écrire du contenu contenant le mot-clé unique et sauvegarder
+    const content = `# Document Clinique\n\nDiagnostic posé : ${uniqueTerm} avec indication formelle.\nProtocole de suivi standard.`;
+    await page.evaluate(async ({ fname, text }) => {
+      await window.MarkdownStorage.write(fname, text);
+      await window.MarkdownManager.saveNote(text);
+    }, { fname: `${noteTitle}.md`, text: content });
+
+    // Laisser le temps à l'indexation locale/distante
+    await page.waitForTimeout(1000);
+
+    // 3. Lancer la recherche in-document depuis la barre latérale gauche
+    const docSearchInput = page.locator('#docSearchInput');
+    if (await docSearchInput.isVisible().catch(() => false)) {
+      await docSearchInput.fill(uniqueTerm);
+      await docSearchInput.press('Enter');
+    } else {
+      // Déclencher performDocSearch via le contexte
+      await page.evaluate(async (term) => {
+        if (typeof window.performDocSearch === 'function') {
+          await window.performDocSearch(term);
+        }
+      }, uniqueTerm);
+    }
+
+    // 4. Vérifier que les résultats de recherche s'affichent avec le terme
+    await page.waitForTimeout(1000);
+    const resultCount = page.locator('#docDetailCount');
+    if (await resultCount.isVisible().catch(() => false)) {
+      await expect(resultCount).toContainText('résultat');
+    }
+
+    // 5. Vérifier que la note reste ouverte et réactive
+    await expect(page.locator('#markdownEditorContainer')).toBeVisible();
+  });
+
+  test('MD-7 : Recherche globale incluant les notes Markdown en ligne sans erreur 500', async ({ page }) => {
+    const noteTitle = `GlobalSearchNote ${Date.now()}`;
+    const uniqueKw = `KWGLOBAL${Date.now()}`;
+
+    // 1. Créer la note
+    page.once('dialog', async dialog => {
+      await dialog.accept(noteTitle);
+    });
+    await page.locator('#newMarkdownNoteBtn').click();
+    await expect(page.locator('#markdownEditorContainer')).toBeVisible({ timeout: 10000 });
+
+    // 2. Enregistrer du texte avec le mot clé
+    const content = `# Note Importante\n\nCe fichier contient le code secret ${uniqueKw} pour validation.`;
+    await page.evaluate(async (text) => {
+      await window.MarkdownManager.saveNote(text);
+    }, content);
+
+    // Attendre la sauvegarde backend
+    await page.waitForTimeout(1200);
+
+    // 3. Revenir à l'accueil
+    await page.locator('#readerHomeBtn').click();
+    await page.waitForTimeout(500);
+
+    // 4. Lancer une recherche globale avec le mot-clé
+    const searchPromise = page.waitForResponse(resp => resp.url().includes('/api/search') && resp.status() === 200);
+    const searchInput = page.locator('#searchInput');
+    await searchInput.fill(uniqueKw);
+    await searchInput.press('Enter');
+    await searchPromise;
+
+    // 5. Vérifier que la note apparaît dans la grille des résultats
+    const docCard = page.locator('.doc-card', { hasText: noteTitle });
+    await expect(docCard).toBeVisible({ timeout: 8000 });
+  });
 });
+

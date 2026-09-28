@@ -2781,7 +2781,19 @@ document.addEventListener("DOMContentLoaded", () => {
         activeTab.occId = occ.occ_id;
         activeTab.activeOccurrenceIndex = index;
       }
-      goToPageAndScrollToOccurrence(occ.page_number, targetRect, occ.y_ratio);
+      const mdContainer = document.getElementById("markdownEditorContainer");
+      if (mdContainer && mdContainer.style.display !== "none") {
+        const scrollContainer = mdContainer.querySelector(".milkdown-scroll-container") || mdContainer;
+        if (scrollContainer && occ.y_ratio !== undefined) {
+          const maxScroll = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+          scrollContainer.scrollTo({ top: maxScroll * (occ.y_ratio || 0), behavior: 'smooth' });
+        }
+        if (occ.matched_terms && occ.matched_terms.length > 0 && window.MarkdownManager) {
+          window.MarkdownManager.highlightTermInEditor(occ.matched_terms[0]);
+        }
+      } else {
+        goToPageAndScrollToOccurrence(occ.page_number, targetRect, occ.y_ratio);
+      }
     }
   }
 
@@ -7721,13 +7733,16 @@ document.addEventListener("DOMContentLoaded", () => {
       this.setStatus("offline", "Enregistré hors-ligne");
     },
 
+    _isRenaming: false,
+
     async handleTitleRename() {
       const input = document.getElementById("markdownTitleInput");
-      if (!input || !this.currentDocId) return;
+      if (!input || !this.currentDocId || this._isRenaming) return;
 
       const newTitle = input.value.trim();
       if (!newTitle || newTitle === this.currentTitle) return;
 
+      this._isRenaming = true;
       const oldFname = this.currentFilename;
       const newFname = newTitle.endsWith(".md") ? newTitle : `${newTitle}.md`;
 
@@ -7753,7 +7768,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
         this.currentTitle = newTitle;
         this.currentFilename = newFname;
-        showToast("Note renommée", "success");
+        input.value = newTitle;
+
+        // Mettre à jour l'en-tête du lecteur et l'onglet actif
+        const viewerDocTitle = document.getElementById("viewerDocTitle");
+        if (viewerDocTitle) viewerDocTitle.textContent = newTitle;
 
         const tab = tabManager.openTabs.find(t => Number(t.docId) === Number(this.currentDocId));
         if (tab) {
@@ -7764,8 +7783,38 @@ document.addEventListener("DOMContentLoaded", () => {
         if (typeof loadDocuments === "function") {
           loadDocuments(currentFolderId, false);
         }
+
+        showToast("Note renommée", "success");
       } catch (e) {
         showToast("Impossible de renommer la note", "error");
+      } finally {
+        this._isRenaming = false;
+      }
+    },
+
+    highlightTermInEditor(term) {
+      if (!term || !term.trim()) return;
+      const cleanTerm = term.trim().toLowerCase();
+      const root = document.getElementById("milkdownRoot");
+      if (!root) return;
+
+      // Recherche dans tous les éléments de texte de l'éditeur
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+      let node;
+      while ((node = walker.nextNode())) {
+        if (node.textContent && node.textContent.toLowerCase().includes(cleanTerm)) {
+          const parent = node.parentElement;
+          if (parent) {
+            parent.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            parent.style.transition = 'background-color 0.4s ease';
+            const origBg = parent.style.backgroundColor;
+            parent.style.backgroundColor = 'rgba(250, 204, 21, 0.4)';
+            setTimeout(() => {
+              parent.style.backgroundColor = origBg;
+            }, 1800);
+            break;
+          }
+        }
       }
     },
 

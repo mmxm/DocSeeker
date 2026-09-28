@@ -861,8 +861,13 @@ async function executeDocSearch(docId, queryStr) {
     await runReadWithRepair(() => db.exec({
       sql,
       callback: (row) => {
-        if (row && row[1]) {
-          rows.push([Number(row[0]), row[1], Number(row[2]) || 0.0]);
+        if (row) {
+          rows.push({
+            pageNumber: Number(row[0]),
+            wordsJson: row[1] || "[]",
+            bm25: Number(row[2]) || 0.0,
+            textContent: row[3] || ""
+          });
         }
       }
     }));
@@ -874,22 +879,66 @@ async function executeDocSearch(docId, queryStr) {
     return { doc_id: docId, query: queryStr, total_occurrences: 0, occurrences: [] };
   }
 
-  // Traitement en un seul appel Wasm optimisé (élimine N sérialisations/désérialisations JSON)
-  const docResult = JSON.parse(batch_find_and_process_doc_occurrences_wasm(
-    JSON.stringify(rows),
-    termsJson,
-    queryHash,
-    BigInt(docId),
-    842.0,
-    null,
-    null
-  ));
+  // Séparer les pages PDF avec words_json des pages Markdown avec textContent
+  const pdfRows = [];
+  const textOccurrences = [];
+
+  for (const r of rows) {
+    if (r.wordsJson && r.wordsJson !== "[]") {
+      pdfRows.push([r.pageNumber, r.wordsJson, r.bm25]);
+    } else if (r.textContent && r.textContent.trim().length > 0) {
+      // Extraction textuelle pour note Markdown
+      const lines = r.textContent.split("\n");
+      const totalLen = Math.max(1, r.textContent.length);
+      let currentOffset = 0;
+      let occId = 0;
+
+      for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+        const line = lines[lineIdx];
+        const lowerLine = line.toLowerCase();
+        const matched = terms.filter(t => lowerLine.includes(t.toLowerCase()));
+        if (matched.length > 0) {
+          const yRatio = Math.min(1.0, currentOffset / totalLen);
+          const snippet = line.length > 140 ? `...${line.slice(0, 140)}...` : line.trim();
+          textOccurrences.push({
+            page_number: r.pageNumber,
+            occ_id: occId++,
+            crop_url: "",
+            text_snippet: snippet,
+            distinct_terms_count: matched.length,
+            matched_terms: matched,
+            y_ratio: Math.round(yRatio * 1000) / 1000,
+            y_pos: lineIdx * 20.0,
+            rect: [0.0, lineIdx * 20.0, 500.0, (lineIdx + 1) * 20.0],
+            highlight_rects: [],
+            bm25_score: r.bm25,
+            font_size: 14.0
+          });
+        }
+        currentOffset += line.length + 1;
+      }
+    }
+  }
+
+  let finalOccurrences = textOccurrences;
+  if (pdfRows.length > 0) {
+    const docResult = JSON.parse(batch_find_and_process_doc_occurrences_wasm(
+      JSON.stringify(pdfRows),
+      termsJson,
+      queryHash,
+      BigInt(docId),
+      842.0,
+      null,
+      null
+    ));
+    finalOccurrences = (docResult.occurrences || []).concat(textOccurrences);
+  }
 
   return {
     doc_id: docId,
     query: queryStr,
-    total_occurrences: docResult.total_occurrences,
-    occurrences: docResult.occurrences
+    total_occurrences: finalOccurrences.length,
+    occurrences: finalOccurrences
   };
 }
 

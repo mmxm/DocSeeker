@@ -10,7 +10,7 @@ pub mod types;
 // Re-exports directs des éléments les plus fréquents
 pub use constants::*;
 pub use crop::{calculate_crop_bounds, CropBounds};
-pub use matching::{find_occurrences_on_page, get_query_hash, match_word, sanitize_fts_query};
+pub use matching::{find_occurrences_on_page, find_occurrences_in_text, get_query_hash, match_word, sanitize_fts_query};
 pub use processing::{process_doc_search_results, process_search_results, RawSqlSearchRow};
 pub use schema::get_full_schema_sql;
 pub use sql::{
