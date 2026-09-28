@@ -493,20 +493,27 @@ class DownloadQueueManager {
 
   async removeFolderFromCache(folderId) {
     try {
+      const fidNum = Number(folderId);
+      if (!fidNum) return;
+
       const foldersRes = await fetch('/api/folders').catch(() => null);
       let allFolders = [];
       if (foldersRes && foldersRes.ok) {
         const json = await foldersRes.json();
         allFolders = json.folders || [];
+      } else {
+        allFolders = await this.getAllCachedFolders().catch(() => []);
       }
       const targetFolderIds = new Set();
       const findChildren = (fid) => {
-        targetFolderIds.add(fid);
+        targetFolderIds.add(Number(fid));
         for (const f of allFolders) {
-          if (f.parent_id === fid) findChildren(f.id);
+          if (Number(f.parent_id) === Number(fid)) {
+            findChildren(Number(f.id));
+          }
         }
       };
-      findChildren(Number(folderId));
+      findChildren(fidNum);
 
       const docsRes = await fetch('/api/documents').catch(() => null);
       let docs = [];
@@ -516,10 +523,28 @@ class DownloadQueueManager {
       } else {
         docs = await this.getAllCachedDocs().catch(() => []);
       }
-      const matchingDocs = docs.filter(d => targetFolderIds.has(d.folder_id));
+
+      const allDocsMap = new Map();
+      if (Array.isArray(docs)) {
+        for (const d of docs) {
+          if (d && d.id) allDocsMap.set(Number(d.id), d);
+        }
+      }
+      const cached = await this.getAllCachedDocs().catch(() => []);
+      if (Array.isArray(cached)) {
+        for (const d of cached) {
+          if (d && d.id && !allDocsMap.has(Number(d.id))) {
+            allDocsMap.set(Number(d.id), d);
+          }
+        }
+      }
+
+      const matchingDocs = Array.from(allDocsMap.values()).filter(d => targetFolderIds.has(Number(d.folder_id)));
+      console.log(`[DownloadQueueManager] Purge du dossier ${fidNum} : ${matchingDocs.length} documents à retirer du cache`);
       for (const doc of matchingDocs) {
         await this.removeDocumentFromCache(doc.id);
       }
+      this._notify();
     } catch (err) {
       console.error(`[DownloadQueueManager] Erreur purge du dossier ${folderId}:`, err);
     }

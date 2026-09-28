@@ -3546,29 +3546,31 @@ document.addEventListener("DOMContentLoaded", () => {
         enterFolder(folder);
       });
 
-      // Bouton télécharger dossier pour le mode hors-ligne
-      const downloadFolderBtn = card.querySelector(".btn-download-folder");
-      if (downloadFolderBtn) {
-        downloadFolderBtn.addEventListener("click", async (e) => {
+      // Bouton d'action cache sur le dossier (Télécharger ou Supprimer selon l'état dynamique)
+      const syncFolderBtn = card.querySelector(".sync-action-btn");
+      if (syncFolderBtn) {
+        syncFolderBtn.addEventListener("click", async (e) => {
           e.stopPropagation();
-          if (window.downloadQueueManager) {
-            await window.downloadQueueManager.enqueueFolder(folder.id);
-            showToast(`Téléchargement de l'ensemble du dossier "${folder.name}" enclenché`, "info");
-          }
-        });
-      }
+          if (!window.downloadQueueManager) return;
+          const fid = Number(folder.id);
+          const fname = folder.name || 'ce dossier';
 
-      // Bouton supprimer le dossier du cache local
-      const deleteFolderCacheBtn = card.querySelector(".btn-delete-folder-cache");
-      if (deleteFolderCacheBtn) {
-        deleteFolderCacheBtn.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          if (confirm(`Supprimer tous les documents du dossier "${folder.name}" du cache local hors-ligne ?`)) {
-            if (window.downloadQueueManager) {
-              await window.downloadQueueManager.removeFolderFromCache(folder.id);
-              showToast(`Dossier "${folder.name}" retiré du cache local`, "info");
+          // Déterminer dynamiquement si le dossier est complet
+          const totalDocs = Number(card.getAttribute("data-doc-count") || folder.doc_count || 0);
+          const cachedCount = window.downloadQueueManager.getCachedDocsCountForFolder(fid);
+          const isComplete = (totalDocs > 0 && cachedCount >= totalDocs) ||
+                             syncFolderBtn.classList.contains("complete") ||
+                             syncFolderBtn.classList.contains("btn-delete-folder-cache");
+
+          if (isComplete) {
+            if (confirm(`Supprimer tous les documents du dossier "${fname}" du cache local hors-ligne ?`)) {
+              await window.downloadQueueManager.removeFolderFromCache(fid);
+              showToast(`Dossier "${fname}" retiré du cache local`, "info");
               loadFoldersAndDocuments();
             }
+          } else {
+            await window.downloadQueueManager.enqueueFolder(fid);
+            showToast(`Téléchargement de l'ensemble du dossier "${fname}" enclenché`, "info");
           }
         });
       }

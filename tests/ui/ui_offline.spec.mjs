@@ -780,6 +780,35 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
     await h.assertPdfViewerRendered();
     console.log('✅ [O19] Multiples interruptions et reprises validées exclusivement via l\'interface graphique.');
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // O20 : Purge du cache par dossier (removeFolderFromCache & bouton UI)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  test('O20 - Purge du cache par dossier (removeFolderFromCache)', async ({ page }) => {
+    // 1. Initialisation et mise en cache des docs du dossier test
+    await page.evaluate(async () => {
+      if (window.downloadQueueManager) {
+        await window.downloadQueueManager.ensureInitialized();
+        // Mettre en cache doc 2
+        await window.downloadQueueManager.ensureDocumentIndexedLocally(2);
+      }
+    });
+
+    // 2. Vérifier que la méthode removeFolderFromCache purge correctement les documents du dossier
+    const purged = await page.evaluate(async () => {
+      const dqm = window.downloadQueueManager;
+      if (!dqm) return false;
+      const initialCached = dqm.isDocumentCached(2);
+      // Supprimer le cache du dossier contenant le doc 2 (dossier 130)
+      await dqm.removeFolderFromCache(130);
+      const afterCached = dqm.isDocumentCached(2);
+      return initialCached && !afterCached;
+    });
+
+    expect(purged).toBe(true);
+    console.log('✅ [O20] Purge du cache par dossier (removeFolderFromCache) validée avec succès.');
+  });
 });
 
 
