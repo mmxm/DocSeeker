@@ -27,12 +27,13 @@ impl r2d2::CustomizeConnection<Connection, rusqlite::Error> for SqlitePragmaCust
     }
 }
 
-/// Crée un pool de connexions SQLite (max 8 connections concurrentes)
+/// Crée un pool de connexions SQLite (max 16 connections concurrentes)
 pub fn create_pool(db_path: &Path) -> std::result::Result<DbPool, Box<dyn std::error::Error>> {
     let manager = r2d2_sqlite::SqliteConnectionManager::file(db_path);
     let pool = r2d2::Pool::builder()
-        .max_size(8)
-        .min_idle(Some(2))
+        .max_size(16)
+        .min_idle(Some(4))
+        .connection_timeout(std::time::Duration::from_secs(10))
         .connection_customizer(Box::new(SqlitePragmaCustomizer))
         .build(manager)?;
     Ok(pool)
