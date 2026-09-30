@@ -97,6 +97,7 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
           SELECT id FROM documents WHERE filename LIKE '%AutoSync%' OR filename LIKE '%OfflineDelete%' OR filename LIKE '%ServerDelete%' OR filename LIKE '%RestoreLocal%' OR filename LIKE '%ServerRestore%' OR filename LIKE '%Export Note%' OR filename LIKE '%RebuildClient%'
         );
         DELETE FROM documents WHERE filename LIKE '%AutoSync%' OR filename LIKE '%OfflineDelete%' OR filename LIKE '%ServerDelete%' OR filename LIKE '%RestoreLocal%' OR filename LIKE '%ServerRestore%' OR filename LIKE '%Export Note%' OR filename LIKE '%RebuildClient%';
+        DELETE FROM pages WHERE doc_id NOT IN (SELECT id FROM documents);
       "`, { stdio: 'ignore' });
 
       const docsDir = path.resolve('data/documents');
@@ -104,7 +105,7 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
         const files = fs.readdirSync(docsDir);
         for (const f of files) {
           if (f.startsWith('AutoSync') || f.startsWith('OfflineDelete') || f.startsWith('ServerDelete') || f.startsWith('RestoreLocal') || f.startsWith('ServerRestore') || f.startsWith('Export Note') || f.startsWith('RebuildClient')) {
-            try { fs.unlinkSync(path.join(docsDir, f)); } catch {}
+            try { fs.rmSync(path.join(docsDir, f), { recursive: true, force: true }); } catch {}
           }
         }
       }
@@ -113,7 +114,7 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
       if (fs.existsSync(trashDir)) {
         const tFiles = fs.readdirSync(trashDir);
         for (const f of tFiles) {
-          try { fs.unlinkSync(path.join(trashDir, f)); } catch {}
+          try { fs.rmSync(path.join(trashDir, f), { recursive: true, force: true }); } catch {}
         }
       }
     } catch {}

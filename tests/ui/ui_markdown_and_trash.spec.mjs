@@ -110,9 +110,13 @@ test.describe('DocSeeker - Prise de Notes Markdown & Corbeille', () => {
       if (fs.existsSync(trashDir)) {
         const tFiles = fs.readdirSync(trashDir);
         for (const f of tFiles) {
-          try { fs.unlinkSync(path.join(trashDir, f)); } catch {}
+          try { fs.rmSync(path.join(trashDir, f), { recursive: true, force: true }); } catch {}
         }
       }
+
+      execSync(`sqlite3 data/db.sqlite "
+        DELETE FROM pages WHERE doc_id NOT IN (SELECT id FROM documents);
+      "`, { stdio: 'ignore' });
     } catch (e) {
       console.warn('[afterAll cleanup] Erreur nettoyage :', e.message);
     }
