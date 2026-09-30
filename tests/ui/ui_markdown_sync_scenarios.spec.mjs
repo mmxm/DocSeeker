@@ -68,14 +68,55 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
   let h;
 
   test.beforeEach(async ({ page, context }) => {
+    await context.setOffline(false);
     h = new DocSeekerTestHarness(page, context);
     await h.authenticate();
     await h.goto('/');
+    await page.evaluate(async () => {
+      if (window.MarkdownStorage) {
+        try {
+          const files = await window.MarkdownStorage.listFiles();
+          for (const f of files) {
+            await window.MarkdownStorage.delete(f.filename);
+            await window.MarkdownStorage.unmarkDirty(f.filename);
+          }
+        } catch (_) {}
+      }
+    });
   });
 
   test.afterEach(async () => {
     await h.resetState();
     h.assertZeroErrors({ ignoreNetworkNoise: true });
+  });
+
+  test.afterAll(async () => {
+    try {
+      execSync(`sqlite3 data/db.sqlite "
+        DELETE FROM pages WHERE doc_id IN (
+          SELECT id FROM documents WHERE filename LIKE '%AutoSync%' OR filename LIKE '%OfflineDelete%' OR filename LIKE '%ServerDelete%' OR filename LIKE '%RestoreLocal%' OR filename LIKE '%ServerRestore%' OR filename LIKE '%Export Note%' OR filename LIKE '%RebuildClient%'
+        );
+        DELETE FROM documents WHERE filename LIKE '%AutoSync%' OR filename LIKE '%OfflineDelete%' OR filename LIKE '%ServerDelete%' OR filename LIKE '%RestoreLocal%' OR filename LIKE '%ServerRestore%' OR filename LIKE '%Export Note%' OR filename LIKE '%RebuildClient%';
+      "`, { stdio: 'ignore' });
+
+      const docsDir = path.resolve('data/documents');
+      if (fs.existsSync(docsDir)) {
+        const files = fs.readdirSync(docsDir);
+        for (const f of files) {
+          if (f.startsWith('AutoSync') || f.startsWith('OfflineDelete') || f.startsWith('ServerDelete') || f.startsWith('RestoreLocal') || f.startsWith('ServerRestore') || f.startsWith('Export Note') || f.startsWith('RebuildClient')) {
+            try { fs.unlinkSync(path.join(docsDir, f)); } catch {}
+          }
+        }
+      }
+
+      const trashDir = path.resolve('data/trash');
+      if (fs.existsSync(trashDir)) {
+        const tFiles = fs.readdirSync(trashDir);
+        for (const f of tFiles) {
+          try { fs.unlinkSync(path.join(trashDir, f)); } catch {}
+        }
+      }
+    } catch {}
   });
 
   test('SC-1 : Création -> Offline -> Édition locale -> Switch PDF -> Reconnexion -> Auto-sync serveur', async ({ page, context }) => {
@@ -103,10 +144,16 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
     // 3. Édition du fichier en local pendant la coupure
     const offlineContent = `# ${noteTitle}\n\nContenu enrichi et sauvegardé en mode hors-ligne sans serveur.`;
     await page.evaluate(async (content) => {
-      if (window.MarkdownManager && window.MarkdownManager.saveTimer) {
-        clearTimeout(window.MarkdownManager.saveTimer);
+      if (window.MarkdownManager) {
+        if (window.MarkdownManager.saveTimer) {
+          clearTimeout(window.MarkdownManager.saveTimer);
+          window.MarkdownManager.saveTimer = null;
+        }
+        if (window.MarkdownManager.editorInstance && typeof window.MarkdownManager.editorInstance.setMarkdown === 'function') {
+          window.MarkdownManager.editorInstance.setMarkdown(content);
+        }
+        await window.MarkdownManager.saveNote(content);
       }
-      await window.MarkdownManager.saveNote(content);
     }, offlineContent);
 
     // Vérification BDD locale OPFS : contenu bien présent en local hors-ligne
@@ -124,7 +171,9 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
 
     // 5. Retrouve la connexion (reconnexion du réseau / serveur actif)
     const syncPromise = page.waitForResponse(resp => resp.url().includes('/api/sync/manifest') && resp.status() === 200, { timeout: 15000 });
-    const putPromise = page.waitForResponse(resp => resp.url().includes('/api/files/') && resp.request().method() === 'PUT', { timeout: 15000 });
+    const putPromise = page.waitForResponse(resp => {
+      return resp.url().includes(encodeURIComponent(filename)) && resp.request().method() === 'PUT';
+    }, { timeout: 15000 });
 
     await context.setOffline(false);
     await page.evaluate(async () => {
@@ -184,7 +233,7 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
 
     // 4. Reconnexion réseau
     const syncPromise = page.waitForResponse(resp => resp.url().includes('/api/sync/manifest'), { timeout: 15000 });
-    const deletePromise = page.waitForResponse(resp => resp.url().includes('/api/files/') && resp.request().method() === 'DELETE', { timeout: 15000 });
+    const deletePromise = page.waitForResponse(resp => resp.url().includes(encodeURIComponent(filename)) && resp.request().method() === 'DELETE', { timeout: 15000 });
 
     await context.setOffline(false);
     await page.evaluate(async () => {
@@ -295,7 +344,7 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
     }, { fname: filename, content: restoredContent });
 
     // 4. Reconnexion
-    const putPromise = page.waitForResponse(resp => resp.url().includes('/api/files/') && resp.request().method() === 'PUT', { timeout: 15000 });
+    const putPromise = page.waitForResponse(resp => resp.url().includes(encodeURIComponent(filename)) && resp.request().method() === 'PUT', { timeout: 15000 });
     await context.setOffline(false);
     await page.evaluate(async () => {
       window.dispatchEvent(new Event('online'));

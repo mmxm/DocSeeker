@@ -9,6 +9,9 @@
  *   afterEach  → h.resetState() + h.assertZeroErrors()
  */
 import { expect } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 export class DocSeekerTestHarness {
   constructor(page, context) {
@@ -507,13 +510,21 @@ export class DocSeekerTestHarness {
   // ASSERTIONS — VIGNETTES & CROPS
   // ─────────────────────────────────────────────────────────────────────────────
 
-  async assertVignettesVisible(docId, minCount = 1) {
+  async assertVignettesVisible(docId, minCount = 1, options = {}) {
     const card      = await this.getDocCard(docId);
     const vignettes = card.locator('.vignette-item');
     await expect(vignettes.first()).toBeVisible({ timeout: 10000 });
     const count = await vignettes.count();
     expect(count).toBeGreaterThanOrEqual(minCount);
+
+    if (options.checkContent !== false) {
+      await assertVignetteVisualContent(vignettes.first().locator('.vignette-crop-img'), options);
+    }
     return count;
+  }
+
+  async assertVignetteVisualContent(targetLocator, options = {}) {
+    return await assertVignetteVisualContent(targetLocator, options);
   }
 
   /** Vérifie que les vignettes d'un doc hors-ligne ont une blob: URL réelle (OffscreenCanvas). */
@@ -711,5 +722,283 @@ export class DocSeekerTestHarness {
   getErrors() {
     return this.capturedErrors;
   }
+}
+
+function getTesseractExecutable() {
+  if (fs.existsSync('/opt/homebrew/bin/tesseract')) return '/opt/homebrew/bin/tesseract';
+  if (fs.existsSync('/usr/local/bin/tesseract')) return '/usr/local/bin/tesseract';
+  if (fs.existsSync('/usr/bin/tesseract')) return '/usr/bin/tesseract';
+  return 'tesseract';
+}
+
+/**
+ * Vérifie le véritable contenu d'une vignette (OCR + comparaison/analyse par pixel)
+ * @param {import('@playwright/test').Locator} targetLocator - L'élément img ou le conteneur de la vignette
+ * @param {Object} options
+ * @param {string[]} [options.expectedWords=[]] - Liste de mots/termes devant apparaître dans l'image via OCR
+ * @param {boolean} [options.requireYellowHighlight=false] - Doit contenir des pixels jaunes (#fef08a / GoodNotes)
+ * @param {number} [options.minYellowPixels=8] - Nombre minimal de pixels jaunes
+ * @param {boolean} [options.requireBlueAccent=false] - Pour notes Markdown : barre latérale bleue (#3b82f6)
+ * @param {number} [options.minBluePixels=8] - Nombre minimal de pixels bleus
+ * @param {string|Buffer} [options.goldenBase64=null] - Image de référence (PNG base64 ou Buffer) pour comparaison pixel-par-pixel
+ * @param {number} [options.maxPixelDiffRatio=0.08] - Seuil maximal de divergence pixel admissible
+ * @param {number} [options.timeout=10000] - Timeout maximal de chargement
+ */
+export async function assertVignetteVisualContent(targetLocator, {
+  expectedWords = [],
+  requireYellowHighlight = false,
+  minYellowPixels = 8,
+  requireBlueAccent = false,
+  minBluePixels = 8,
+  goldenBase64 = null,
+  maxPixelDiffRatio = 0.08,
+  timeout = 10000,
+} = {}) {
+  // 1. Résolution de l'élément <img>
+  let img = targetLocator;
+  const isImg = await targetLocator.evaluate(el => el.tagName.toLowerCase() === 'img').catch(() => false);
+  if (!isImg) {
+    img = targetLocator.locator('img.vignette-crop-img, img.vertical-occ-img, img.dynamic-crop, img.dynamic-main-crop, img').first();
+  }
+  await img.waitFor({ state: 'visible', timeout });
+
+  // 2. Attente active du chargement réel de l'image (pas de placeholder SVG)
+  await expect.poll(async () => {
+    return await img.evaluate((el) => {
+      if (!el.complete) return false;
+      if (el.naturalWidth <= 0 || el.naturalHeight <= 0) return false;
+      const src = el.currentSrc || el.src || '';
+      if (!src || src.includes('data:image/svg+xml')) return false;
+      return true;
+    });
+  }, {
+    timeout,
+    message: "L'image de la vignette doit être chargée (naturalWidth > 0) et différer du placeholder SVG gris"
+  }).toBe(true);
+
+  // 3. Extraction et analyse de la matrice de pixels via Canvas natif dans le navigateur
+  const pixelStats = await img.evaluate((el) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = el.naturalWidth;
+    canvas.height = el.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(el, 0, 0);
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imgData.data;
+
+    let yellowPixels = 0;
+    let bluePixels = 0;
+    let darkTextPixels = 0;
+    let lightBgPixels = 0;
+    let grayPlaceholderPixels = 0;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const a = data[i + 3];
+      if (a < 50) continue;
+
+      // Surlignage jaune (#fef08a: 254, 240, 138 / GoodNotes: 255, 226, 0 / Skia)
+      if (r > 190 && g > 170 && b < 190 && (r - b > 35) && (g - b > 15)) {
+        yellowPixels++;
+      }
+      // Accent bleu (#3b82f6: 59, 130, 246)
+      if (b > 160 && r < 130 && (b - r > 50)) {
+        bluePixels++;
+      }
+      // Texte sombre
+      if (r < 85 && g < 85 && b < 85) {
+        darkTextPixels++;
+      }
+      // Fond clair
+      if (r > 215 && g > 215 && b > 215) {
+        lightBgPixels++;
+      }
+      // Gris placeholder neutre
+      if (Math.abs(r - g) < 12 && Math.abs(g - b) < 12 && r >= 140 && r <= 240) {
+        grayPlaceholderPixels++;
+      }
+    }
+
+    // Canvas haute résolution pour l'OCR Tesseract (scale 2x-3x pour lisibilité des polices d'extraits)
+    const scale = Math.max(2, Math.round(600 / Math.max(1, el.naturalWidth)));
+    const ocrCanvas = document.createElement('canvas');
+    ocrCanvas.width = el.naturalWidth * scale;
+    ocrCanvas.height = el.naturalHeight * scale;
+    const ocrCtx = ocrCanvas.getContext('2d');
+    ocrCtx.imageSmoothingQuality = 'high';
+    ocrCtx.drawImage(el, 0, 0, ocrCanvas.width, ocrCanvas.height);
+
+    return {
+      width: canvas.width,
+      height: canvas.height,
+      totalPixels: canvas.width * canvas.height,
+      yellowPixels,
+      bluePixels,
+      darkTextPixels,
+      lightBgPixels,
+      grayPlaceholderPixels,
+      dataUrl: canvas.toDataURL('image/png'),
+      ocrDataUrl: ocrCanvas.toDataURL('image/png')
+    };
+  });
+
+  // 4. Assertions sur les métriques de pixels
+  expect(pixelStats.width, "Largeur de vignette valide").toBeGreaterThanOrEqual(50);
+  expect(pixelStats.height, "Hauteur de vignette valide").toBeGreaterThanOrEqual(30);
+
+  // Vérifier qu'il y a du vrai contenu (texte sombre, jaune surbrillance ou accent bleu)
+  const realContentPixels = pixelStats.darkTextPixels + pixelStats.yellowPixels + pixelStats.bluePixels;
+  expect(realContentPixels, `La vignette doit contenir des pixels de contenu réels (trouvé ${realContentPixels})`).toBeGreaterThanOrEqual(10);
+
+  if (requireYellowHighlight) {
+    expect(
+      pixelStats.yellowPixels,
+      `La vignette doit contenir des pixels de surlignage jaune (#fef08a). Trouvé: ${pixelStats.yellowPixels}, attendu ≥ ${minYellowPixels}`
+    ).toBeGreaterThanOrEqual(minYellowPixels);
+  }
+
+  if (requireBlueAccent) {
+    expect(
+      pixelStats.bluePixels,
+      `La vignette Markdown doit contenir des pixels bleus (#3b82f6). Trouvé: ${pixelStats.bluePixels}, attendu ≥ ${minBluePixels}`
+    ).toBeGreaterThanOrEqual(minBluePixels);
+  }
+
+  // 5. Comparaison pixel par pixel avec une référence (golden) si fournie
+  if (goldenBase64) {
+    const diffResult = await img.evaluate((el, goldenStr) => {
+      return new Promise((resolve) => {
+        const refImg = new Image();
+        refImg.onload = () => {
+          const w = el.naturalWidth;
+          const h = el.naturalHeight;
+          const c1 = document.createElement('canvas');
+          c1.width = w; c1.height = h;
+          const ctx1 = c1.getContext('2d');
+          ctx1.drawImage(el, 0, 0);
+          const d1 = ctx1.getImageData(0, 0, w, h).data;
+
+          const c2 = document.createElement('canvas');
+          c2.width = w; c2.height = h;
+          const ctx2 = c2.getContext('2d');
+          ctx2.drawImage(refImg, 0, 0, w, h);
+          const d2 = ctx2.getImageData(0, 0, w, h).data;
+
+          let diffPixels = 0;
+          const total = w * h;
+          for (let i = 0; i < d1.length; i += 4) {
+            const dr = Math.abs(d1[i] - d2[i]);
+            const dg = Math.abs(d1[i+1] - d2[i+1]);
+            const db = Math.abs(d1[i+2] - d2[i+2]);
+            if ((dr + dg + db) / 3 > 30) {
+              diffPixels++;
+            }
+          }
+          resolve({ diffPixels, total, ratio: diffPixels / total });
+        };
+        refImg.onerror = () => resolve({ error: 'Échec chargement golden image' });
+        refImg.src = goldenStr.startsWith('data:') ? goldenStr : `data:image/png;base64,${goldenStr}`;
+      });
+    }, goldenBase64);
+
+    if (!diffResult.error) {
+      expect(
+        diffResult.ratio,
+        `La comparaison pixel-à-pixel dépasse le seuil de tolérance (${(diffResult.ratio * 100).toFixed(2)}% > ${(maxPixelDiffRatio * 100).toFixed(2)}%)`
+      ).toBeLessThanOrEqual(maxPixelDiffRatio);
+    }
+  }
+
+  // 6. Extraction et vérification OCR via Tesseract
+  let ocrOutput = '';
+  if (expectedWords && expectedWords.length > 0) {
+    const cacheDir = path.resolve('tests/.cache');
+    if (!fs.existsSync(cacheDir)) {
+      fs.mkdirSync(cacheDir, { recursive: true });
+    }
+    const tempFileName = `vignette_ocr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.png`;
+    const tempFilePath = path.join(cacheDir, tempFileName);
+
+    const b64Data = (pixelStats.ocrDataUrl || pixelStats.dataUrl).replace(/^data:image\/png;base64,/, '');
+    fs.writeFileSync(tempFilePath, Buffer.from(b64Data, 'base64'));
+
+    const tesseractBin = getTesseractExecutable();
+    try {
+      const psmModes = ['6', '11', '3'];
+      for (const psm of psmModes) {
+        try {
+          const res = execFileSync(tesseractBin, [tempFilePath, 'stdout', '--psm', psm, '--dpi', '300'], {
+            encoding: 'utf8',
+            timeout: 6000,
+            stdio: ['ignore', 'pipe', 'ignore']
+          });
+          if (res && res.trim().length > 0) {
+            ocrOutput += ' ' + res;
+          }
+        } catch {}
+      }
+    } catch (ocrErr) {
+      console.warn(`[OCR] Avertissement: Tesseract n'a pas pu traiter l'image : ${ocrErr.message}`);
+    } finally {
+      try { fs.unlinkSync(tempFilePath); } catch {}
+    }
+
+    console.log('[assertVignetteVisualContent Debug]', {
+      width: pixelStats.width,
+      height: pixelStats.height,
+      yellowPixels: pixelStats.yellowPixels,
+      bluePixels: pixelStats.bluePixels,
+      darkTextPixels: pixelStats.darkTextPixels,
+      ocrLength: (ocrOutput || '').length,
+      ocrOutput: (ocrOutput || '').trim(),
+    });
+
+    const normOcr = (ocrOutput || '')
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, ' ');
+
+    for (const expWord of expectedWords) {
+      const normWord = expWord
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+
+      if (!normWord) continue;
+
+      const isExactFound = normOcr.includes(normWord);
+      let isFuzzyFound = false;
+
+      if (!isExactFound && normWord.length >= 4) {
+        const prefixLen = Math.min(8, Math.max(4, Math.floor(normWord.length * 0.6)));
+        const prefix = normWord.slice(0, prefixLen);
+        if (normOcr.includes(prefix)) {
+          isFuzzyFound = true;
+        } else {
+          const tokens = normOcr.split(/\s+/).filter(Boolean);
+          for (const tok of tokens) {
+            if (tok.length >= 4 && (tok.includes(prefix) || prefix.includes(tok) || normWord.includes(tok))) {
+              isFuzzyFound = true;
+              break;
+            }
+          }
+        }
+      }
+
+      expect(
+        isExactFound || isFuzzyFound,
+        `Le texte OCR de la vignette ("${ocrOutput.trim().replace(/\n/g, ' ')}") doit contenir le terme recherché "${expWord}"`
+      ).toBe(true);
+    }
+  }
+
+  return {
+    ...pixelStats,
+    ocrText: ocrOutput.trim()
+  };
 }
 

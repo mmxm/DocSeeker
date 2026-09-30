@@ -58,3 +58,6 @@ xcuserdata/
 cookies.txt
 test_cc.swift
 .freebuff/
+
+# Artefacts temporaires de tests (OCR scratch, fixtures générées)
+tests/.cache/

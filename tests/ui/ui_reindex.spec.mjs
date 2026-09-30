@@ -9,6 +9,7 @@
  */
 import { test, expect } from '@playwright/test';
 import { DocSeekerTestHarness } from './harness.mjs';
+import fs from 'fs';
 
 test.describe('DocSeeker - Bouton Réindexer toute la bibliothèque', () => {
   let h;
@@ -25,11 +26,25 @@ test.describe('DocSeeker - Bouton Réindexer toute la bibliothèque', () => {
   });
 
   test('Reindex-1 : Le bouton de réindexation complète fonctionne et préserve les dossiers', async ({ page }) => {
-    // 1. Récupérer les dossiers avant réindexation pour vérifier leur intégrité
-    const foldersBeforeRes = await page.request.get('/api/folders');
-    expect(foldersBeforeRes.ok()).toBe(true);
-    const foldersBefore = (await foldersBeforeRes.json()).folders || [];
-    console.log(`[TEST Reindex-1] Dossiers initiaux avant réindexation : ${foldersBefore.length}`);
+    // 1. Récupérer les dossiers avant réindexation pour vérifier leur intégrité.
+    // Dossier purgé s'il est resté un résidu en base sans répertoire physique
+    // (ex : dossier de test créé par un autre spec, supprimé côté disque par
+    // son afterAll après coup) : la réindexation synchronise DB ↔ disque.
+    const beforeRes = await page.request.get('/api/folders');
+    expect(beforeRes.ok()).toBe(true);
+    const foldersBeforeRaw = (await beforeRes.json()).folders || [];
+    const physicalDirs = fs.readdirSync('data/documents', { withFileTypes: true })
+      .filter(d => d.isDirectory() && d.name !== 'assets')
+      .map(d => d.name);
+    const stale = foldersBeforeRaw.filter(f => !physicalDirs.includes(f.name));
+    for (const f of stale) {
+      await page.request.delete(`/api/folders/${f.id}`).catch(() => {});
+    }
+    if (stale.length) {
+      await page.waitForTimeout(300);
+    }
+    const foldersBefore = (await (await page.request.get('/api/folders')).json()).folders || [];
+    console.log(`[TEST Reindex-1] Dossiers initiaux avant réindexation : ${foldersBefore.length} (${stale.length} résidu(s) purgé(s))`);
 
     // 2. Ouvrir la vue Réglages via la barre latérale
     await page.locator('#mainSidebarToggleBtn').click();
@@ -75,11 +90,18 @@ test.describe('DocSeeker - Bouton Réindexer toute la bibliothèque', () => {
     await expect(toast).toBeVisible({ timeout: 5000 });
     await expect(toast).toContainText('Réindexation lancée');
 
-    // 7. Vérifier que les dossiers sont toujours présents et intacts après réindexation
+    // 7. Invariant réel : la réindexation synchronise DB ↔ disque — tout dossier
+    // adossé à un répertoire physique avant la réindexation doit y survivre.
+    // (Les résidus DB-sans-disque sont volontairement purgés : comportement voulu.)
     const foldersAfterRes = await page.request.get('/api/folders');
     expect(foldersAfterRes.ok()).toBe(true);
     const foldersAfter = (await foldersAfterRes.json()).folders || [];
-    expect(foldersAfter.length).toBe(foldersBefore.length);
-    console.log(`✅ [Reindex-1] Réindexation déclenchée avec succès et ${foldersAfter.length} dossier(s) scrupuleusement conservés.`);
+    const afterNames = new Set(foldersAfter.map(f => f.name));
+    const survivors = foldersBefore.filter(f => physicalDirs.includes(f.name));
+    expect(survivors.length, 'au moins un dossier physique doit exister avant réindexation').toBeGreaterThan(0);
+    for (const f of survivors) {
+      expect(afterNames.has(f.name), `le dossier "${f.name}" doit survivre à la réindexation`).toBe(true);
+    }
+    console.log(`✅ [Reindex-1] Réindexation déclenchée avec succès et ${survivors.length} dossier(s) physique(s) conservés(s) sur ${foldersAfter.length}.`);
   });
 });
