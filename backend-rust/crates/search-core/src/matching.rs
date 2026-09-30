@@ -11,11 +11,118 @@ lazy_static! {
     static ref RE_PUNCT_BOUNDARIES: Regex = Regex::new(r"^\W+|\W+$").unwrap();
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SearchToken {
+    Word(String),
+    Phrase(Vec<String>),
+}
+
+pub fn parse_search_query(query: &str) -> Vec<SearchToken> {
+    let mut tokens = Vec::new();
+    let mut in_quote = false;
+    let mut quote_opener = '"';
+    let mut buf = String::new();
+
+    let is_quote = |c: char| matches!(c, '"' | '“' | '”' | '«' | '»');
+    let is_quote_pair = |open: char, close: char| match open {
+        '«' => close == '»',
+        '“' => close == '”' || close == '“',
+        _ => close == open || matches!(close, '"' | '“' | '”' | '«' | '»'),
+    };
+
+    for c in query.chars() {
+        if !in_quote {
+            if is_quote(c) {
+                for w in RE_WORDS.find_iter(&buf) {
+                    let s = w.as_str().trim();
+                    if !s.is_empty() {
+                        tokens.push(SearchToken::Word(s.to_string()));
+                    }
+                }
+                buf.clear();
+                in_quote = true;
+                quote_opener = c;
+            } else {
+                buf.push(c);
+            }
+        } else {
+            if is_quote_pair(quote_opener, c) {
+                let words: Vec<String> = RE_WORDS
+                    .find_iter(&buf)
+                    .map(|m| m.as_str().trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if !words.is_empty() {
+                    tokens.push(SearchToken::Phrase(words));
+                }
+                buf.clear();
+                in_quote = false;
+            } else {
+                buf.push(c);
+            }
+        }
+    }
+
+    if in_quote {
+        let words: Vec<String> = RE_WORDS
+            .find_iter(&buf)
+            .map(|m| m.as_str().trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !words.is_empty() {
+            tokens.push(SearchToken::Phrase(words));
+        }
+    } else {
+        for w in RE_WORDS.find_iter(&buf) {
+            let s = w.as_str().trim();
+            if !s.is_empty() {
+                tokens.push(SearchToken::Word(s.to_string()));
+            }
+        }
+    }
+
+    tokens
+}
+
+pub fn build_fts5_match_clause(tokens: &[SearchToken]) -> String {
+    let clauses: Vec<String> = tokens
+        .iter()
+        .filter_map(|t| match t {
+            SearchToken::Word(w) => {
+                let norm = normalize_text(w);
+                if norm.is_empty() {
+                    None
+                } else {
+                    Some(format!("{}*", norm))
+                }
+            }
+            SearchToken::Phrase(words) => {
+                let norm_words: Vec<String> = words
+                    .iter()
+                    .map(|w| normalize_text(w))
+                    .filter(|w| !w.is_empty())
+                    .collect();
+                if norm_words.is_empty() {
+                    None
+                } else {
+                    let phrase_str = norm_words.join(" ").replace('"', "\"\"");
+                    Some(format!("\"{}\"", phrase_str))
+                }
+            }
+        })
+        .collect();
+
+    clauses.join(" AND ")
+}
+
 pub fn sanitize_fts_query(query: &str) -> Vec<String> {
-    RE_WORDS
-        .find_iter(query)
-        .map(|m| m.as_str().to_string())
-        .filter(|w| !w.trim().is_empty())
+    parse_search_query(query)
+        .into_iter()
+        .map(|token| match token {
+            SearchToken::Word(w) => w,
+            SearchToken::Phrase(words) => words.join(" "),
+        })
+        .filter(|t| !t.trim().is_empty())
         .collect()
 }
 
@@ -117,16 +224,75 @@ pub fn find_occurrences_on_page(
         merged_words_data.push(w.clone());
     }
 
+    let mut phrase_terms: Vec<(String, Vec<String>)> = Vec::new();
+    let mut word_terms: Vec<String> = Vec::new();
+
+    for t in &norm_terms {
+        if t.contains(' ') {
+            let p_words: Vec<String> = t.split_whitespace().map(|s| s.to_string()).collect();
+            if !p_words.is_empty() {
+                phrase_terms.push((t.clone(), p_words));
+            }
+        } else {
+            word_terms.push(t.clone());
+        }
+    }
+
+    let mut phrase_matches_by_word_idx: Vec<Vec<String>> = vec![Vec::new(); merged_words_data.len()];
+
+    for (phrase_str, p_words) in &phrase_terms {
+        let p_len = p_words.len();
+        if merged_words_data.len() < p_len {
+            continue;
+        }
+        for i in 0..=(merged_words_data.len() - p_len) {
+            let mut matches = true;
+            for (k, target_word) in p_words.iter().enumerate() {
+                let norm_w = normalize_text(&merged_words_data[i + k].4);
+                if !match_word(&norm_w, target_word) {
+                    matches = false;
+                    break;
+                }
+                if k > 0 {
+                    let prev = &merged_words_data[i + k - 1];
+                    let curr = &merged_words_data[i + k];
+                    let horizontal_diff = curr.0 - prev.2;
+                    let vertical_overlap = (curr.3.min(prev.3) - curr.1.max(prev.1)).max(0.0);
+                    let min_height = (curr.3 - curr.1).min(prev.3 - prev.1);
+                    let is_same_line = (curr.6 == prev.6)
+                        || (min_height > 0.0 && vertical_overlap / min_height >= 0.6);
+                    if !is_same_line || horizontal_diff < -2.0 || horizontal_diff > 35.0 {
+                        matches = false;
+                        break;
+                    }
+                }
+            }
+            if matches {
+                for k in 0..p_len {
+                    phrase_matches_by_word_idx[i + k].push(phrase_str.clone());
+                }
+            }
+        }
+    }
+
     let mut matched_words: Vec<RawMatchedWord> = Vec::new();
 
-    for w in &merged_words_data {
+    for (idx, w) in merged_words_data.iter().enumerate() {
         let WordEntry(x0, y0, x1, y1, ref word, _block_no, line_no) = *w;
         let norm_w = normalize_text(word);
         let mut matched_terms_in_word: Vec<String> = Vec::new();
         let mut min_pos = usize::MAX;
         let mut max_end_pos = 0;
 
-        for term in &norm_terms {
+        for p_str in &phrase_matches_by_word_idx[idx] {
+            if !matched_terms_in_word.contains(p_str) {
+                matched_terms_in_word.push(p_str.clone());
+            }
+            min_pos = 0;
+            max_end_pos = norm_w.chars().count();
+        }
+
+        for term in &word_terms {
             if match_word(&norm_w, term) {
                 matched_terms_in_word.push(term.clone());
                 if let Some(pos) = norm_w.find(term.as_str()) {
@@ -353,4 +519,103 @@ pub fn find_occurrences_in_text(
     }
 
     results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_search_query_simple_and_quoted() {
+        let tokens = parse_search_query("normale grossesse");
+        assert_eq!(
+            tokens,
+            vec![
+                SearchToken::Word("normale".to_string()),
+                SearchToken::Word("grossesse".to_string())
+            ]
+        );
+
+        let tokens_quoted = parse_search_query("\"normale grossesse\"");
+        assert_eq!(
+            tokens_quoted,
+            vec![SearchToken::Phrase(vec![
+                "normale".to_string(),
+                "grossesse".to_string()
+            ])]
+        );
+
+        let tokens_curly = parse_search_query("“normale grossesse”");
+        assert_eq!(
+            tokens_curly,
+            vec![SearchToken::Phrase(vec![
+                "normale".to_string(),
+                "grossesse".to_string()
+            ])]
+        );
+
+        let tokens_guillemets = parse_search_query("«normale grossesse»");
+        assert_eq!(
+            tokens_guillemets,
+            vec![SearchToken::Phrase(vec![
+                "normale".to_string(),
+                "grossesse".to_string()
+            ])]
+        );
+
+        let tokens_mixed = parse_search_query("traitement \"normale grossesse\" fœtus");
+        assert_eq!(
+            tokens_mixed,
+            vec![
+                SearchToken::Word("traitement".to_string()),
+                SearchToken::Phrase(vec![
+                    "normale".to_string(),
+                    "grossesse".to_string()
+                ]),
+                SearchToken::Word("fœtus".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_build_fts5_match_clause() {
+        let tokens = parse_search_query("normale grossesse");
+        assert_eq!(build_fts5_match_clause(&tokens), "normale* AND grossesse*");
+
+        let phrase_tokens = parse_search_query("\"normale grossesse\"");
+        assert_eq!(build_fts5_match_clause(&phrase_tokens), "\"normale grossesse\"");
+
+        let mixed_tokens = parse_search_query("traitement \"grossesse normale\"");
+        assert_eq!(
+            build_fts5_match_clause(&mixed_tokens),
+            "traitement* AND \"grossesse normale\""
+        );
+    }
+
+    #[test]
+    fn test_find_occurrences_on_page_phrase() {
+        let words = vec![
+            WordEntry(10.0, 10.0, 50.0, 25.0, "Normale".to_string(), 0, 1),
+            WordEntry(55.0, 10.0, 110.0, 25.0, "grossesse".to_string(), 0, 1),
+            WordEntry(10.0, 40.0, 60.0, 55.0, "grossesse".to_string(), 0, 2),
+        ];
+
+        let phrase_terms = vec!["normale grossesse".to_string()];
+        let occs = find_occurrences_on_page(&words, &phrase_terms, "hash", 1, 1, 1.0, "", 842.0);
+        assert_eq!(occs.len(), 1, "Doit matcher uniquement la séquence contiguë");
+        assert_eq!(occs[0].matched_terms, vec!["normale grossesse"]);
+
+        let unquoted_terms = vec!["normale".to_string(), "grossesse".to_string()];
+        let occs_unquoted = find_occurrences_on_page(&words, &unquoted_terms, "hash", 1, 1, 1.0, "", 842.0);
+        assert_eq!(occs_unquoted.len(), 2, "Doit matcher les deux lignes sans guillemets");
+    }
+
+    #[test]
+    fn test_find_occurrences_in_text_phrase() {
+        let text = "Première ligne avec normale grossesse ici.\nDeuxième ligne avec grossesse seule.\nTroisième ligne normale.";
+        let phrase_terms = vec!["normale grossesse".to_string()];
+        let occs = find_occurrences_in_text(text, &phrase_terms, "hash", 1, 1, 1.0, "");
+        assert_eq!(occs.len(), 1, "Doit matcher uniquement la ligne contenant la phrase");
+        assert_eq!(occs[0].page_number, 1);
+    }
 }

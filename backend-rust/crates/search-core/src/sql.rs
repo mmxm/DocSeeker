@@ -61,6 +61,7 @@ pub fn build_search_query_sql(
     limit: usize,
     offset: usize,
 ) -> SearchQuerySql {
+    let tokens = crate::matching::parse_search_query(query);
     let terms = sanitize_fts_query(query);
     if terms.is_empty() {
         return SearchQuerySql {
@@ -71,24 +72,43 @@ pub fn build_search_query_sql(
     }
 
     let query_hash = crate::matching::get_query_hash(&terms);
+    let fts_and_query = crate::matching::build_fts5_match_clause(&tokens);
+    if fts_and_query.is_empty() {
+        return SearchQuerySql {
+            sql: String::new(),
+            terms: Vec::new(),
+            query_hash: String::new(),
+        };
+    }
 
-    let fts_and_query = terms
-        .iter()
-        .map(|t| format!("{}*", normalize_text(t)))
-        .collect::<Vec<_>>()
-        .join(" AND ");
-
-    // Boost titre : termes tokenisés + préfixe sur l'index documents_fts (même
-    // tokenizer que le contenu → insensible casse/accents, cohérence garantie).
+    // Boost titre : termes tokenisés ou phrases sur l'index documents_fts
     let mut title_conds = Vec::new();
-    for t in &terms {
-        let norm_t = normalize_text(t);
-        if !norm_t.is_empty() {
-            let escaped = norm_t.replace('"', "\"\"");
-            title_conds.push(format!(
-                "d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"*')",
-                esc = escaped
-            ));
+    for token in &tokens {
+        match token {
+            crate::matching::SearchToken::Word(w) => {
+                let norm = normalize_text(w);
+                if !norm.is_empty() {
+                    let esc = norm.replace('"', "\"\"");
+                    title_conds.push(format!(
+                        "d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"*')",
+                        esc = esc
+                    ));
+                }
+            }
+            crate::matching::SearchToken::Phrase(words) => {
+                let norm_words: Vec<String> = words
+                    .iter()
+                    .map(|w| normalize_text(w))
+                    .filter(|w| !w.is_empty())
+                    .collect();
+                if !norm_words.is_empty() {
+                    let esc = norm_words.join(" ").replace('"', "\"\"");
+                    title_conds.push(format!(
+                        "d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"')",
+                        esc = esc
+                    ));
+                }
+            }
         }
     }
     let title_sql_clause = if title_conds.is_empty() {
@@ -209,6 +229,7 @@ pub fn build_title_search_sql(
     limit: usize,
     offset: usize,
 ) -> (String, Vec<String>) {
+    let tokens = crate::matching::parse_search_query(query);
     let terms = sanitize_fts_query(query);
     if terms.is_empty() {
         return (String::new(), Vec::new());
@@ -216,18 +237,43 @@ pub fn build_title_search_sql(
 
     // Recherche sur l'index documents_fts : normalisation (casse + accents)
     // assurée par le même tokenizer que le contenu (unicode61 remove_diacritics).
-    // Chaque terme est tokenisé avec préfixe → « hemoch » trouve « Hémochromatose ».
-    let where_clause = terms
+    // Les mots simples sont tokenisés avec préfixe (*), les phrases sont recherchées exactement.
+    let where_clause = tokens
         .iter()
-        .map(|t| {
-            let esc = normalize_text(t).replace('"', "\"\"");
-            format!(
-                "id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"*')",
-                esc = esc
-            )
+        .filter_map(|token| match token {
+            crate::matching::SearchToken::Word(w) => {
+                let norm = normalize_text(w);
+                if norm.is_empty() {
+                    None
+                } else {
+                    let esc = norm.replace('"', "\"\"");
+                    Some(format!(
+                        "id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"*')"
+                    ))
+                }
+            }
+            crate::matching::SearchToken::Phrase(words) => {
+                let norm_words: Vec<String> = words
+                    .iter()
+                    .map(|w| normalize_text(w))
+                    .filter(|w| !w.is_empty())
+                    .collect();
+                if norm_words.is_empty() {
+                    None
+                } else {
+                    let esc = norm_words.join(" ").replace('"', "\"\"");
+                    Some(format!(
+                        "id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"')"
+                    ))
+                }
+            }
         })
         .collect::<Vec<_>>()
         .join(" AND ");
+
+    if where_clause.is_empty() {
+        return (String::new(), Vec::new());
+    }
 
     let folder_filter = if let Some(ids) = folder_ids {
         if ids.is_empty() {
@@ -255,17 +301,17 @@ pub fn build_title_search_sql(
 
 /// Requête SQL pour la recherche interne à un document (Split View)
 pub fn build_doc_search_sql(doc_id: i64, query: &str) -> (String, Vec<String>, String) {
+    let tokens = crate::matching::parse_search_query(query);
     let terms = sanitize_fts_query(query);
     if terms.is_empty() {
         return (String::new(), Vec::new(), String::new());
     }
 
     let query_hash = crate::matching::get_query_hash(&terms);
-    let fts_and_query = terms
-        .iter()
-        .map(|t| format!("{}*", normalize_text(t)))
-        .collect::<Vec<_>>()
-        .join(" AND ");
+    let fts_and_query = crate::matching::build_fts5_match_clause(&tokens);
+    if fts_and_query.is_empty() {
+        return (String::new(), Vec::new(), String::new());
+    }
 
     let sql = format!(
         "SELECT p.page_number, p.words_json, bm25(pages_fts) as page_bm25, p.text_content \
@@ -376,5 +422,45 @@ mod tests {
         let conn = setup_db();
         let (sql, _) = build_title_search_sql("dermatologie", None, 10, 0);
         assert!(ids(&conn, &sql).is_empty());
+    }
+
+    #[test]
+    fn test_phrase_search_contiguous_vs_disjoint() {
+        let conn = setup_db();
+        // Doc 10 : contient « normale grossesse » contigu
+        conn.execute(
+            "INSERT INTO documents (id, filename, title, status, created_at, updated_at) VALUES (10, 'doc10.pdf', 'Doc Contigu', 'ready', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO pages (doc_id, page_number, text_content) VALUES (10, 1, 'Observation sur une normale grossesse chez une patiente')",
+            [],
+        ).unwrap();
+
+        // Doc 20 : contient « grossesse » et « normale » disjoints / ordre inverse
+        conn.execute(
+            "INSERT INTO documents (id, filename, title, status, created_at, updated_at) VALUES (20, 'doc20.pdf', 'Doc Disjoint', 'ready', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO pages (doc_id, page_number, text_content) VALUES (20, 1, 'Suivi de la grossesse avec évolution tout à fait normale')",
+            [],
+        ).unwrap();
+
+        // 1. Recherche avec phrase exacte entre guillemets : seul doc 10 matche
+        let phrase_search = build_search_query_sql("\"normale grossesse\"", None, 10, 0);
+        let phrase_results = ids(&conn, &phrase_search.sql);
+        assert_eq!(phrase_results, vec![10], "Phrase exacte doit matcher uniquement doc 10");
+
+        // 2. Recherche sans guillemets : les deux documents matchent
+        let unquoted_search = build_search_query_sql("normale grossesse", None, 10, 0);
+        let mut unquoted_results = ids(&conn, &unquoted_search.sql);
+        unquoted_results.sort();
+        assert_eq!(unquoted_results, vec![10, 20], "Sans guillemets, les deux docs matchent");
+
+        // 3. Phrase inversée entre guillemets "grossesse normale" : ni doc 10 ni doc 20 ne matche
+        let rev_phrase_search = build_search_query_sql("\"grossesse normale\"", None, 10, 0);
+        let rev_results = ids(&conn, &rev_phrase_search.sql);
+        assert!(rev_results.is_empty(), "Phrase inversée ne doit pas matcher 'normale grossesse'");
     }
 }
