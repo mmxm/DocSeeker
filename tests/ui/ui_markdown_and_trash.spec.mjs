@@ -767,6 +767,58 @@ test.describe('DocSeeker - Prise de Notes Markdown & Corbeille', () => {
     expect(zipBytes[2]).toBe(0x03);
     expect(zipBytes[3]).toBe(0x04);
   });
+
+  test('MD-14 : Round-trip fidèle Markdown sans altération silencieuse à l\'ouverture ni autosave', async ({ page }) => {
+    const cases = [
+      { name: 'table-fenced-headings', content: '# Titre H1\n\n| Colonne 1 | Colonne 2 |\n| --- | --- |\n| Val 1 | Val 2 |\n\n```javascript\nconst x = 42;\n```\n' },
+      { name: 'indented-code-block', content: '# Indented Code\n\n    function test() {\n        return true;\n    }\n' },
+      { name: 'task-lists', content: '# Tâches\n\n- [ ] Première tâche\n- [x] Tâche terminée\n- [ ] Autre tâche\n' },
+      { name: 'crlf', content: "# Titre CRLF\r\n\r\nLigne 1\r\nLigne 2\r\n" },
+      { name: 'multiple-blank-lines', content: "# Lignes Vides\n\n\n\n\nParagraphe après 5 sauts de ligne.\n" },
+      { name: 'escaped-chars', content: "# Escapes\n\n\\[pas lien\\] et \\*pas italique\\* et \\_pas souligné\\_\n" },
+      { name: 'html-entities', content: "# Entités HTML\n\n&lt;balise&gt; et &amp; entités littérales.\n" },
+      { name: 'long-note', content: `# Longue Note\n\n${'Paragraphe répété pour test de fidélité et longueur.\n\n'.repeat(300)}\n\n` },
+    ];
+
+    for (const c of cases) {
+      const filename = `RT_${c.name}_${Date.now()}.md`;
+      const title = `Note RT ${c.name}`;
+
+      // 1. Créer la note via l'API
+      const createRes = await page.request.post('/api/files', {
+        data: {
+          filename,
+          title,
+          content: c.content,
+        }
+      });
+      expect([200, 201]).toContain(createRes.status());
+
+      // 2. Ouvrir la note dans l'éditeur
+      await page.evaluate(async ({ fn, t, cnt }) => {
+        await window.MarkdownManager.loadNote(null, fn, t, cnt);
+      }, { fn: filename, t: title, cnt: c.content });
+
+      // Attendre le montage complet
+      await page.waitForTimeout(300);
+
+      // 3. Vérifier que getMarkdown() sans aucune édition retourne strictement le contenu initial
+      const editorMd = await page.evaluate(() => {
+        return window.MarkdownManager.editorInstance
+          ? window.MarkdownManager.editorInstance.getMarkdown()
+          : '';
+      });
+      expect(editorMd).toBe(c.content);
+
+      // 4. Attendre au-delà du debounce autosave (1,5 s) et vérifier que le fichier serveur reste inchangé
+      await page.waitForTimeout(1600);
+
+      const serverRes = await page.request.get(`/api/files/${encodeURIComponent(filename)}`);
+      expect(serverRes.status()).toBe(200);
+      const serverText = await serverRes.text();
+      expect(serverText).toBe(c.content);
+    }
+  });
 });
 
 

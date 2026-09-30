@@ -7866,6 +7866,13 @@ document.addEventListener("DOMContentLoaded", () => {
         content = `# ${title}\n\n`;
       }
 
+      if (this.saveTimer) {
+        clearTimeout(this.saveTimer);
+        this.saveTimer = null;
+      }
+      this._isLoadingNote = true;
+      this._loadedContent = content;
+
       // Mettre à jour le panneau Markdown brut
       const rawTextarea = document.getElementById("markdownRawContent");
       if (rawTextarea) {
@@ -7904,6 +7911,9 @@ document.addEventListener("DOMContentLoaded", () => {
           ta.addEventListener("input", () => this.onContentChange(ta.value));
         }
         this.setStatus("saved", "Enregistré");
+        setTimeout(() => {
+          this._isLoadingNote = false;
+        }, 50);
         const activeSearchTerm = getActiveDocSearchTerm() || (document.getElementById("docSearchInput")?.value || "").trim();
         if (activeSearchTerm) {
           setTimeout(() => {
@@ -7911,10 +7921,19 @@ document.addEventListener("DOMContentLoaded", () => {
           }, 150);
         }
       } catch (err) {
+        this._isLoadingNote = false;
         this._loadingPromise = null;
         console.error("[Markdown] Erreur init Milkdown:", err);
         this.setStatus("error", "Erreur éditeur");
       }
+    },
+
+    getMarkdown() {
+      if (this.editorInstance && typeof this.editorInstance.getMarkdown === "function") {
+        return this.editorInstance.getMarkdown();
+      }
+      const raw = document.getElementById("markdownRawContent");
+      return raw ? raw.value : (this._loadedContent || "");
     },
 
     setMarkdown(markdown) {
@@ -7927,6 +7946,10 @@ document.addEventListener("DOMContentLoaded", () => {
     },
 
     onContentChange(markdown) {
+      if (this._isLoadingNote) {
+        return;
+      }
+
       const rawTextarea = document.getElementById("markdownRawContent");
       if (rawTextarea && document.activeElement !== rawTextarea) {
         rawTextarea.value = markdown;

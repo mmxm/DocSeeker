@@ -2,6 +2,7 @@ import { Crepe } from '@milkdown/crepe';
 import { replaceAll } from '@milkdown/utils';
 import { history } from '@milkdown/kit/plugin/history';
 import { clipboard } from '@milkdown/kit/plugin/clipboard';
+import { remarkStringifyOptionsCtx } from '@milkdown/core';
 import '@milkdown/crepe/theme/common/style.css';
 import '@milkdown/crepe/theme/frame.css';
 
@@ -10,6 +11,8 @@ import { shift, size } from '@floating-ui/dom';
 // Exposer globalement createMilkdown avec l'API Crepe officielle
 window.createMilkdown = async function(rootElement, options = {}) {
   const { initialValue = '', onChange = () => {}, onUploadAsset = null } = options;
+
+  let userEdited = false;
 
   // Hook d'upload des images : sans lui, le bloc image de Crepe insère une URL
   // blob: locale (non persistée) au collage/dépôt de fichier, ce qui produisait
@@ -53,20 +56,50 @@ window.createMilkdown = async function(rootElement, options = {}) {
     },
   });
 
+  // Configuration de la sérialisation Markdown pour respecter les puces standards '-'
+  crepe.editor.config((ctx) => {
+    ctx.update(remarkStringifyOptionsCtx, (prev) => ({
+      ...prev,
+      bullet: '-',
+    }));
+  });
+
   // Plugins Milkdown Kit : History (Undo/Redo) & Clipboard (Markdown Copy/Paste)
   crepe.editor.use(history).use(clipboard);
 
   // Branchement de l'écouteur de mise à jour Markdown
   crepe.on((listener) => {
     listener.markdownUpdated((ctx, markdown) => {
+      if (!userEdited) {
+        return;
+      }
       onChange(markdown);
     });
   });
 
+  // Détection des interactions utilisateur réelles pour ne pas déclencher d'autosave au montage
+  const markEdited = () => {
+    userEdited = true;
+  };
+  rootElement.addEventListener('input', markEdited, { capture: true });
+  rootElement.addEventListener('keydown', markEdited, { capture: true });
+  rootElement.addEventListener('paste', markEdited, { capture: true });
+  rootElement.addEventListener('drop', markEdited, { capture: true });
+
   await crepe.create();
+
+  const originalGetMarkdown = crepe.getMarkdown.bind(crepe);
+
+  crepe.getMarkdown = function() {
+    if (!userEdited) {
+      return initialValue;
+    }
+    return originalGetMarkdown();
+  };
 
   // Méthode pour remplacer le contenu Markdown depuis le panneau brut
   crepe.setMarkdown = function(md) {
+    userEdited = true;
     try {
       crepe.editor.action(replaceAll(md));
     } catch (e) {
