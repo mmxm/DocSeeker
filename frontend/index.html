@@ -796,6 +796,12 @@
                     <span class="status-dot green" id="markdownStatusDot"></span>
                     <span id="markdownStatusText">Enregistré</span>
                   </span>
+                  <button id="markdownToggleRawBtn" class="btn btn-icon btn-sm" title="Afficher/Masquer le code Markdown brut" aria-label="Code Markdown brut">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="16 18 22 12 16 6"></polyline>
+                      <polyline points="8 6 2 12 8 18"></polyline>
+                    </svg>
+                  </button>
                   <button id="markdownExportBtn" class="btn btn-icon btn-sm" title="Exporter la note (.md)" aria-label="Exporter la note (.md)">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -811,8 +817,26 @@
                   </button>
                 </div>
               </div>
-              <div class="milkdown-scroll-container">
-                <div id="milkdownRoot" class="milkdown-wrapper"></div>
+              <div class="markdown-editor-main-layout">
+                <div class="milkdown-scroll-container">
+                  <div id="milkdownRoot" class="milkdown-wrapper"></div>
+                </div>
+                <div id="markdownRawDrawer" class="markdown-raw-drawer" style="display: none;">
+                  <div class="markdown-raw-drawer-header">
+                    <div class="markdown-raw-title-group">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="16 18 22 12 16 6"></polyline>
+                        <polyline points="8 6 2 12 8 18"></polyline>
+                      </svg>
+                      <span>MARKDOWN BRUT</span>
+                    </div>
+                    <div class="markdown-raw-actions">
+                      <button id="markdownCopyRawBtn" class="btn btn-xs btn-outline" title="Copier le code Markdown">Copier</button>
+                      <button id="markdownCloseRawBtn" class="btn btn-icon btn-xs" title="Fermer le panneau brut" style="font-size: 16px; line-height: 1;">&times;</button>
+                    </div>
+                  </div>
+                  <textarea id="markdownRawContent" class="markdown-raw-textarea" spellcheck="false" placeholder="Code source Markdown..."></textarea>
+                </div>
               </div>
             </div>
           </div>

@@ -84,6 +84,16 @@ document.addEventListener("DOMContentLoaded", () => {
   let folderBreadcrumbs = [{ id: null, name: "Documents" }];
   let allFolders = [];
   let currentLoadedDocs = [];
+  try {
+    Object.defineProperty(window, 'currentLoadedDocs', {
+      get: () => currentLoadedDocs,
+      set: (v) => { currentLoadedDocs = v; },
+      configurable: true,
+      enumerable: true
+    });
+  } catch (e) {
+    window.currentLoadedDocs = currentLoadedDocs;
+  }
   let rawLoadedDocs = [];
   let lastSearchResultsData = null;
   let selectedFolderColor = "#3b82f6";
@@ -161,20 +171,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     async renderAndCache(docId, pageNumber, highlightRects, rect, cropUrl, isOffline = false, onReqIdAssigned = null) {
-      const cropCacheKey = cropUrl || `/api/crop/${docId}/${pageNumber}/0`;
-
-      // 1. Vérification immédiate dans CacheStorage (0ms, évite tout calcul PDF redondant)
-      if (typeof caches !== 'undefined') {
-        try {
-          const cache = await caches.open('docseeker_offline_crops_v2');
-          const cached = await cache.match(cropCacheKey);
-          if (cached) {
-            const blob = await cached.blob();
-            if (blob && blob.size > 0) return blob;
-          }
-        } catch (e) { }
-      }
-
+      // Aucun cache CacheStorage : les vignettes hors-ligne sont rendues à la demande
+      // et les vignettes en ligne sont servies fraîches par le backend (no-store).
       if (!this.worker) return null;
       const id = ++this.reqId;
       if (typeof onReqIdAssigned === 'function') {
@@ -189,20 +187,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
       });
 
-      const blob = await blobPromise;
-      if (blob && typeof caches !== 'undefined') {
-        try {
-          const cache = await caches.open('docseeker_offline_crops_v2');
-          const response = new Response(blob, {
-            headers: {
-              'Content-Type': 'image/webp',
-              'Cache-Control': 'public, max-age=604800, immutable'
-            }
-          });
-          await cache.put(cropCacheKey, response);
-        } catch (e) { }
-      }
-      return blob;
+      return await blobPromise;
     }
   }
 
@@ -575,11 +560,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const vEl = img.closest('.vignette-item') || img.closest('.vertical-occ-card');
       const docId = vEl && vEl.dataset.docId ? Number(vEl.dataset.docId) : null;
-      const isDocCached = Boolean(docId && window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(docId));
+      const urlDocIdMatch = srcUrl ? srcUrl.match(/\/api\/(?:crop|cover)\/(\d+)/) : null;
+      const effectiveDocId = docId || (urlDocIdMatch ? Number(urlDocIdMatch[1]) : null);
+
+      const isMarkdownDoc = (vEl && (vEl.dataset.docType === 'markdown' || vEl.getAttribute('data-doc-type') === 'markdown')) ||
+                            (effectiveDocId && window.MarkdownManager && Number(window.MarkdownManager.currentDocId) === Number(effectiveDocId)) ||
+                            (effectiveDocId && window.tabManager?.openTabs?.some(t => Number(t.docId) === Number(effectiveDocId) && ((t.docTitle && (t.docTitle.endsWith('.md') || t.docTitle.endsWith('.markdown'))) || t.isMarkdown))) ||
+                            (effectiveDocId && window.currentLoadedDocs?.some(d => Number(d.id) === Number(effectiveDocId) && (d.doc_type === 'markdown' || (d.filename && (d.filename.endsWith('.md') || d.filename.endsWith('.markdown')))))) ||
+                            (effectiveDocId && window.currentActiveDocId && Number(window.currentActiveDocId) === Number(effectiveDocId) && window.currentActiveDocTitle && (window.currentActiveDocTitle.endsWith('.md') || window.currentActiveDocTitle.endsWith('.markdown')));
+      const isDocCached = Boolean(effectiveDocId && window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(effectiveDocId));
       const isOfflineFilter = document.getElementById("filterOfflineOnly")?.checked || false;
       const isOfflineMode = !navigator.onLine || isOfflineFilter || isDocCached;
 
       const renderOfflineCrop = () => {
+        if (isMarkdownDoc) return false;
         if (srcUrl.startsWith('/api/crop/') && window.offlineCropRenderer) {
           if (vEl && docId) {
             const pageNum = Number(vEl.dataset.page);
@@ -637,8 +631,8 @@ document.addEventListener("DOMContentLoaded", () => {
         return false;
       };
 
-      // Si hors-ligne OU si le document est disponible en cache local, déléguer immédiatement au crop worker local
-      if ((isOfflineMode || isDocCached) && srcUrl.startsWith('/api/crop/')) {
+      // Si hors-ligne OU si le document est disponible en cache local, déléguer immédiatement au crop worker local (uniquement pour PDF)
+      if (!isMarkdownDoc && (isOfflineMode || isDocCached) && srcUrl.startsWith('/api/crop/')) {
         if (renderOfflineCrop()) return;
       }
 
@@ -646,8 +640,13 @@ document.addEventListener("DOMContentLoaded", () => {
       const controller = new AbortController();
       this.inFlightFetches.set(img, controller);
 
-      fetch(srcUrl, { signal: controller.signal })
-        .then(res => {
+      const targetFetchUrl = (isMarkdownDoc && !srcUrl.startsWith('/api/cover/')) ? (srcUrl || `/api/cover/${docId}`) : srcUrl;
+      fetch(targetFetchUrl, { signal: controller.signal })
+        .then(async res => {
+          if (!res.ok && isMarkdownDoc && docId) {
+            const coverRes = await fetch(`/api/cover/${docId}`, { signal: controller.signal });
+            if (coverRes.ok) return coverRes.blob();
+          }
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           return res.blob();
         })
@@ -683,6 +682,21 @@ document.addEventListener("DOMContentLoaded", () => {
             this.applySnippetFallback(img, vEl);
             try { this.observer.unobserve(img); } catch (e) { }
             return;
+          }
+
+          // Couverture de résultat de recherche indisponible : retomber sur la
+          // couverture standard du document plutôt que laisser une carte grise.
+          if (srcUrl.startsWith('/api/cover/') && docId) {
+            const coverMatch = srcUrl.match(/\/api\/cover\/(\d+)/);
+            const coverDocId = coverMatch ? coverMatch[1] : String(docId);
+            const standardCover = `/api/cover/${coverDocId}`;
+            if (srcUrl !== standardCover && !img.dataset.coverFallback) {
+              img.dataset.coverFallback = "true";
+              img.dataset.loaded = "false";
+              img.setAttribute('data-src', standardCover);
+              setTimeout(() => { if (!img._wasCancelled) this.loadImg(img); }, 300);
+              return;
+            }
           }
 
           // En cas d'erreur standard, réessayer une fois après 500ms
@@ -1089,19 +1103,37 @@ document.addEventListener("DOMContentLoaded", () => {
       activeTargetIndex = 0;
     }
 
+    // Détection Markdown robuste : le titre affiché ne porte pas l'extension .md,
+    // s'appuyer sur les métadonnées des résultats de recherche (doc_type/filename)
+    // et de l'onglet actif pour appliquer le bon rendu (object-fit: contain).
+    const matchedDocForDrawer = window.currentLoadedDocs?.find(d => Number(d.id) === Number(docId));
+    const activeTabForDrawer = window.tabManager?.openTabs?.find(t => Number(t.docId) === Number(docId));
+    const isMd = (matchedDocForDrawer && (matchedDocForDrawer.doc_type === 'markdown' || (matchedDocForDrawer.filename && (matchedDocForDrawer.filename.endsWith('.md') || matchedDocForDrawer.filename.endsWith('.markdown'))))) ||
+                 (activeTabForDrawer && (activeTabForDrawer.isMarkdown || (activeTabForDrawer.docTitle && (activeTabForDrawer.docTitle.endsWith('.md') || activeTabForDrawer.docTitle.endsWith('.markdown'))))) ||
+                 Boolean(docTitle && (docTitle.endsWith('.md') || docTitle.endsWith('.markdown')));
+
     occurrences.forEach((occ, index) => {
       const item = document.createElement("div");
       const isActive = (index === activeTargetIndex);
       item.className = `vertical-occ-card ${isActive ? 'active' : ''}`;
       item.setAttribute("data-doc-id", docId);
+      item.setAttribute("data-doc-type", isMd ? 'markdown' : 'pdf');
       item.setAttribute("data-page", occ.page_number);
       item.setAttribute("data-occ-id", occ.occ_id || '');
       item.setAttribute("data-rect", JSON.stringify(occ.rect || []));
       item.setAttribute("data-hl-rects", JSON.stringify(occ.highlight_rects || (occ.rect ? [occ.rect] : [])));
 
+      const termParam = encodeURIComponent(drawerSearchTerm || (occ.matched_terms ? occ.matched_terms.join(',') : ''));
+      const effectiveCropUrl = occ.crop_url || (isMd ? `/api/crop/${docId}/${occ.page_number || 1}/${occ.occ_id !== undefined ? occ.occ_id : index}?terms=${termParam}` : '');
+
+      // Markdown : extrait texte natif (aucune image) — même gabarit que les crops PDF
+      const occContent = isMd
+        ? renderMdVignetteContent(occ.text_snippet, drawerSearchTerm)
+        : `<img src="${placeholderSvg}" data-src="${effectiveCropUrl}" class="vertical-occ-img dynamic-crop" alt="Extrait p. ${occ.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />`;
+
       item.innerHTML = `
         <div class="vertical-occ-img-wrapper">
-          <img src="${placeholderSvg}" data-src="${occ.crop_url}" class="vertical-occ-img dynamic-crop" alt="Extrait p. ${occ.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
+          ${occContent}
         </div>
         <div class="vertical-occ-footer">
           <span class="vertical-occ-page">Page ${occ.page_number}</span>
@@ -1737,8 +1769,11 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
           if (window.pdfCacheManager) await window.pdfCacheManager.clearAll();
           if (typeof caches !== 'undefined') {
+            // Purge des anciens caches de vignettes (covers/crops) désormais supprimés
             await caches.delete('docseeker_covers').catch(() => { });
             await caches.delete('docseeker_offline_crops').catch(() => { });
+            await caches.delete('docseeker_offline_crops_v2').catch(() => { });
+            await caches.delete('docseeker_offline_crops_v3').catch(() => { });
             await caches.delete('docseeker-pdf-v1').catch(() => { });
           }
           if (window.downloadQueueManager) {
@@ -2539,18 +2574,30 @@ document.addEventListener("DOMContentLoaded", () => {
     if (inDocDrawerClearBtn) inDocDrawerClearBtn.style.display = hasVal ? "flex" : "none";
   }
 
+  let _docSearchDebounceTimer = null;
+  const triggerDebouncedDocSearch = (query) => {
+    if (_docSearchDebounceTimer) clearTimeout(_docSearchDebounceTimer);
+    const q = (query || "").trim();
+    if (!q) {
+      performDocSearch("", false);
+    } else {
+      _docSearchDebounceTimer = setTimeout(() => {
+        performDocSearch(q, false);
+      }, 250);
+    }
+  };
+
   if (docSearchInput) {
     docSearchInput.addEventListener("input", (e) => {
       const rawVal = e.target.value;
       syncDocSearchInputs(rawVal, docSearchInput);
-      if (!rawVal.trim()) {
-        performDocSearch("", false);
-      }
+      triggerDebouncedDocSearch(rawVal);
     });
   }
 
   if (clearDocSearchBtn) {
     clearDocSearchBtn.addEventListener("click", () => {
+      if (_docSearchDebounceTimer) clearTimeout(_docSearchDebounceTimer);
       syncDocSearchInputs("");
       performDocSearch("", true);
     });
@@ -2585,14 +2632,13 @@ document.addEventListener("DOMContentLoaded", () => {
     viewerDocSearchInput.addEventListener("input", (e) => {
       const rawVal = e.target.value;
       syncDocSearchInputs(rawVal, viewerDocSearchInput);
-      if (!rawVal.trim()) {
-        performDocSearch("", false);
-      }
+      triggerDebouncedDocSearch(rawVal);
     });
   }
 
   if (viewerDocSearchClearBtn) {
     viewerDocSearchClearBtn.addEventListener("click", () => {
+      if (_docSearchDebounceTimer) clearTimeout(_docSearchDebounceTimer);
       syncDocSearchInputs("");
       performDocSearch("", true);
     });
@@ -2603,14 +2649,13 @@ document.addEventListener("DOMContentLoaded", () => {
     drawerDocSearchInput.addEventListener("input", (e) => {
       const rawVal = e.target.value;
       syncDocSearchInputs(rawVal, drawerDocSearchInput);
-      if (!rawVal.trim()) {
-        performDocSearch("", false);
-      }
+      triggerDebouncedDocSearch(rawVal);
     });
   }
 
   if (drawerDocSearchClearBtn) {
     drawerDocSearchClearBtn.addEventListener("click", () => {
+      if (_docSearchDebounceTimer) clearTimeout(_docSearchDebounceTimer);
       syncDocSearchInputs("");
       performDocSearch("", true);
     });
@@ -2621,9 +2666,7 @@ document.addEventListener("DOMContentLoaded", () => {
     inDocDrawerSearchInput.addEventListener("input", (e) => {
       const rawVal = e.target.value;
       syncDocSearchInputs(rawVal, inDocDrawerSearchInput);
-      if (!rawVal.trim()) {
-        performDocSearch("", false);
-      }
+      triggerDebouncedDocSearch(rawVal);
     });
   }
 
@@ -2788,8 +2831,9 @@ document.addEventListener("DOMContentLoaded", () => {
           const maxScroll = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
           scrollContainer.scrollTo({ top: maxScroll * (occ.y_ratio || 0), behavior: 'smooth' });
         }
-        if (occ.matched_terms && occ.matched_terms.length > 0 && window.MarkdownManager) {
-          window.MarkdownManager.highlightTermInEditor(occ.matched_terms[0]);
+        const term = (occ.matched_terms && occ.matched_terms.length > 0) ? occ.matched_terms[0] : (activeTab?.searchQuery || getActiveDocSearchTerm() || "");
+        if (window.MarkdownManager) {
+          window.MarkdownManager.highlightSearch(term, index);
         }
       } else {
         goToPageAndScrollToOccurrence(occ.page_number, targetRect, occ.y_ratio);
@@ -2832,6 +2876,7 @@ document.addEventListener("DOMContentLoaded", () => {
       inp.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
           e.preventDefault();
+          clearTimeout(docSearchDebounceTimer);
           const query = (inp.value || "").trim();
           if (query !== lastExecutedDocSearchQuery || lastExecutedDocSearchDocId !== Number(currentActiveDocId)) {
             lastExecutedDocSearchQuery = query;
@@ -3015,6 +3060,7 @@ document.addEventListener("DOMContentLoaded", () => {
       tab.searchActive = true;
       renderVerticalOccurrences(searchDocId, searchDocTitle, currentActiveOccurrences);
       renderDrawerOccurrences(searchDocId, searchDocTitle, currentActiveOccurrences);
+      updateViewerSearchHighlight(query);
 
       if (occs.length > 0) {
         const curPage = getCurrentViewerPage();
@@ -3031,6 +3077,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function updateViewerSearchHighlight(query) {
     try {
+      const mdContainer = document.getElementById("markdownEditorContainer");
+      if (mdContainer && mdContainer.style.display !== "none" && window.MarkdownManager) {
+        window.MarkdownManager.highlightSearch(query, 0);
+        return;
+      }
       const win = pdfFrame.contentWindow;
       if (!win) return;
       const app = win.PDFViewerApplication;
@@ -3283,6 +3334,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     loadFoldersAndDocuments();
   }
+  window.enterFolder = enterFolder;
+  window.navigateToFolder = (id, name) => enterFolder({ id, name: name || 'Dossier' });
 
   async function loadFoldersAndDocuments() {
     const currentSeq = ++loadFoldersSeq;
@@ -3819,6 +3872,26 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // Vignette Markdown : rendu textuel natif (aucune image générée).
+  // L'extrait renvoyé par l'API (ligne du mot-clé + 2 lignes de contexte au-dessus/
+  // en dessous) est affiché en HTML dans un encadré au format strictement identique
+  // aux vignettes image des PDF (ratio 2:1), avec la même surbrillance des termes.
+  // Économise bande passante et CPU : plus d'encodage WebP ni de requête /api/crop.
+  function renderMdVignetteContent(snippet, query) {
+    const lines = String(snippet || "").split("\n").map(l => l.trim()).filter(l => l.length > 0);
+    if (lines.length === 0) {
+      return `<div class="vignette-md-excerpt"><span class="vignette-md-line vignette-md-key">…</span></div>`;
+    }
+    const rendered = lines.map(l => highlightTitle(l, query));
+    // La ligne du mot-clé est celle qui contient une correspondance surlignée (<mark>) ;
+    // repli sur la ligne centrale si aucune correspondance visible.
+    let keyIdx = rendered.findIndex(html => html.includes("<mark"));
+    if (keyIdx === -1) keyIdx = Math.min(Math.floor((lines.length - 1) / 2), lines.length - 1);
+    return `<div class="vignette-md-excerpt">${rendered.map((html, i) =>
+      `<span class="vignette-md-line${i === keyIdx ? ' vignette-md-key' : ''}">${html}</span>`
+    ).join("")}</div>`;
+  }
+
   function createDocCardElement(doc, isSearch = false) {
     const isIndexing = doc.status === "pending" || doc.status === "indexing";
     const isFailed = doc.status === "failed";
@@ -3902,9 +3975,10 @@ document.addEventListener("DOMContentLoaded", () => {
       ? highlightTitle(doc.title, query)
       : escapeHtml(doc.title);
 
+    // Détection Markdown : le titre affiché est dérivé du nom de fichier SANS extension,
+    // seul doc_type (fourni par l'API de recherche) ou filename sont fiables ici.
     const isMd = doc.doc_type === 'markdown' ||
-                 (doc.filename && (doc.filename.endsWith('.md') || doc.filename.endsWith('.markdown'))) ||
-                 (doc.title && (doc.title.endsWith('.md') || doc.title.endsWith('.markdown')));
+                 (doc.filename && (doc.filename.endsWith('.md') || doc.filename.endsWith('.markdown')));
 
     if (!isSearch) {
       // Affichage Goodnotes unifié (ligne continue élégante comme sur mobile)
@@ -3957,9 +4031,13 @@ document.addEventListener("DOMContentLoaded", () => {
       let vignettesHtml = '';
       if (doc.vignettes && doc.vignettes.length > 0) {
         doc.vignettes.forEach(v => {
+          // Markdown : extrait textuel natif (aucune image) — même format que les crops PDF.
+          const vignetteContent = isMd
+            ? renderMdVignetteContent(v.text_snippet, currentSearchQuery)
+            : `<img src="${PLACEHOLDER_CROP_SVG}" data-src="${v.crop_url}" class="vignette-crop-img dynamic-main-crop" alt="Extrait p. ${v.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />`;
           vignettesHtml += `
-            <div class="vignette-item" data-doc-id="${doc.id}" data-page="${v.page_number}" data-occ="${v.occ_id}" data-rect='${JSON.stringify(v.rect || [])}' data-hl-rects='${JSON.stringify(v.highlight_rects || (v.rect ? [v.rect] : []))}' data-yratio="${v.y_ratio || 0}" data-snippet="${encodeURIComponent(v.text_snippet || '')}" title="Page ${v.page_number}${v.font_size >= 14 ? ' (Titre)' : ''} - Cliquer pour ouvrir">
-              <img src="${PLACEHOLDER_CROP_SVG}" data-src="${v.crop_url}" class="vignette-crop-img dynamic-main-crop" alt="Extrait p. ${v.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
+            <div class="vignette-item" data-doc-id="${doc.id}" data-doc-type="${isMd ? 'markdown' : 'pdf'}" data-page="${v.page_number}" data-occ="${v.occ_id}" data-rect='${JSON.stringify(v.rect || [])}' data-hl-rects='${JSON.stringify(v.highlight_rects || (v.rect ? [v.rect] : []))}' data-yratio="${v.y_ratio || 0}" data-snippet="${encodeURIComponent(v.text_snippet || '')}" title="Page ${v.page_number}${v.font_size >= 14 ? ' (Titre)' : ''} - Cliquer pour ouvrir">
+              ${vignetteContent}
               <span class="vignette-page-badge">${v.font_size >= 14 ? '📌 ' : ''}p. ${v.page_number}</span>
             </div>
           `;
@@ -4265,6 +4343,7 @@ document.addEventListener("DOMContentLoaded", () => {
               const vEl = document.createElement("div");
               vEl.className = "vignette-item";
               vEl.setAttribute("data-doc-id", doc.id);
+              vEl.setAttribute("data-doc-type", isMd ? 'markdown' : 'pdf');
               vEl.setAttribute("data-page", v.page_number);
               vEl.setAttribute("data-occ", v.occ_id);
               vEl.setAttribute("data-rect", JSON.stringify(v.rect || []));
@@ -4273,8 +4352,11 @@ document.addEventListener("DOMContentLoaded", () => {
               vEl.setAttribute("data-snippet", encodeURIComponent(v.text_snippet || ''));
               vEl.title = `Page ${v.page_number} - Cliquer pour ouvrir`;
 
+              const chunkIsMd = vEl.getAttribute("data-doc-type") === "markdown";
               vEl.innerHTML = `
-                <img src="${PLACEHOLDER_CROP_SVG}" data-src="${v.crop_url}" class="vignette-crop-img dynamic-main-crop" alt="Extrait p. ${v.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
+                ${chunkIsMd
+                  ? renderMdVignetteContent(v.text_snippet, currentSearchQuery)
+                  : `<img src="${PLACEHOLDER_CROP_SVG}" data-src="${v.crop_url}" class="vignette-crop-img dynamic-main-crop" alt="Extrait p. ${v.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />`}
                 <span class="vignette-page-badge">p. ${v.page_number}</span>
               `;
 
@@ -5527,6 +5609,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0, targetOccId = null, searchQuery = null) {
     tabManager.openTab(docId, docTitle, targetPage, occurrences, targetRect, targetYRatio, targetOccId, searchQuery);
   }
+  tabManager.renderTabs = tabManager.renderTabsUI.bind(tabManager);
   window.tabManager = tabManager;
   window.openDocumentInSplitView = openDocumentInSplitView;
 
@@ -5628,31 +5711,32 @@ document.addEventListener("DOMContentLoaded", () => {
     // CANAL 1 : synchroniser les champs avec la recherche de l'ONGLET cible
     syncDocSearchInputs(effectiveSearchQuery);
     if (viewerDocSearchWrapper) viewerDocSearchWrapper.style.display = "none";
+    const safeOccs = Array.isArray(occurrences) ? occurrences : [];
     if (viewerDocSearchResultCount) {
-      viewerDocSearchResultCount.textContent = effectiveSearchQuery ? `${occurrences.length} résultat${occurrences.length > 1 ? 's' : ''}` : "";
+      viewerDocSearchResultCount.textContent = effectiveSearchQuery ? `${safeOccs.length} résultat${safeOccs.length > 1 ? 's' : ''}` : "";
     }
 
-    currentActiveOccurrences = occurrences || [];
-    if (!effectiveSearchQuery && (!occurrences || occurrences.length === 0)) {
+    currentActiveOccurrences = safeOccs;
+    if (!effectiveSearchQuery && safeOccs.length === 0) {
       if (inDocDrawerCount) inDocDrawerCount.textContent = "0 résultat";
       if (inDocDrawerOccurrencesList) {
         inDocDrawerOccurrencesList.innerHTML = `<div style="color:var(--text-muted); font-size:12.5px; padding:20px; text-align:center;">Recherchez un terme ci-dessus pour afficher les extraits correspondants dans ce document.</div>`;
       }
     }
     let initialIdx = 0;
-    if (targetOccIndex !== null && targetOccIndex !== undefined && targetOccIndex >= 0 && occurrences && targetOccIndex < occurrences.length) {
+    if (targetOccIndex !== null && targetOccIndex !== undefined && targetOccIndex >= 0 && targetOccIndex < safeOccs.length) {
       initialIdx = targetOccIndex;
-    } else if (targetOccId && targetPage && occurrences && occurrences.length > 0) {
-      const foundIdx = occurrences.findIndex(o => String(o.occ_id) === String(targetOccId) && Number(o.page_number) === Number(targetPage));
+    } else if (targetOccId && targetPage && safeOccs.length > 0) {
+      const foundIdx = safeOccs.findIndex(o => String(o.occ_id) === String(targetOccId) && Number(o.page_number) === Number(targetPage));
       if (foundIdx !== -1) initialIdx = foundIdx;
-    } else if (initialIdx === 0 && targetPage && occurrences && occurrences.length > 0) {
-      const foundIdx = occurrences.findIndex(o => Number(o.page_number) === Number(targetPage));
+    } else if (initialIdx === 0 && targetPage && safeOccs.length > 0) {
+      const foundIdx = safeOccs.findIndex(o => Number(o.page_number) === Number(targetPage));
       if (foundIdx !== -1) initialIdx = foundIdx;
-    } else if (initialIdx === 0 && targetOccId && occurrences && occurrences.length > 0) {
-      const foundIdx = occurrences.findIndex(o => String(o.occ_id) === String(targetOccId));
+    } else if (initialIdx === 0 && targetOccId && safeOccs.length > 0) {
+      const foundIdx = safeOccs.findIndex(o => String(o.occ_id) === String(targetOccId));
       if (foundIdx !== -1) initialIdx = foundIdx;
     }
-    currentActiveOccurrenceIndex = currentActiveOccurrences.length > 0 ? initialIdx : -1;
+    currentActiveOccurrenceIndex = safeOccs.length > 0 ? initialIdx : -1;
     updateOccurrenceStepperUI();
 
     // Persister l'état de recherche initial dans l'ONGLET (propriétaire de l'état)
@@ -5674,22 +5758,22 @@ document.addEventListener("DOMContentLoaded", () => {
       resultsPane.scrollTop = 0;
     }
     docDetailTitle.textContent = docTitle;
-    docDetailCount.textContent = `${occurrences.length} résultat${occurrences.length > 1 ? 's' : ''}`;
+    docDetailCount.textContent = `${safeOccs.length} résultat${safeOccs.length > 1 ? 's' : ''}`;
 
-    currentDocOriginalOccurrences = occurrences || [];
-    currentActiveOccurrences = sortDocOccurrences(occurrences || [], currentDocOccurrencesSortMode);
+    currentDocOriginalOccurrences = safeOccs;
+    currentActiveOccurrences = sortDocOccurrences(safeOccs, currentDocOccurrencesSortMode);
 
     renderVerticalOccurrences(numericDocId, docTitle, currentActiveOccurrences, targetPage, targetOccId);
 
     // Synchronisation du tiroir mobile d'extraits
     if (mobileOccurrencesCountText) {
-      mobileOccurrencesCountText.textContent = `${occurrences.length} extrait${occurrences.length > 1 ? 's' : ''}`;
+      mobileOccurrencesCountText.textContent = `${safeOccs.length} extrait${safeOccs.length > 1 ? 's' : ''}`;
     }
     if (drawerDocTitle) {
       drawerDocTitle.textContent = docTitle;
     }
     if (drawerDocCount) {
-      drawerDocCount.textContent = `${occurrences.length} extrait${occurrences.length > 1 ? 's' : ''}`;
+      drawerDocCount.textContent = `${safeOccs.length} extrait${safeOccs.length > 1 ? 's' : ''}`;
     }
     renderDrawerOccurrences(numericDocId, docTitle, currentActiveOccurrences, targetPage, targetOccId);
 
@@ -6051,6 +6135,11 @@ document.addEventListener("DOMContentLoaded", () => {
       if (window.MarkdownManager) {
         window.MarkdownManager.loadNote(numericDocId, filename, docTitle);
       }
+      if (effectiveSearchQuery) {
+        setTimeout(() => {
+          performDocSearch(effectiveSearchQuery, false);
+        }, 350);
+      }
       return;
     } else {
       if (pdfFrame) pdfFrame.style.display = "block";
@@ -6379,6 +6468,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Terme de surbrillance : la recherche intra-doc de l'onglet actif (jamais le global)
     const activeDocSearchTerm = getActiveDocSearchTerm();
+    const activeTab = tabManager?.openTabs?.find(t => Number(t.docId) === Number(docId));
+    const matchedDoc = window.currentLoadedDocs?.find(d => Number(d.id) === Number(docId));
+    const isMd = (matchedDoc && (matchedDoc.doc_type === 'markdown' || (matchedDoc.filename && (matchedDoc.filename.endsWith('.md') || matchedDoc.filename.endsWith('.markdown'))))) ||
+                 (activeTab && ((activeTab.docTitle && (activeTab.docTitle.endsWith('.md') || activeTab.docTitle.endsWith('.markdown'))) || activeTab.isMarkdown)) ||
+                 (docTitle && (docTitle.endsWith('.md') || docTitle.endsWith('.markdown'))) ||
+                 (window.MarkdownManager && Number(window.MarkdownManager.currentDocId) === Number(docId));
 
     // Construction unique du HTML de toutes les cartes (batch DOM au lieu de N créations/insertions)
     let cardsHtml = "";
@@ -6388,17 +6483,26 @@ document.addEventListener("DOMContentLoaded", () => {
       const hlRectAttr = escapeHtml(JSON.stringify(occ.highlight_rects || (occ.rect ? [occ.rect] : [])));
       const snippet = activeDocSearchTerm ? highlightTitle(occ.text_snippet || '', activeDocSearchTerm) : escapeHtml(occ.text_snippet || '');
 
+      const termParam = encodeURIComponent(activeTab?.searchQuery || getActiveDocSearchTerm() || (occ.matched_terms ? occ.matched_terms.join(',') : ''));
+      const effectiveCropUrl = occ.crop_url || (isMd ? `/api/crop/${docId}/${occ.page_number || 1}/${occ.occ_id !== undefined ? occ.occ_id : index}?terms=${termParam}` : '');
+
+      // Markdown : extrait texte natif (aucune image) — même gabarit que les crops PDF
+      const occContent = isMd
+        ? renderMdVignetteContent(occ.text_snippet, activeDocSearchTerm)
+        : `<img src="${placeholderSvg}" data-src="${escapeHtml(effectiveCropUrl)}" class="vertical-occ-img dynamic-crop" alt="Extrait p. ${occ.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />`;
+
       cardsHtml += `
         <div class="vertical-occ-card ${isActive ? 'active' : ''}"
              data-index="${index}"
              data-doc-id="${docId}"
+             data-doc-type="${isMd ? 'markdown' : 'pdf'}"
              data-page="${occ.page_number}"
              data-occ-id="${escapeHtml(String(occ.occ_id || ''))}"
              data-rect="${rectAttr}"
              data-hl-rects="${hlRectAttr}"
              data-yratio="${occ.y_ratio || 0}">
           <div class="vertical-occ-img-wrapper">
-            <img src="${placeholderSvg}" data-src="${escapeHtml(occ.crop_url || '')}" class="vertical-occ-img dynamic-crop" alt="Extrait p. ${occ.page_number}" style="opacity: 0.6; transition: opacity 0.2s ease-in-out;" />
+            ${occContent}
           </div>
           <div class="vertical-occ-footer">
             <span class="vertical-occ-page">Page ${occ.page_number}</span>
@@ -6422,8 +6526,6 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
 
-    // Optimisation : rendu paresseux du tiroir (évite duplication 2x du DOM et requêtes crops inutiles quand fermé)
-    const isDrawerOpen = inDocSearchDrawer && inDocSearchDrawer.style.display === "flex";
     if (inDocDrawerOccurrencesList) {
       // Délégation d'événement click unique pour le tiroir
       if (!inDocDrawerOccurrencesList._hasDelegatedListener) {
@@ -6436,20 +6538,16 @@ document.addEventListener("DOMContentLoaded", () => {
         });
       }
 
-      if (isDrawerOpen) {
-        inDocDrawerOccurrencesList.innerHTML = cardsHtml;
-        inDocDrawerOccurrencesList.querySelectorAll(".dynamic-crop").forEach(img => verticalCropManager.observe(img));
-        _inDocDrawerNeedsSync = false;
-      } else {
-        inDocDrawerOccurrencesList.innerHTML = "";
-        _inDocDrawerNeedsSync = true;
-      }
+      inDocDrawerOccurrencesList.innerHTML = cardsHtml;
+      inDocDrawerOccurrencesList.querySelectorAll(".dynamic-crop").forEach(img => verticalCropManager.observe(img));
+      _inDocDrawerNeedsSync = false;
     }
 
     const activeCard = docOccurrencesList.querySelector(".vertical-occ-card.active");
     if (activeCard) {
       scrollActiveCardIntoView(activeCard);
     }
+    const isDrawerOpen = inDocSearchDrawer && inDocSearchDrawer.style.display !== "none";
     if (inDocDrawerOccurrencesList && isDrawerOpen) {
       const activeDrawerCard = inDocDrawerOccurrencesList.querySelector(".vertical-occ-card.active");
       if (activeDrawerCard) {
@@ -7432,6 +7530,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const plan = await res.json();
+        console.log("[SyncManager] Plan:", JSON.stringify(plan));
 
         // 1. PUSH : le client envoie les fichiers locaux modifiés ou supprimés au serveur
         for (const filename of (plan.push || [])) {
@@ -7528,12 +7627,70 @@ document.addEventListener("DOMContentLoaded", () => {
         exportBtn.addEventListener("click", () => this.exportCurrentNote());
       }
 
-      // Drag and drop & paste d'images
+      // Panneau latéral Markdown brut (Playground Milkdown style)
+      const toggleRawBtn = document.getElementById("markdownToggleRawBtn");
+      const closeRawBtn = document.getElementById("markdownCloseRawBtn");
+      const copyRawBtn = document.getElementById("markdownCopyRawBtn");
+      const rawDrawer = document.getElementById("markdownRawDrawer");
+      const rawTextarea = document.getElementById("markdownRawContent");
+
+      if (toggleRawBtn && rawDrawer) {
+        toggleRawBtn.addEventListener("click", () => {
+          const isHidden = rawDrawer.style.display === "none";
+          rawDrawer.style.display = isHidden ? "flex" : "none";
+          toggleRawBtn.classList.toggle("active", isHidden);
+          if (isHidden && rawTextarea && this.editorInstance && typeof this.editorInstance.getMarkdown === "function") {
+            rawTextarea.value = this.editorInstance.getMarkdown();
+          }
+        });
+      }
+
+      if (closeRawBtn && rawDrawer) {
+        closeRawBtn.addEventListener("click", () => {
+          rawDrawer.style.display = "none";
+          if (toggleRawBtn) toggleRawBtn.classList.remove("active");
+        });
+      }
+
+      if (copyRawBtn && rawTextarea) {
+        copyRawBtn.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(rawTextarea.value);
+            showToast("Markdown brut copié dans le presse-papiers", "success");
+          } catch (e) {
+            rawTextarea.select();
+            document.execCommand("copy");
+            showToast("Markdown copié", "success");
+          }
+        });
+      }
+
+      // Synchronisation bi-directionnelle depuis le panneau de code Markdown brut
+      if (rawTextarea) {
+        let rawInputTimer = null;
+        rawTextarea.addEventListener("input", () => {
+          if (rawInputTimer) clearTimeout(rawInputTimer);
+          rawInputTimer = setTimeout(async () => {
+            const newMd = rawTextarea.value;
+            if (this.editorInstance && typeof this.editorInstance.setMarkdown === "function") {
+              this.editorInstance.setMarkdown(newMd);
+            }
+            this.onContentChange(newMd);
+          }, 300);
+        });
+      }
+
+      // Collage / dépôt d'images : interceptés en phase CAPTURE sur le conteneur
+      // (avant ProseMirror/Crepe) pour uploader en assets/<stem>/ puis insérer la
+      // bonne URL — le bloc image de Crepe ne voit jamais le fichier et ne crée
+      // plus de référence blob: non persistée (cause du doublon d'images).
       const mdContainer = document.getElementById("markdownEditorContainer");
       if (mdContainer) {
-        mdContainer.addEventListener("paste", (e) => this.handlePaste(e));
-        mdContainer.addEventListener("dragover", (e) => e.preventDefault());
-        mdContainer.addEventListener("drop", (e) => this.handleDrop(e));
+        mdContainer.addEventListener("paste", (e) => this.handleImagePasteCapture(e), true);
+        mdContainer.addEventListener("dragover", (e) => {
+          if (this._hasImageInDataTransfer(e.dataTransfer)) e.preventDefault();
+        });
+        mdContainer.addEventListener("drop", (e) => this.handleImageDropCapture(e), true);
       }
     },
 
@@ -7563,7 +7720,8 @@ document.addEventListener("DOMContentLoaded", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             filename: filename,
-            content: initialContent
+            content: initialContent,
+            folder_id: currentFolderId ? Number(currentFolderId) : null
           })
         });
 
@@ -7578,6 +7736,8 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         const data = await res.json();
+        const finalFname = data.filename || filename;
+        await MarkdownStorage.write(finalFname, initialContent);
         showToast("Note créée avec succès", "success");
 
         if (typeof loadDocuments === "function") {
@@ -7587,8 +7747,9 @@ document.addEventListener("DOMContentLoaded", () => {
         if (Array.isArray(currentLoadedDocs)) {
           currentLoadedDocs.push({
             id: data.doc_id,
-            filename: filename,
+            filename: finalFname,
             title: cleanTitle,
+            folder_id: currentFolderId ? Number(currentFolderId) : null,
             doc_type: "markdown",
             status: "ready"
           });
@@ -7596,7 +7757,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (data.doc_id) {
           openDocumentInSplitView(data.doc_id, cleanTitle, 1, []);
-          this.loadNote(data.doc_id, filename, cleanTitle, initialContent);
+          this.loadNote(data.doc_id, finalFname, cleanTitle, initialContent);
         }
       } catch (err) {
         console.error("[Markdown] Erreur création note distante :", err);
@@ -7608,6 +7769,7 @@ document.addEventListener("DOMContentLoaded", () => {
             id: fakeId,
             filename: filename,
             title: cleanTitle,
+            folder_id: currentFolderId ? Number(currentFolderId) : null,
             doc_type: "markdown",
             status: "ready"
           });
@@ -7658,6 +7820,12 @@ document.addEventListener("DOMContentLoaded", () => {
         content = `# ${title}\n\n`;
       }
 
+      // Mettre à jour le panneau Markdown brut
+      const rawTextarea = document.getElementById("markdownRawContent");
+      if (rawTextarea) {
+        rawTextarea.value = content;
+      }
+
       const root = document.getElementById("milkdownRoot");
       if (!root) return;
 
@@ -7668,23 +7836,56 @@ document.addEventListener("DOMContentLoaded", () => {
 
       try {
         if (typeof window.createMilkdown === "function") {
-          this.editorInstance = await window.createMilkdown(root, {
+          this._loadingPromise = window.createMilkdown(root, {
             initialValue: content,
-            onChange: (md) => this.onContentChange(md)
+            onChange: (md) => this.onContentChange(md),
+            // Les images collées/déposées sont uploadées directement en assets/<stem>/
+            // par le bloc image de Crepe (plus d'URL blob: non persistée ni de doublon)
+            onUploadAsset: async (file) => await this.uploadAssetOnly(file)
           });
+          this.editorInstance = await this._loadingPromise;
+          this._loadingPromise = null;
+          if (this._pendingContent) {
+            const pending = this._pendingContent;
+            this._pendingContent = null;
+            if (this.editorInstance && typeof this.editorInstance.setMarkdown === "function") {
+              this.editorInstance.setMarkdown(pending);
+            }
+          }
         } else {
           root.innerHTML = `<textarea class="fallback-md-textarea" style="width:100%; height:500px; padding:16px; border:1px solid var(--border-color); border-radius:8px; font-family:monospace;">${escapeHtml(content)}</textarea>`;
           const ta = root.querySelector("textarea");
           ta.addEventListener("input", () => this.onContentChange(ta.value));
         }
         this.setStatus("saved", "Enregistré");
+        const activeSearchTerm = getActiveDocSearchTerm() || (document.getElementById("docSearchInput")?.value || "").trim();
+        if (activeSearchTerm) {
+          setTimeout(() => {
+            this.highlightSearch(activeSearchTerm, currentActiveOccurrenceIndex >= 0 ? currentActiveOccurrenceIndex : 0);
+          }, 150);
+        }
       } catch (err) {
+        this._loadingPromise = null;
         console.error("[Markdown] Erreur init Milkdown:", err);
         this.setStatus("error", "Erreur éditeur");
       }
     },
 
+    setMarkdown(markdown) {
+      if (this._loadingPromise) {
+        this._pendingContent = markdown;
+      }
+      if (this.editorInstance && typeof this.editorInstance.setMarkdown === "function") {
+        this.editorInstance.setMarkdown(markdown);
+      }
+    },
+
     onContentChange(markdown) {
+      const rawTextarea = document.getElementById("markdownRawContent");
+      if (rawTextarea && document.activeElement !== rawTextarea) {
+        rawTextarea.value = markdown;
+      }
+
       this.setStatus("saving", "Enregistrement...");
       if (this.saveTimer) clearTimeout(this.saveTimer);
 
@@ -7695,6 +7896,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async saveNote(markdown) {
       if (!this.currentFilename) return;
+      if (this.saveTimer) {
+        clearTimeout(this.saveTimer);
+        this.saveTimer = null;
+      }
+      if (this._loadingPromise) {
+        this._pendingContent = markdown;
+      }
       const fname = this.currentFilename;
 
       // 1. Sauvegarde locale OPFS garantie
@@ -7742,6 +7950,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const newTitle = input.value.trim();
       if (!newTitle || newTitle === this.currentTitle) return;
 
+      if (this.saveTimer) {
+        clearTimeout(this.saveTimer);
+        this.saveTimer = null;
+      }
+
       this._isRenaming = true;
       const oldFname = this.currentFilename;
       const newFname = newTitle.endsWith(".md") ? newTitle : `${newTitle}.md`;
@@ -7755,6 +7968,22 @@ document.addEventListener("DOMContentLoaded", () => {
           });
 
           if (!res.ok) throw new Error("Échec renommage distant");
+          const resData = await res.json();
+          const finalFilename = resData.filename || newFname;
+          const finalTitle = resData.title || newTitle;
+
+          // Mettre à jour OPFS local pour rester aligné avec le disque
+          const content = await MarkdownStorage.read(oldFname);
+          if (content !== null) {
+            await MarkdownStorage.write(finalFilename, content);
+            await MarkdownStorage.delete(oldFname);
+          }
+          await MarkdownStorage.unmarkDirty(oldFname);
+          await MarkdownStorage.unmarkDirty(finalFilename);
+
+          this.currentTitle = finalTitle;
+          this.currentFilename = finalFilename;
+          input.value = finalTitle;
         } else {
           // Hors-ligne : déplacer dans OPFS et marquer dirty
           const content = await MarkdownStorage.read(oldFname);
@@ -7764,20 +7993,27 @@ document.addEventListener("DOMContentLoaded", () => {
           }
           await MarkdownStorage.markDirty(oldFname, "deleted");
           await MarkdownStorage.markDirty(newFname, "created");
+          this.currentTitle = newTitle;
+          this.currentFilename = newFname;
+          input.value = newTitle;
         }
-
-        this.currentTitle = newTitle;
-        this.currentFilename = newFname;
-        input.value = newTitle;
 
         // Mettre à jour l'en-tête du lecteur et l'onglet actif
         const viewerDocTitle = document.getElementById("viewerDocTitle");
-        if (viewerDocTitle) viewerDocTitle.textContent = newTitle;
+        if (viewerDocTitle) viewerDocTitle.textContent = this.currentTitle;
 
         const tab = tabManager.openTabs.find(t => Number(t.docId) === Number(this.currentDocId));
         if (tab) {
-          tab.docTitle = newTitle;
-          tabManager.renderTabs();
+          tab.docTitle = this.currentTitle;
+          tabManager.renderTabsUI();
+        }
+
+        if (Array.isArray(window.currentLoadedDocs)) {
+          const docInList = window.currentLoadedDocs.find(d => Number(d.id) === Number(this.currentDocId));
+          if (docInList) {
+            docInList.title = this.currentTitle;
+            docInList.filename = this.currentFilename;
+          }
         }
 
         if (typeof loadDocuments === "function") {
@@ -7786,36 +8022,189 @@ document.addEventListener("DOMContentLoaded", () => {
 
         showToast("Note renommée", "success");
       } catch (e) {
+        console.error("[Markdown] Erreur renommage:", e);
         showToast("Impossible de renommer la note", "error");
       } finally {
         this._isRenaming = false;
       }
     },
 
-    highlightTermInEditor(term) {
-      if (!term || !term.trim()) return;
-      const cleanTerm = term.trim().toLowerCase();
+    highlightSearch(query, activeIndex = 0) {
+      if (!query || !query.trim()) {
+        this.clearSearchHighlight();
+        return;
+      }
+      const cleanTerm = query.trim().toLowerCase();
       const root = document.getElementById("milkdownRoot");
       if (!root) return;
 
-      // Recherche dans tous les éléments de texte de l'éditeur
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
-      let node;
-      while ((node = walker.nextNode())) {
-        if (node.textContent && node.textContent.toLowerCase().includes(cleanTerm)) {
+      this.clearSearchHighlight();
+      this._currentSearchQuery = cleanTerm;
+
+      // Parcourir tous les noeuds texte éligibles
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+          if (!node.textContent || !node.textContent.trim()) return NodeFilter.FILTER_REJECT;
           const parent = node.parentElement;
-          if (parent) {
-            parent.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            parent.style.transition = 'background-color 0.4s ease';
-            const origBg = parent.style.backgroundColor;
-            parent.style.backgroundColor = 'rgba(250, 204, 21, 0.4)';
-            setTimeout(() => {
-              parent.style.backgroundColor = origBg;
-            }, 1800);
-            break;
+          if (parent && (parent.tagName === 'SCRIPT' || parent.tagName === 'STYLE' ||
+                         parent.classList.contains('milkdown-slash-menu') ||
+                         parent.classList.contains('milkdown-block-handle') ||
+                         parent.classList.contains('crepe-prompt') ||
+                         parent.classList.contains('md-search-overlay'))) {
+            return NodeFilter.FILTER_REJECT;
           }
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      }, false);
+
+      let node;
+      const ranges = [];
+      while ((node = walker.nextNode())) {
+        const text = node.textContent;
+        if (!text) continue;
+        const lower = text.toLowerCase();
+        let idx = 0;
+        while ((idx = lower.indexOf(cleanTerm, idx)) !== -1) {
+          try {
+            const range = new Range();
+            range.setStart(node, idx);
+            range.setEnd(node, idx + cleanTerm.length);
+            ranges.push(range);
+          } catch (e) {}
+          idx += cleanTerm.length;
         }
       }
+
+      this._ranges = ranges;
+
+      if (ranges.length === 0) {
+        this.clearSearchHighlight();
+        return;
+      }
+
+      const safeIndex = (activeIndex >= 0 && activeIndex < ranges.length) ? activeIndex : 0;
+      const activeRange = ranges[safeIndex];
+
+      // 1. CSS Custom Highlight API (Chrome, Safari, Edge)
+      if (typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight !== 'undefined') {
+        try {
+          const validRanges = ranges.filter(r => r.startContainer && r.startContainer.isConnected);
+          if (validRanges.length > 0) {
+            CSS.highlights.set("markdown-search", new Highlight(...validRanges));
+            const safeActive = validRanges[safeIndex] || validRanges[0];
+            if (safeActive) {
+              CSS.highlights.set("markdown-search-active", new Highlight(safeActive));
+            }
+          }
+        } catch (e) {}
+      }
+
+      // 2. Calque visuel transparent d'overlay (100% universel, fonctionne dans Firefox sans toucher au DOM de ProseMirror)
+      this._renderSearchOverlay(ranges, safeIndex);
+
+      // 3. Scroll fluide vers l'occurrence active
+      if (activeRange && activeRange.startContainer) {
+        const parentElem = activeRange.startContainer.parentElement;
+        if (parentElem) {
+          parentElem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }
+    },
+
+    _renderSearchOverlay(ranges, safeIndex) {
+      const root = document.getElementById("milkdownRoot");
+      if (!root) return;
+
+      let overlay = root.querySelector(".md-search-overlay");
+      if (!overlay) {
+        overlay = document.createElement("div");
+        overlay.className = "md-search-overlay";
+        overlay.style.cssText = "position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:4;";
+        root.style.position = "relative";
+        root.appendChild(overlay);
+      }
+      overlay.innerHTML = "";
+
+      const rootRect = root.getBoundingClientRect();
+      const scrollTop = root.scrollTop || 0;
+      const scrollLeft = root.scrollLeft || 0;
+      const hasNativeCssHighlight = (typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight !== 'undefined');
+
+      ranges.forEach((range, idx) => {
+        const clientRects = Array.from(range.getClientRects());
+        const rectsToDraw = clientRects.length > 0 ? clientRects : [range.getBoundingClientRect()];
+        const isActive = (idx === safeIndex);
+
+        rectsToDraw.forEach(r => {
+          const hit = document.createElement("div");
+          hit.className = "md-search-overlay-hit" + (isActive ? " active" : "");
+          hit.setAttribute("data-search-hit", "true");
+
+          // Coordonnées et dimensions strictes du mot recherché (jamais la largeur du paragraphe entier)
+          const textLen = (range.toString() || "").length || 4;
+          const w = (r.width > 0) ? r.width : (textLen * 8.5);
+          const h = (r.height > 0) ? r.height : 20;
+          const top = ((r.top && r.height > 0) ? r.top : (range.startContainer?.parentElement?.getBoundingClientRect()?.top || 0)) - rootRect.top + scrollTop;
+          const left = ((r.left && r.width > 0) ? r.left : (range.startContainer?.parentElement?.getBoundingClientRect()?.left || 0)) - rootRect.left + scrollLeft;
+
+          if (hasNativeCssHighlight) {
+            // Dans Chrome/Safari/Edge, CSS.highlights surligne déjà nativement et fidèlement chaque caractère.
+            // L'overlay n'affiche qu'un cadre focal élégant sur l'occurrence active.
+            if (isActive) {
+              hit.style.cssText = `position:absolute; top:${top - 1}px; left:${left - 2}px; width:${w + 4}px; height:${h + 2}px; border:2px solid #ea580c; border-radius:3px; background:rgba(234, 88, 12, 0.15); pointer-events:none; z-index:5; box-shadow:0 0 0 2px rgba(234, 88, 12, 0.25);`;
+            } else {
+              hit.style.cssText = `position:absolute; top:${top}px; left:${left}px; width:${w}px; height:${h}px; pointer-events:none; opacity:0;`;
+            }
+          } else {
+            // Fallback universel (Firefox) : surlignage précis et translucide aux dimensions exactes du mot
+            const bg = isActive ? "rgba(234, 88, 12, 0.45)" : "rgba(254, 240, 138, 0.7)";
+            const border = isActive ? "1px solid #c2410c" : "1px solid rgba(234, 179, 8, 0.5)";
+            hit.style.cssText = `position:absolute; top:${top}px; left:${left}px; width:${w}px; height:${h}px; background-color:${bg}; mix-blend-mode:multiply; border-radius:2px; z-index:${isActive ? 5 : 4}; border:${border};`;
+          }
+          overlay.appendChild(hit);
+        });
+      });
+
+      // Attacher le réajustement automatique de l'overlay au scroll
+      if (!this._overlayScrollAttached) {
+        this._overlayScrollAttached = true;
+        const scrollElem = root.closest(".milkdown-scroll-container") || root;
+        scrollElem.addEventListener("scroll", () => {
+          if (this._currentSearchQuery && this._ranges && this._ranges.length > 0) {
+            requestAnimationFrame(() => {
+              if (this._currentSearchQuery && this._ranges) {
+                this._renderSearchOverlay(this._ranges, this._currentActiveIndex || 0);
+              }
+            });
+          }
+        }, { passive: true });
+        window.addEventListener("resize", () => {
+          if (this._currentSearchQuery && this._ranges && this._ranges.length > 0) {
+            this._renderSearchOverlay(this._ranges, this._currentActiveIndex || 0);
+          }
+        }, { passive: true });
+      }
+      this._currentActiveIndex = safeIndex;
+    },
+
+    clearSearchHighlight() {
+      this._currentSearchQuery = null;
+      this._ranges = null;
+      if (typeof CSS !== 'undefined' && CSS.highlights) {
+        try {
+          CSS.highlights.delete("markdown-search");
+          CSS.highlights.delete("markdown-search-active");
+        } catch (e) {}
+      }
+      const root = document.getElementById("milkdownRoot");
+      if (root) {
+        const overlay = root.querySelector(".md-search-overlay");
+        if (overlay) overlay.innerHTML = "";
+      }
+    },
+
+    highlightTermInEditor(term, index = 0) {
+      this.highlightSearch(term, index);
     },
 
     async trashCurrentNote() {
@@ -7886,68 +8275,118 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     },
 
-    async handlePaste(e) {
-      const items = e.clipboardData?.items;
-      if (!items) return;
+    /** Détection d'image dans un DataTransfer (paste ou drop). */
+    _hasImageInDataTransfer(dt) {
+      if (!dt) return false;
+      if (dt.items) {
+        for (const item of dt.items) {
+          // kind peut être absent sur les DataTransfer synthétiques (tests)
+          const isFileKind = !item.kind || item.kind === "file";
+          if (isFileKind && item.type && item.type.startsWith("image/")) return true;
+        }
+      }
+      if (dt.files) {
+        for (const f of dt.files) {
+          if (f.type && f.type.startsWith("image/")) return true;
+        }
+      }
+      return false;
+    },
 
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].type.indexOf("image") !== -1) {
-          e.preventDefault();
-          const file = items[i].getAsFile();
-          if (file) {
-            await this.uploadAndInsertAsset(file);
+    /** Extrait le premier fichier image d'un DataTransfer. */
+    _extractImageFile(dt) {
+      if (dt.items) {
+        for (const item of dt.items) {
+          const isFileKind = !item.kind || item.kind === "file";
+          if (isFileKind && item.type && item.type.startsWith("image/")) {
+            const f = item.getAsFile();
+            if (f) return f;
           }
-          break;
         }
       }
+      if (dt.files) {
+        for (const f of dt.files) {
+          if (f.type && f.type.startsWith("image/")) return f;
+        }
+      }
+      return null;
     },
 
-    async handleDrop(e) {
+    /**
+     * Paste en phase CAPTURE : si une image est présente, on l'upload en
+     * assets/ et on insère la référence finale — stop propagation avant que
+     * le bloc image de Crepe ne crée sa propre référence blob:.
+     */
+    async handleImagePasteCapture(e) {
+      if (!this._hasImageInDataTransfer(e.clipboardData)) return;
       e.preventDefault();
-      const files = e.dataTransfer?.files;
-      if (!files || files.length === 0) return;
-
-      for (let i = 0; i < files.length; i++) {
-        if (files[i].type.startsWith("image/")) {
-          await this.uploadAndInsertAsset(files[i]);
-          break;
-        }
-      }
+      e.stopPropagation();
+      const file = this._extractImageFile(e.clipboardData);
+      if (file) await this.uploadAndInsertAsset(file);
     },
 
+    /** Drop en phase CAPTURE : même principe que handleImagePasteCapture. */
+    async handleImageDropCapture(e) {
+      if (!this._hasImageInDataTransfer(e.dataTransfer)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const file = this._extractImageFile(e.dataTransfer);
+      if (file) await this.uploadAndInsertAsset(file);
+    },
+
+    /** Upload en assets/<stem>/ puis insertion de la référence finale dans la note. */
     async uploadAndInsertAsset(file) {
       if (!this.currentFilename) return;
       const stem = this.currentFilename.replace(/\.[^/.]+$/, "");
 
+      try {
+        showToast("Téléversement de l'image...", "info");
+        const assetUrl = await this.uploadAssetOnly(file);
+        const assetName = decodeURIComponent(assetUrl.split("/").pop() || "image.png");
+
+        const currentMd =
+          (this.editorInstance && typeof this.editorInstance.getMarkdown === "function"
+            ? this.editorInstance.getMarkdown()
+            : null) ||
+          (await MarkdownStorage.read(this.currentFilename)) ||
+          "";
+        const imageMd = `\n\n![${assetName}](${assetUrl})\n\n`;
+        const updatedMd = currentMd.trimEnd() + imageMd;
+
+        await this.saveNote(updatedMd);
+        this.loadNote(this.currentDocId, this.currentFilename, this.currentTitle, updatedMd);
+      } catch (err) {
+        console.error("[Markdown] Erreur upload image:", err);
+        showToast("Échec de l'upload de l'image", "error");
+      }
+    },
+
+    /** Upload d'un fichier image en assets/<stem>/ et retourne l'URL publique. */
+    async uploadAssetOnly(file) {
+      if (!this.currentFilename) {
+        throw new Error("Aucune note active pour l'upload d'image");
+      }
+      const stem = this.currentFilename.replace(/\.[^/.]+$/, "");
       const formData = new FormData();
       formData.append("file", file, file.name || "image.png");
 
-      try {
-        showToast("Téléversement de l'image...", "info");
-        const res = await fetch(`/api/assets/${encodeURIComponent(stem)}`, {
-          method: "POST",
-          body: formData
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          const assetName = (data.assets && data.assets[0]?.name) || file.name || "image.png";
-          const imageMd = `\n\n![${assetName}](assets/${stem}/${assetName})\n\n`;
-          showToast("Image insérée avec succès", "success");
-
-          // Insérer dans le document actif
-          const currentMd = this.editorInstance && typeof this.editorInstance.getMarkdown === "function"
-            ? this.editorInstance.getMarkdown()
-            : (await MarkdownStorage.read(this.currentFilename) || "");
-          const updatedMd = currentMd + imageMd;
-          await this.saveNote(updatedMd);
-          this.loadNote(this.currentDocId, this.currentFilename, this.currentTitle, updatedMd);
-        } else {
-          showToast("Échec de l'upload de l'image", "error");
-        }
-      } catch (err) {
-        showToast("Échec upload image", "error");
+      const res = await fetch(`/api/assets/${encodeURIComponent(stem)}`, {
+        method: "POST",
+        body: formData
+      });
+      if (!res.ok) {
+        throw new Error(`Échec de l'upload de l'image (HTTP ${res.status})`);
       }
+      const data = await res.json();
+      const asset = (data.assets && data.assets[0]) || null;
+      const assetName = asset?.name || file.name || "image.png";
+      // Le backend renvoie une URL déjà 100% encodée (destination CommonMark
+      // valide) : ne PAS ré-encoder (sinon %20 deviendrait %2520). Le fallback
+      // local encode le stem/nom lui-même, jamais l'URL du serveur.
+      const assetUrl = asset?.url
+        || `/api/assets/${encodeURIComponent(stem)}/${encodeURIComponent(assetName)}`;
+      showToast("Image insérée avec succès", "success");
+      return assetUrl;
     },
 
     setStatus(status, text) {

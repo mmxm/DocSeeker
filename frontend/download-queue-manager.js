@@ -3,7 +3,6 @@
  * 
  * Gestionnaire unifié de la file d'attente de téléchargement et de synchronisation résiliente :
  * - Télécharge le bundle d'index et l'insère dans SQLite-Wasm (via offlineSearchWorker).
- * - Met en cache la couverture dans CacheStorage ('docseeker_covers').
  * - Déclenche le téléchargement intégral des fragments PDF par chargement headless de pdf.mjs.
  * - Limite la concurrence à 2 transferts simultanés avec pause, reprise et annulation.
  */
@@ -474,19 +473,7 @@ class DownloadQueueManager {
     if (window.pdfCacheManager) {
       await window.pdfCacheManager.invalidate(id).catch(() => { });
     }
-    if (typeof caches !== 'undefined') {
-      try {
-        const coverCache = await caches.open('docseeker_covers');
-        await coverCache.delete(`/api/cover/${id}`);
-        const cropCache = await caches.open('docseeker_offline_crops');
-        const keys = await cropCache.keys();
-        for (const req of keys) {
-          if (req.url.includes(`/api/crop/${id}/`)) {
-            await cropCache.delete(req);
-          }
-        }
-      } catch (e) { }
-    }
+    // Plus de cache cover/crop : les vignettes sont servies fraîches par le serveur.
     this._notify();
     console.log(`[DownloadQueueManager] Document ${id} supprimé du cache local`);
   }
@@ -849,16 +836,8 @@ class DownloadQueueManager {
         // NOTE: Ne pas ajouter à cachedDocIds ici : le document n'est disponible qu'une fois son binaire 100% complet !
       }
 
-      // 2. Mettre en cache l'image de couverture dans CacheStorage
-      if (typeof caches !== 'undefined') {
-        let coverUrl = `/api/cover/${docId}`;
-        if (token) coverUrl += `?token=${encodeURIComponent(token)}`;
-        const coverRes = await fetch(coverUrl, { credentials: 'include' }).catch(() => null);
-        if (coverRes && coverRes.ok) {
-          const cache = await caches.open('docseeker_covers');
-          await cache.put(`/api/cover/${docId}`, coverRes);
-        }
-      }
+      // 2. (supprimé) La couverture n'est plus mise en cache CacheStorage :
+      // /api/cover est servie fraîche par le backend.
 
       // 3. Déclencher le téléchargement du fichier complet (OPFS standard)
       // Vérifier d'abord si déjà complet

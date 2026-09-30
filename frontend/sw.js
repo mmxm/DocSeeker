@@ -9,8 +9,9 @@
 
 const APP_VERSION = '__ASSET_VERSION__';
 const CACHE_NAME = `docseeker-app-shell-v${APP_VERSION}`;
-const CROP_CACHE_NAME = 'docseeker_offline_crops_v2';
-const COVER_CACHE_NAME = 'docseeker_covers';
+// Les vignettes (covers et crops) ne sont PLUS mises en cache, ni côté SW ni côté
+// serveur : chaque requête /api/cover et /api/crop est servie fraîchement par le
+// backend, ce qui garantit un rendu toujours à jour (note éditée, image collée...).
 
 const VERSIONED_ASSETS = [
   '/style.css',
@@ -27,7 +28,6 @@ const APP_SHELL_ASSETS = [
   '/index.html',
   ...VERSIONED_ASSETS,
   '/favicon.ico',
-  '/placeholder-cover.png',
   '/vendor/milkdown.js',
   '/vendor/milkdown.css',
   '/wasm/search_wasm/search_wasm.js',
@@ -112,30 +112,16 @@ self.addEventListener('activate', (event) => {
   console.log('[ServiceWorker] Activation...');
   event.waitUntil(
     caches.keys().then(async (keys) => {
-      // 1. Suppression des anciens caches de versions antérieures
+      // Suppression de tous les caches obsolètes, y compris les anciens caches de
+      // vignettes (docseeker_covers, docseeker_offline_crops*) désormais supprimés.
       await Promise.all(
         keys.map((key) => {
-          if (key !== CACHE_NAME && key !== CROP_CACHE_NAME && key !== COVER_CACHE_NAME) {
+          if (key !== CACHE_NAME) {
             console.log('[ServiceWorker] Suppression de l\'ancien cache:', key);
             return caches.delete(key);
           }
         })
       );
-
-      // 2. Invalidation du cache des vignettes lors d'une montée de version
-      // pour purger d'éventuels crops corrompus et forcer le rendu vectoriel natif
-      try {
-        const migrationKey = `/__crop_cache_cleaned_v${APP_VERSION}`;
-        const appCache = await caches.open(CACHE_NAME);
-        const isCleaned = await appCache.match(migrationKey);
-        if (!isCleaned) {
-          console.log(`[ServiceWorker] Purge du cache des vignettes ${CROP_CACHE_NAME} pour v${APP_VERSION}...`);
-          await caches.delete(CROP_CACHE_NAME);
-          await appCache.put(migrationKey, new Response('1'));
-        }
-      } catch (e) {
-        console.warn('[ServiceWorker] Erreur lors de la purge de CROP_CACHE_NAME:', e);
-      }
     }).then(() => self.clients.claim())
   );
 });
@@ -151,48 +137,10 @@ self.addEventListener('fetch', (event) => {
   }
   if (!url.protocol.startsWith('http')) return;
 
-  // 1. Couvertures (/api/cover/{id}) : Cache First avec Network Fallback
-  if (url.pathname.startsWith('/api/cover/')) {
-    event.respondWith(
-      caches.open(COVER_CACHE_NAME).then(async (cache) => {
-        const cached = await cache.match(event.request, { ignoreSearch: true }) || await cache.match(url.pathname);
-        if (cached) return cached;
-        return fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            cache.put(event.request, networkResponse.clone());
-          }
-          return networkResponse;
-        }).catch(() => {
-          return caches.match('/placeholder-cover.png');
-        });
-      })
-    );
-    return;
-  }
+  // Les couvertures (/api/cover/) et vignettes (/api/crop/) ne sont plus interceptées :
+  // elles passent directement sur le réseau, servies fraîches par le backend (no-store).
 
-  // 2. Vignettes de recherche (/api/crop/{docId}/{page}/{occId}) : Cache First avec clé URL complète
-  if (url.pathname.startsWith('/api/crop/')) {
-    event.respondWith(
-      caches.open(CROP_CACHE_NAME).then(async (cache) => {
-        // Match exact avec query params pour respecter la recherche et les surlignages spécifiques
-        let cached = await cache.match(event.request);
-        if (cached) return cached;
-
-        return fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            cache.put(event.request, networkResponse.clone());
-            return networkResponse;
-          }
-          return new Response('Offline crop not available', { status: 503, statusText: 'Offline Crop Missing' });
-        }).catch(async () => {
-          return new Response('Offline crop not available', { status: 503, statusText: 'Offline Crop Missing' });
-        });
-      })
-    );
-    return;
-  }
-
-  // 3. Streaming PDF (/api/pdf/{id}) :
+  // Streaming PDF (/api/pdf/{id}) :
   if (url.pathname.startsWith('/api/pdf/')) {
     const id = url.pathname.replace('/api/pdf/', '').split('/')[0];
 

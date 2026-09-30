@@ -8,6 +8,7 @@
     "test:version": "node tests/test_version_consistency.mjs",
     "test:ui": "playwright test",
     "test:ui:headed": "playwright test --headed",
+    "build:milkdown": "npx esbuild frontend/src-milkdown/crepe-entry.js --bundle --minify --format=iife --loader:.woff=dataurl --loader:.woff2=dataurl --loader:.ttf=dataurl --loader:.svg=dataurl --loader:.png=dataurl --outfile=frontend/vendor/milkdown.js",
     "bump": "bash scripts/bump_version.sh"
   },
   "devDependencies": {
