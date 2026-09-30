@@ -2,6 +2,24 @@ use std::fs;
 use std::path::Path;
 use image::{ImageBuffer, ImageFormat, Rgba};
 use unicode_normalization::UnicodeNormalization;
+
+/// Dimensions des vignettes d'extrait Markdown (ratio 3:1)
+const MD_CROP_WIDTH: u32 = 420;
+const MD_CROP_HEIGHT: u32 = 140;
+
+/// Vérifie si un fichier image est lisible avec succès (guard anti-image-corrompue).
+/// La génération des vignettes s'exécute sur le pool bloquant du serveur : une
+/// image illisible (0 octet, téléchargement interrompu...) ferait planter le worker.
+fn is_readable_image(path: &Path) -> bool {
+    image::image_dimensions(path).is_ok()
+}
+
+/// Tente de trouver une image utilisable pour illustrer une note Markdown,
+/// en ignorant les entrées illisibles/corrompues et les références blob: locales.
+fn find_first_readable_image(content: &str, file_path: &Path) -> Option<std::path::PathBuf> {
+    let candidates = find_first_image_in_markdown(content, file_path)?;
+    candidates.into_iter().find(|p| is_readable_image(p))
+}
 use crate::document::processor::{DocumentMetadata, DocumentProcessor, ExtractedPage};
 
 pub struct MarkdownProcessor;
@@ -92,8 +110,24 @@ pub fn strip_markdown(content: &str) -> String {
 
 /// Helper pour convertir `[texte](lien)` et `![image](lien)` en `texte`
 fn clean_links_and_images(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let chars: Vec<char> = input.chars().collect();
+    // Normalisation des séquences échappées (\[ \] \( \) \!) : le MD sérialisé
+    // en texte brut produit des refs `!\[image.png\](assets/…)` que le parseur
+    // ci-dessous ne reconnaît pas sinon — la syntaxe brute polluerait la recherche.
+    let mut normalized = String::with_capacity(input.len());
+    let mut it = input.chars().peekable();
+    while let Some(c) = it.next() {
+        if c == '\\' {
+            if let Some(&n) = it.peek() {
+                if matches!(n, '[' | ']' | '(' | ')' | '!') {
+                    continue; // avaler l'antislash, garder le caractère
+                }
+            }
+        }
+        normalized.push(c);
+    }
+
+    let mut out = String::with_capacity(normalized.len());
+    let chars: Vec<char> = normalized.chars().collect();
     let len = chars.len();
     let mut i = 0;
 
@@ -149,6 +183,23 @@ fn clean_links_and_images(input: &str) -> String {
     out
 }
 
+use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
+use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut};
+use imageproc::rect::Rect;
+
+const FONT_REGULAR_BYTES: &[u8] = include_bytes!("../../assets/fonts/regular.ttf");
+const FONT_BOLD_BYTES: &[u8] = include_bytes!("../../assets/fonts/bold.ttf");
+
+fn measure_text(font: &FontRef, text: &str, scale: PxScale) -> f32 {
+    let scaled = font.as_scaled(scale);
+    let mut width = 0.0;
+    for c in text.chars() {
+        let g = scaled.glyph_id(c);
+        width += scaled.h_advance(g);
+    }
+    width
+}
+
 impl DocumentProcessor for MarkdownProcessor {
     fn doc_type(&self) -> &'static str {
         "markdown"
@@ -172,106 +223,444 @@ impl DocumentProcessor for MarkdownProcessor {
 
         let plain_text = strip_markdown(&content);
 
+        // Pas de words_json pour les notes Markdown : leurs occurrences passent par le
+        // chemin "par lignes" (find_occurrences_in_text) qui produit des extraits texte
+        // enrichis (mot-clé + contexte) rendus nativement en HTML par le client — plus
+        // de crops image (économie bande passante / CPU).
+
         Ok(vec![ExtractedPage {
             page_number: 1,
             text_content: plain_text,
-            words_json: None, // Pas de coordonnées géométriques pour le Markdown
+            words_json: None,
         }])
     }
 
     fn generate_cover(&self, file_path: &Path, cover_path: &Path, _doc_id: i64) -> Result<(), String> {
-        // Dimensions standard des vignettes couverture (300 x 420)
-        let width = 300u32;
-        let height = 420u32;
+        let img = render_cover_image(file_path)?;
+        if let Some(parent) = cover_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        img.save_with_format(cover_path, ImageFormat::WebP)
+            .map_err(|e| format!("Erreur génération couverture WebP : {}", e))?;
+        Ok(())
+    }
+}
+
+/// Dessine la couverture d'une note Markdown (300x420) entièrement en mémoire.
+/// Le rendu est recalculé à chaque appel depuis l'état courant de la note et de
+/// ses assets : aucune vignette n'est mise en cache sur disque.
+fn render_cover_image(file_path: &Path) -> Result<ImageBuffer<Rgba<u8>, Vec<u8>>, String> {
+    // Dimensions standard des vignettes couverture (300 x 420)
+    let width = 300u32;
+    let height = 420u32;
+
+    let content = fs::read_to_string(file_path).unwrap_or_default();
+    let title = derive_title_from_filename(
+        file_path.file_name().and_then(|s| s.to_str()).unwrap_or("Note")
+    );
+
+    let font_bold = FontRef::try_from_slice(FONT_BOLD_BYTES).map_err(|e| e.to_string())?;
+    let font_reg = FontRef::try_from_slice(FONT_REGULAR_BYTES).map_err(|e| e.to_string())?;
+
+    // Fond feuille blanche pure avec bordure discrète
+    let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_pixel(width, height, Rgba([255, 255, 255, 255]));
+        let border_color = Rgba([226, 232, 240, 255]); // slate-200
+        for x in 0..width {
+            img.put_pixel(x, 0, border_color);
+            img.put_pixel(x, height - 1, border_color);
+        }
+        for y in 0..height {
+            img.put_pixel(0, y, border_color);
+            img.put_pixel(width - 1, y, border_color);
+        }
+
+        // Bandeau haut d'accent coloré discret
+        draw_filled_rect_mut(&mut img, Rect::at(1, 1).of_size(width - 2, 4), Rgba([59, 130, 246, 255]));
+
+        // Badge pillule "NOTE MD"
+        let badge_bg = Rgba([241, 245, 249, 255]); // slate-100
+        draw_filled_rect_mut(&mut img, Rect::at(20, 16).of_size(68, 20), badge_bg);
+        draw_text_mut(&mut img, Rgba([71, 85, 105, 255]), 27, 20, PxScale::from(10.0), &font_bold, "NOTE MD");
+
+        // Sous-titre "Note Markdown • 1 page"
+        draw_text_mut(&mut img, Rgba([148, 163, 184, 255]), 98, 21, PxScale::from(10.0), &font_reg, "Note Markdown");
+
+        // Titre réel de la note en typographie bold
+        let display_title = if title.chars().count() > 24 {
+            let truncated: String = title.chars().take(22).collect();
+            format!("{}...", truncated)
+        } else {
+            title.clone()
+        };
+        draw_text_mut(&mut img, Rgba([15, 23, 42, 255]), 20, 44, PxScale::from(17.0), &font_bold, &display_title);
+
+        // Ligne de séparation élégante
+        draw_filled_rect_mut(&mut img, Rect::at(20, 70).of_size(width - 40, 1), Rgba([241, 245, 249, 255]));
+
+        // Vérifier si la note a une image (capture d'écran ou illustration)
+        let maybe_img = find_first_readable_image(&content, file_path);
+
+        let mut curr_y = 80i32;
+
+        if let Some(ref img_path) = maybe_img {
+            if let Ok(dyn_img) = image::open(img_path) {
+                let frame_w = width - 40; // 260px
+                let frame_h = 160u32;     // 160px
+                let resized = dyn_img.resize(frame_w, frame_h, image::imageops::FilterType::Lanczos3);
+
+                let offset_x = 20 + ((frame_w.saturating_sub(resized.width())) / 2);
+                let offset_y = curr_y as u32 + ((frame_h.saturating_sub(resized.height())) / 2);
+
+                draw_filled_rect_mut(&mut img, Rect::at(20, curr_y).of_size(frame_w, frame_h), Rgba([248, 250, 252, 255]));
+                image::imageops::overlay(&mut img, &resized, offset_x as i64, offset_y as i64);
+
+                // Bordure fine du cadre d'image
+                for x in 20..(20 + frame_w) {
+                    img.put_pixel(x, curr_y as u32, border_color);
+                    img.put_pixel(x, curr_y as u32 + frame_h - 1, border_color);
+                }
+                for y in (curr_y as u32)..(curr_y as u32 + frame_h) {
+                    img.put_pixel(20, y, border_color);
+                    img.put_pixel(20 + frame_w - 1, y, border_color);
+                }
+
+                curr_y += frame_h as i32 + 15;
+            }
+        }
+
+        // Rendu des vraies lignes de texte de la note
+        let lines: Vec<&str> = content
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty() && !l.starts_with("# ") && !l.starts_with("![") && !l.starts_with("<br") && !l.starts_with("<img"))
+            .collect();
+
+        for line in lines.iter().take(if maybe_img.is_some() { 6 } else { 14 }) {
+            if curr_y >= (height - 25) as i32 {
+                break;
+            }
+
+            let is_h2 = line.starts_with("##");
+            let is_bullet = line.starts_with("- ") || line.starts_with("* ");
+
+            let clean_line = clean_preview_line(line);
+            let max_chars = if is_h2 { 28 } else { 38 };
+            let line_text: String = if clean_line.chars().count() > max_chars {
+                clean_line.chars().take(max_chars - 2).collect::<String>() + "..."
+            } else {
+                clean_line
+            };
+
+            if is_h2 {
+                curr_y += 4;
+                draw_text_mut(&mut img, Rgba([30, 41, 59, 255]), 20, curr_y, PxScale::from(14.0), &font_bold, &line_text);
+                curr_y += 20;
+            } else if is_bullet {
+                draw_filled_rect_mut(&mut img, Rect::at(22, curr_y + 4).of_size(3, 3), Rgba([100, 116, 139, 255]));
+                draw_text_mut(&mut img, Rgba([51, 65, 85, 255]), 30, curr_y, PxScale::from(11.5), &font_reg, &line_text);
+                curr_y += 18;
+            } else {
+                draw_text_mut(&mut img, Rgba([51, 65, 85, 255]), 20, curr_y, PxScale::from(11.5), &font_reg, &line_text);
+                curr_y += 18;
+            }
+        }
+
+    Ok(img)
+}
+
+/// Helper pour afficher une ligne Markdown dans les aperçus/crops de façon propre et sans syntaxe brute
+fn clean_preview_line(line: &str) -> String {
+    let t = line.trim();
+    let mut s = if let Some(rest) = t.strip_prefix('#') {
+        rest.trim_start_matches('#').trim().to_string()
+    } else if let Some(rest) = t.strip_prefix("- ") {
+        format!("• {}", rest.trim())
+    } else if let Some(rest) = t.strip_prefix("* ") {
+        format!("• {}", rest.trim())
+    } else if let Some(rest) = t.strip_prefix("> ") {
+        rest.trim().to_string()
+    } else {
+        t.to_string()
+    };
+    s = s.replace("**", "").replace("__", "").replace('`', "").replace("~~", "");
+    s
+}
+
+impl MarkdownProcessor {
+    /// Génère une vignette d'extrait intra-document (crop) pour une occurrence de recherche Markdown (420 x 140 px)
+    pub fn generate_crop(
+        file_path: &Path,
+        crop_path: &Path,
+        occ_id: usize,
+        terms: &[String],
+        _doc_id: i64,
+    ) -> Result<(), String> {
+        let img = render_crop_image(file_path, occ_id, terms)?;
+        if let Some(parent) = crop_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        img.save_with_format(crop_path, ImageFormat::WebP)
+            .map_err(|e| format!("Erreur génération vignette extrait WebP : {}", e))
+    }
+
+    /// Génère la vignette d'extrait Markdown entièrement en mémoire (octets WebP).
+    /// Aucun cache disque : le rendu reflète toujours le contenu courant de la note.
+    pub fn generate_crop_bytes(
+        file_path: &Path,
+        occ_id: usize,
+        terms: &[String],
+    ) -> Result<Vec<u8>, String> {
+        let img = render_crop_image(file_path, occ_id, terms)?;
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buffer, ImageFormat::WebP)
+            .map_err(|e| format!("Encodage WebP crop mémoire : {}", e))?;
+        Ok(buffer.into_inner())
+    }
+}
+
+/// Dessine la vignette d'extrait d'une note Markdown (420x140) entièrement en mémoire.
+fn render_crop_image(
+    file_path: &Path,
+    occ_id: usize,
+    terms: &[String],
+) -> Result<ImageBuffer<Rgba<u8>, Vec<u8>>, String> {
+        let width = MD_CROP_WIDTH;
+        let height = MD_CROP_HEIGHT;
 
         let content = fs::read_to_string(file_path).unwrap_or_default();
-        let title = file_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("Note")
-            .to_string();
+        let font_bold = FontRef::try_from_slice(FONT_BOLD_BYTES).map_err(|e| e.to_string())?;
+        let font_reg = FontRef::try_from_slice(FONT_REGULAR_BYTES).map_err(|e| e.to_string())?;
 
-        let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(width, height);
-
-        // Palette moderne et premium
-        // Fond : blanc doux / ivoire moderne (#f8fafc)
-        let bg_color = Rgba([248, 250, 252, 255]);
-        // Bordure (#e2e8f0)
+        let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_pixel(width, height, Rgba([255, 255, 255, 255]));
         let border_color = Rgba([226, 232, 240, 255]);
-        // Bandeau d'en-tête bleu/indigo moderne (#3b82f6)
-        let header_color = Rgba([59, 130, 246, 255]);
-        // Badge Markdown (#2563eb)
-        let badge_bg = Rgba([37, 99, 235, 255]);
-        // Lignes de texte stylisées (#94a3b8)
-        let text_line_color = Rgba([148, 163, 184, 255]);
-        let text_line_alt = Rgba([203, 213, 225, 255]);
+        for x in 0..width {
+            img.put_pixel(x, 0, border_color);
+            img.put_pixel(x, height - 1, border_color);
+        }
+        for y in 0..height {
+            img.put_pixel(0, y, border_color);
+            img.put_pixel(width - 1, y, border_color);
+        }
 
-        for (x, y, pixel) in img.enumerate_pixels_mut() {
-            // Bordure externe
-            if x == 0 || x == width - 1 || y == 0 || y == height - 1 {
-                *pixel = border_color;
-            } else if y < 50 {
-                // Bandeau d'en-tête
-                *pixel = header_color;
-            } else if y >= 55 && y < 75 && x >= 20 && x < 85 {
-                // Badge "MD"
-                *pixel = badge_bg;
-            } else {
-                *pixel = bg_color;
+        // Barre d'accent gauche
+        draw_filled_rect_mut(&mut img, Rect::at(1, 1).of_size(4, height - 2), Rgba([59, 130, 246, 255]));
+
+        let lines: Vec<&str> = content.lines().collect();
+        let lower_terms: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
+
+        let mut matched_line_idx = None;
+        let mut current_occ = 0usize;
+
+        for (idx, line) in lines.iter().enumerate() {
+            let l_lower = line.to_lowercase();
+            if lower_terms.iter().any(|t| l_lower.contains(t.as_str())) {
+                if current_occ == occ_id {
+                    matched_line_idx = Some(idx);
+                    break;
+                }
+                current_occ += 1;
             }
         }
 
-        // Dessiner des barres de simulation de texte Markdown
-        // Titre : barre plus épaisse
-        for y in 95..105 {
-            for x in 20..(width - 40) {
-                img.put_pixel(x, y, Rgba([30, 41, 59, 255])); // Slate-800
-            }
-        }
+        let line_idx = matched_line_idx.unwrap_or(0);
+        let target_line = lines.get(line_idx).copied().unwrap_or("");
 
-        // Lignes de contenu stylisées
-        let lines: Vec<&str> = content.lines().take(12).collect();
-        let num_lines = lines.len().max(6).min(14);
-        let mut curr_y = 125u32;
+        // En-tête : "Extrait Note • Ligne X"
+        let header_str = format!("Extrait Note • Ligne {}", line_idx + 1);
+        draw_text_mut(&mut img, Rgba([148, 163, 184, 255]), 16, 8, PxScale::from(9.5), &font_reg, &header_str);
 
-        for (idx, line) in lines.iter().enumerate().take(num_lines) {
-            let is_heading = line.trim().starts_with('#');
-            let line_len = if is_heading {
-                width.saturating_sub(60)
-            } else {
-                let proportion = ((line.len() * 3).max(40) as u32).min(width - 50);
-                20 + proportion
-            };
+        // Si la ligne contient ou précède une image
+        let is_image_line = target_line.contains("![") || target_line.contains("<img");
+        if is_image_line {
+            if let Some(img_path) = find_first_readable_image(target_line, file_path)
+                .or_else(|| find_first_readable_image(&content, file_path))
+            {
+                if let Ok(dyn_img) = image::open(&img_path) {
+                    let thumb = dyn_img.resize(100, 85, image::imageops::FilterType::Lanczos3);
+                    image::imageops::overlay(&mut img, &thumb, 16, 30);
+                    draw_text_mut(&mut img, Rgba([30, 41, 59, 255]), 130, 46, PxScale::from(12.5), &font_bold, "Image attachée");
+                    draw_text_mut(&mut img, Rgba([100, 116, 139, 255]), 130, 66, PxScale::from(10.5), &font_reg, "Aperçu de la capture");
 
-            let thickness = if is_heading { 6 } else { 4 };
-            let color = if is_heading {
-                Rgba([71, 85, 105, 255])
-            } else if idx % 2 == 0 {
-                text_line_color
-            } else {
-                text_line_alt
-            };
-
-            for y in curr_y..(curr_y + thickness).min(height - 20) {
-                for x in 20..line_len.min(width - 20) {
-                    img.put_pixel(x, y, color);
+                    return Ok(img);
                 }
             }
-            curr_y += thickness + 12;
-            if curr_y >= height - 30 {
+        }
+
+        // Ligne précédente pour contexte visuel
+        if line_idx > 0 {
+            if let Some(pl) = lines.get(line_idx - 1) {
+                let clean_p = clean_preview_line(pl);
+                if !clean_p.is_empty() {
+                    let trunc_p = clean_p.chars().take(42).collect::<String>();
+                    draw_text_mut(&mut img, Rgba([148, 163, 184, 255]), 16, 26, PxScale::from(10.5), &font_reg, &trunc_p);
+                }
+            }
+        }
+
+        // Ligne de l'occurrence avec SURBRILLANCE JAUNE GoodNotes
+        let clean_target = clean_preview_line(target_line);
+        let target_y = 48i32;
+
+        let mut drawn_any_term = false;
+        let lower_clean_target = clean_target.to_lowercase();
+        for term in &lower_terms {
+            if let Some(byte_pos) = lower_clean_target.find(term.as_str()) {
+                let char_pos = lower_clean_target[..byte_pos].chars().count();
+                let term_char_len = term.chars().count();
+                let prefix: String = clean_target.chars().take(char_pos).collect();
+                let term_match: String = clean_target.chars().skip(char_pos).take(term_char_len).collect();
+                let suffix: String = clean_target.chars().skip(char_pos + term_char_len).take(30).collect();
+
+                let prefix_w = measure_text(&font_reg, &prefix, PxScale::from(13.0));
+                let term_w = measure_text(&font_bold, &term_match, PxScale::from(13.0));
+                let term_x = 16 + prefix_w.round() as i32;
+
+                // Surlignage jaune pastel vif (#fef08a)
+                let hl_rect = Rect::at(term_x - 2, target_y - 2).of_size((term_w.round() as u32 + 4).min(width - term_x as u32 - 10), 18);
+                draw_filled_rect_mut(&mut img, hl_rect, Rgba([254, 240, 138, 255]));
+
+                draw_text_mut(&mut img, Rgba([30, 41, 59, 255]), 16, target_y, PxScale::from(13.0), &font_reg, &prefix);
+                draw_text_mut(&mut img, Rgba([15, 23, 42, 255]), term_x, target_y, PxScale::from(13.0), &font_bold, &term_match);
+                let suffix_x = term_x + term_w.round() as i32;
+                draw_text_mut(&mut img, Rgba([30, 41, 59, 255]), suffix_x, target_y, PxScale::from(13.0), &font_reg, &suffix);
+
+                drawn_any_term = true;
                 break;
             }
         }
 
-        if let Some(parent) = cover_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        if !drawn_any_term {
+            let trunc_line = clean_target.chars().take(38).collect::<String>();
+            draw_text_mut(&mut img, Rgba([30, 41, 59, 255]), 16, target_y, PxScale::from(13.0), &font_reg, &trunc_line);
         }
 
-        img.save_with_format(cover_path, ImageFormat::WebP)
-            .map_err(|e| format!("Erreur génération couverture WebP pour {:?} : {}", title, e))?;
+        // Ligne suivante pour contexte visuel
+        if let Some(nl) = lines.get(line_idx + 1) {
+            let clean_n = clean_preview_line(nl);
+            if !clean_n.is_empty() {
+                let trunc_n = clean_n.chars().take(42).collect::<String>();
+                draw_text_mut(&mut img, Rgba([148, 163, 184, 255]), 16, 76, PxScale::from(10.5), &font_reg, &trunc_n);
+            }
+        }
 
-        Ok(())
+    Ok(img)
+}
+
+/// Cherche les images locales candidates pour une note Markdown (dossier assets ou liens du contenu).
+/// Retourne une liste ordonnée par priorité : la première lisible sera retenue.
+fn find_first_image_in_markdown(content: &str, file_path: &Path) -> Option<Vec<std::path::PathBuf>> {
+    use unicode_normalization::UnicodeNormalization;
+
+    let parent_dir = file_path.parent()?;
+    let current_stem = file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+
+    let is_img_ext = |p: &Path| -> bool {
+        if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
+            let lext = ext.to_lowercase();
+            matches!(lext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp")
+        } else {
+            false
+        }
+    };
+
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+
+    // 1. Recherche prioritaire dans le dossier assets dédié à cette note (ex. assets/Ma note pref 1/)
+    if !current_stem.is_empty() {
+        let current_stem_nfc: String = current_stem.nfc().collect();
+        let current_stem_nfd: String = current_stem.nfd().collect();
+
+        let assets_base = parent_dir.join("assets");
+        if assets_base.is_dir() {
+            let mut candidate_folders = vec![assets_base.join(current_stem)];
+            if let Ok(entries) = fs::read_dir(&assets_base) {
+                for entry in entries.flatten() {
+                    let dname = entry.file_name().to_string_lossy().to_string();
+                    let dnfc: String = dname.nfc().collect();
+                    let dnfd: String = dname.nfd().collect();
+                    if dnfc == current_stem_nfc || dnfd == current_stem_nfd {
+                        let p = entry.path();
+                        if p.is_dir() && !candidate_folders.contains(&p) {
+                            candidate_folders.push(p);
+                        }
+                    }
+                }
+            }
+
+            for folder in candidate_folders {
+                if folder.is_dir() {
+                    if let Ok(entries) = fs::read_dir(&folder) {
+                        let mut img_files = Vec::new();
+                        for entry in entries.flatten() {
+                            let p = entry.path();
+                            if p.is_file() && is_img_ext(&p) {
+                                let mtime = fs::metadata(&p).and_then(|m| m.modified()).ok();
+                                img_files.push((p, mtime));
+                            }
+                        }
+                        // Trier par date de modification décroissante (la plus récente d'abord)
+                        img_files.sort_by(|a, b| b.1.cmp(&a.1));
+                        for (best_img, _) in img_files {
+                            candidates.push(best_img);
+                        }
+                    }
+                }
+            }
+        }
     }
+
+    // 2. Recherche dans le contenu Markdown (liens ![alt](url), !\[alt\]\(url\), <img src="url">)
+    let re = regex::Regex::new(r#"(?:!\\?\[.*?\\?\]\\?\((.+?)\)|<img[^>]+src=["']([^"']+)["'])"#).ok()?;
+
+    for cap in re.captures_iter(content) {
+        let raw_target = match cap.get(1).or_else(|| cap.get(2)) {
+            Some(m) => m.as_str().trim(),
+            None => continue,
+        };
+
+        if raw_target.starts_with("blob:")
+            || raw_target.starts_with("http://")
+            || raw_target.starts_with("https://")
+            || raw_target.starts_with("data:")
+        {
+            continue;
+        }
+
+        let decoded = urlencoding::decode(raw_target).unwrap_or(std::borrow::Cow::Borrowed(raw_target));
+        let mut clean_target = decoded.trim();
+        // Nettoyer les préfixes d'API éventuels
+        if let Some(stripped) = clean_target.strip_prefix("/api/assets/") {
+            clean_target = stripped;
+        } else if let Some(stripped) = clean_target.strip_prefix("api/assets/") {
+            clean_target = stripped;
+        } else if let Some(stripped) = clean_target.strip_prefix("/api/documents/") {
+            clean_target = stripped;
+        } else if let Some(stripped) = clean_target.strip_prefix("api/documents/") {
+            clean_target = stripped;
+        } else if let Some(stripped) = clean_target.strip_prefix("./") {
+            clean_target = stripped;
+        } else if let Some(stripped) = clean_target.strip_prefix("/") {
+            clean_target = stripped;
+        }
+
+        // Test chemin direct relatif au dossier parent
+        let direct_path = parent_dir.join(clean_target);
+        if direct_path.is_file() && is_img_ext(&direct_path) {
+            candidates.push(direct_path);
+        }
+
+        // Test avec préfixe assets/
+        let assets_path = parent_dir.join("assets").join(clean_target);
+        if assets_path.is_file() && is_img_ext(&assets_path) {
+            candidates.push(assets_path);
+        }
+    }
+
+    // Dédupliquer en préservant l'ordre (images réelles du contenu d'abord, assets ensuite)
+    candidates.dedup();
+
+    Some(candidates)
 }
 
 /// Indexe un fichier Markdown dans la base SQLite dérivée
@@ -298,8 +687,8 @@ pub fn index_markdown_file(
     // Vérifier si le document existe déjà
     let existing_id: Option<i64> = conn
         .query_row(
-            "SELECT id FROM documents WHERE filename = ?1",
-            params![original_filename],
+            "SELECT id FROM documents WHERE filename = ?1 OR filename LIKE ?2",
+            params![original_filename, format!("%/{}", original_filename)],
             |row| row.get(0),
         )
         .ok();
@@ -307,10 +696,12 @@ pub fn index_markdown_file(
     let inferred_folder_id: Option<i64> = Path::new(original_filename)
         .parent()
         .and_then(|p| p.to_str())
-        .filter(|p| !p.is_empty())
+        // 'assets' (et ses sous-chemins) est le stockage des pièces jointes, pas un dossier utilisateur
+        .filter(|p| !p.is_empty() && !p.split('/').any(|seg| seg.eq_ignore_ascii_case("assets")))
         .and_then(|sub_dir| {
             conn.query_row("SELECT id FROM folders WHERE name = ?1", params![sub_dir], |r| r.get(0)).ok()
                 .or_else(|| {
+                    tracing::warn!("[FolderInfer-MD] Création dossier '{}' depuis fichier '{}'", sub_dir, original_filename);
                     conn.execute("INSERT INTO folders (name, color) VALUES (?1, '#3b82f6')", params![sub_dir])
                         .ok()
                         .map(|_| conn.last_insert_rowid())
@@ -318,7 +709,7 @@ pub fn index_markdown_file(
         });
 
     let doc_id = if let Some(id) = existing_id {
-        conn.execute("DELETE FROM pages WHERE doc_id = ?1", params![id]).map_err(|e| e.to_string())?;
+        let _ = conn.execute("DELETE FROM pages WHERE doc_id = ?1", params![id]);
         conn.execute(
             "UPDATE documents SET title = ?1, file_hash = ?2, total_pages = 1, file_size = ?3, folder_id = COALESCE(folder_id, ?4), doc_type = 'markdown', status = 'ready', error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?5",
             params![meta.title, file_hash, file_size, inferred_folder_id, id],
@@ -332,21 +723,20 @@ pub fn index_markdown_file(
         conn.last_insert_rowid()
     };
 
-    // Génération de la couverture WebP
-    let cover_webp = config.covers_dir.join(format!("{}.webp", doc_id));
-    let _ = processor.generate_cover(&path, &cover_webp, doc_id);
+    // Plus de couverture pré-générée sur disque : /api/cover rend à la volée.
 
     // Insertion atomique de la page dans SQLite FTS5
     {
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let _ = tx.execute("DELETE FROM pages WHERE doc_id = ?1", params![doc_id]);
         {
             let mut insert_page = tx
-                .prepare("INSERT INTO pages (doc_id, page_number, text_content, words_json) VALUES (?1, ?2, ?3, ?4)")
+                .prepare("INSERT OR REPLACE INTO pages (doc_id, page_number, text_content, words_json) VALUES (?1, ?2, ?3, ?4)")
                 .map_err(|e| e.to_string())?;
 
             for page in pages {
                 insert_page
-                    .execute(params![doc_id, page.page_number, page.text_content, page.words_json])
+                    .execute(params![doc_id, page.page_number, page.text_content, page.words_json.as_deref().unwrap_or("")])
                     .map_err(|e| e.to_string())?;
             }
         }
@@ -354,6 +744,22 @@ pub fn index_markdown_file(
     }
 
     Ok(doc_id)
+}
+
+impl MarkdownProcessor {
+    /// Génère la couverture Markdown en mémoire et retourne les octets WebP.
+    ///
+    /// Les vignettes ne sont plus mises en cache : chaque requête /api/cover
+    /// re-rend l'image depuis l'état courant de la note, ce qui garantit que les
+    /// captures d'écran collées en pièces jointes apparaissent immédiatement.
+    pub fn generate_cover_bytes(file_path: &Path) -> Result<Vec<u8>, String> {
+        let img = render_cover_image(file_path)?;
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buffer, ImageFormat::WebP)
+            .map_err(|e| format!("Encodage WebP couverture mémoire : {}", e))?;
+        Ok(buffer.into_inner())
+    }
 }
 
 #[cfg(test)]

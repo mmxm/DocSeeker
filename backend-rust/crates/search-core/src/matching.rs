@@ -288,15 +288,43 @@ pub fn find_occurrences_in_text(
             matched_terms_in_line.dedup();
 
             let y_ratio = (current_offset as f64 / total_len).clamp(0.0, 1.0);
-            let snippet = if line.len() > 140 {
-                let first_match = matched_terms_in_line.first().unwrap();
-                let pos = norm_line.find(first_match.as_str()).unwrap_or(0);
-                let start = pos.saturating_sub(40);
-                let end = (pos + 100).min(line.len());
-                format!("...{}...", &line[start..end])
-            } else {
-                line.trim().to_string()
+
+            // Extrait textuel enrichi : ligne du mot-clé + les 2 lignes NON VIDES les
+            // plus proches au-dessus et en dessous (on saute les lignes vides, sinon le
+            // contexte disparaît dès qu'une ligne séparatrice existe). Le client rend
+            // cet extrait en vignette HTML native pour les notes Markdown — aucun crop
+            // image : économie de bande passante et de CPU côté serveur.
+            let truncate = |s: &str, max: usize| -> String {
+                if s.chars().count() <= max {
+                    s.to_string()
+                } else {
+                    let cut: String = s.chars().take(max).collect();
+                    format!("{}…", cut.trim_end())
+                }
             };
+            let mut above: Vec<&str> = Vec::new();
+            let mut li = line_idx;
+            while li > 0 && above.len() < 2 {
+                li -= 1;
+                let t = lines[li].trim();
+                if !t.is_empty() {
+                    above.push(t);
+                }
+            }
+            above.reverse();
+            let mut below: Vec<&str> = Vec::new();
+            let mut li = line_idx;
+            while li + 1 < lines.len() && below.len() < 2 {
+                li += 1;
+                let t = lines[li].trim();
+                if !t.is_empty() {
+                    below.push(t);
+                }
+            }
+            let mut ctx_parts: Vec<String> = above.iter().map(|t| truncate(t, 120)).collect();
+            ctx_parts.push(truncate(lines[line_idx].trim(), 200));
+            ctx_parts.extend(below.iter().map(|t| truncate(t, 120)));
+            let snippet = ctx_parts.join("\n");
 
             let crop_url = format!(
                 "/api/crop/{}/{}/{}?h={}&terms={}",

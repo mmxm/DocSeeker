@@ -411,10 +411,11 @@ pub unsafe extern "C" fn docseeker_search_local(
             let page_bm25: f64 = row.get(11)?;
             let t_docs: i64 = row.get(12)?;
             let t_occs: i64 = row.get(13)?;
+            let doc_type: String = row.get::<_, Option<String>>(14)?.unwrap_or_else(|| "pdf".to_string());
 
             Ok((
                 doc_id, filename, title, f_id, total_p, created_at, updated_at,
-                doc_rel, match_p, page_num, words_json, page_bm25, t_docs, t_occs
+                doc_rel, match_p, page_num, words_json, page_bm25, t_docs, t_occs, doc_type
             ))
         });
 
@@ -422,7 +423,7 @@ pub unsafe extern "C" fn docseeker_search_local(
             for item in rows.flatten() {
                 let (
                     doc_id, filename, title, f_id, total_p, created_at, updated_at,
-                    doc_rel, match_p, page_num, words_json, page_bm25, t_docs, t_occs
+                    doc_rel, match_p, page_num, words_json, page_bm25, t_docs, t_occs, doc_type
                 ) = item;
 
                 total_docs = t_docs.max(0) as usize;
@@ -443,6 +444,7 @@ pub unsafe extern "C" fn docseeker_search_local(
                     page_bm25,
                     total_docs,
                     total_occurrences: total_occs,
+                    doc_type,
                 });
             }
         }

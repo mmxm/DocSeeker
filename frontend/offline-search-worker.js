@@ -793,7 +793,7 @@ async function executeSearch(queryStr, titlesOnly = false, folderId = null, limi
         const [
           docId, filename, title, fId, totalPages, createdAt, updatedAt,
           docRelevanceScore, matchingPagesCount, pageNumber, wordsJson, pageBm25,
-          tDocs, tOccs
+          tDocs, tOccs, docType, pageTextContent
         ] = row;
 
         totalDocs = Number(tDocs) || 0;
@@ -814,6 +814,8 @@ async function executeSearch(queryStr, titlesOnly = false, folderId = null, limi
           page_bm25: Number(pageBm25) || 0,
           total_docs: totalDocs,
           total_occurrences: totalOccs,
+          doc_type: docType || 'pdf',
+          page_text_content: pageTextContent || '',
         });
       }
     }));
@@ -893,17 +895,43 @@ async function executeDocSearch(docId, queryStr) {
       let currentOffset = 0;
       let occId = 0;
 
+      // Extrait enrichi aligné backend : ligne du mot-clé + 2 lignes NON VIDES
+      // au-dessus / en dessous (rendu natif HTML côté client, aucune image crop).
+      const truncateLine = (s, max) => {
+        const t = s.trim();
+        return t.length <= max ? t : t.slice(0, max).trimEnd() + '…';
+      };
       for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
         const line = lines[lineIdx];
         const lowerLine = line.toLowerCase();
         const matched = terms.filter(t => lowerLine.includes(t.toLowerCase()));
         if (matched.length > 0) {
           const yRatio = Math.min(1.0, currentOffset / totalLen);
-          const snippet = line.length > 140 ? `...${line.slice(0, 140)}...` : line.trim();
+          const above = [];
+          for (let i = lineIdx - 1; i >= 0 && above.length < 2; i--) {
+            const t = lines[i].trim();
+            if (t) above.push(t);
+          }
+          above.reverse();
+          const below = [];
+          for (let i = lineIdx + 1; i < lines.length && below.length < 2; i++) {
+            const t = lines[i].trim();
+            if (t) below.push(t);
+          }
+          const ctxParts = [
+            ...above.map(l => truncateLine(l, 120)),
+            truncateLine(line, 200),
+            ...below.map(l => truncateLine(l, 120)),
+          ];
+          const snippet = ctxParts.join('\n');
+          const encodedTerms = encodeURIComponent(matched.join(','));
+          const safeHash = queryHash || '';
+          const currentOccId = occId++;
+          const cropUrl = `/api/crop/${docId}/${r.pageNumber}/${currentOccId}?h=${safeHash}&terms=${encodedTerms}`;
           textOccurrences.push({
             page_number: r.pageNumber,
-            occ_id: occId++,
-            crop_url: "",
+            occ_id: currentOccId,
+            crop_url: cropUrl,
             text_snippet: snippet,
             distinct_terms_count: matched.length,
             matched_terms: matched,

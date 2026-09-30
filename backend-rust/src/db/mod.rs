@@ -104,6 +104,21 @@ pub fn init_db(db_path: &Path) -> Result<()> {
         }
     }
     let _ = conn.execute("DROP TABLE IF EXISTS document_annotations", []);
+
+    // Migration idempotente : les notes Markdown ne doivent plus fournir de words_json
+    // (coordonnées synthétiques). Leurs occurrences passent désormais par le chemin
+    // "par lignes" qui produit des extraits texte enrichis rendus nativement en HTML
+    // par le client (plus de crops image pour les MD).
+    let cleared_md_words = conn
+        .execute(
+            "UPDATE pages SET words_json = '' WHERE words_json IS NOT NULL AND words_json != '' \n             AND doc_id IN (SELECT id FROM documents WHERE doc_type = 'markdown')",
+            [],
+        )
+        .unwrap_or(0);
+    if cleared_md_words > 0 {
+        info!("[Migration] words_json vidé pour {} page(s) markdown (extraits texte natifs).", cleared_md_words);
+    }
+
     info!("Init table auth...");
     conn.execute_batch(schema::CREATE_AUTH_TABLES)?;
 

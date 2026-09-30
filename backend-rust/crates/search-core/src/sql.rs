@@ -139,6 +139,7 @@ pub fn build_search_query_sql(
                 d.total_pages,
                 d.created_at,
                 COALESCE(d.updated_at, d.created_at) as updated_at,
+                COALESCE(d.doc_type, 'pdf') as doc_type,
                 count(*) as matching_pages_count,
                 min(r.page_bm25) as best_page_bm25,
                 (
@@ -178,7 +179,9 @@ pub fn build_search_query_sql(
             p.words_json,
             rp.page_bm25,
             COALESCE((SELECT total_docs FROM doc_summary), 0) as total_docs,
-            COALESCE((SELECT total_occurrences FROM doc_summary), 0) as total_occurrences
+            COALESCE((SELECT total_occurrences FROM doc_summary), 0) as total_occurrences,
+            COALESCE(sd.doc_type, 'pdf') as doc_type,
+            p.text_content
         FROM ranked_pages rp
         JOIN scored_docs sd ON sd.doc_id = rp.doc_id
         JOIN pages p ON p.doc_id = rp.doc_id AND p.page_number = rp.page_number
@@ -240,7 +243,7 @@ pub fn build_title_search_sql(
     };
 
     let sql = format!(
-        "SELECT id, filename, title, folder_id, total_pages, created_at, COALESCE(updated_at, created_at) \
+        "SELECT id, filename, title, folder_id, total_pages, created_at, COALESCE(updated_at, created_at), COALESCE(doc_type, 'pdf') \
          FROM documents \
          WHERE ({where_clause}) AND COALESCE(status, 'ready') = 'ready' {folder_filter} \
          ORDER BY title ASC LIMIT {limit} OFFSET {offset}"

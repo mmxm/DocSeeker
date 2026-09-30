@@ -27,6 +27,17 @@ pub struct RawSqlSearchRow {
     pub total_docs: usize,
     #[serde(default)]
     pub total_occurrences: usize,
+    /// Type du document ('pdf' | 'markdown'), pour un rendu de vignette adapté côté client
+    #[serde(default = "default_doc_type")]
+    pub doc_type: String,
+    /// Texte brut de la page — utilisé pour les notes Markdown : extrait enrichi
+    /// (mot-clé + contexte) au lieu de crops image
+    #[serde(default)]
+    pub page_text_content: String,
+}
+
+fn default_doc_type() -> String {
+    "pdf".to_string()
 }
 
 /// Accumulateur interne pour la collecte des données d'un document
@@ -38,6 +49,7 @@ struct DocAccumulator {
     total_pages: i64,
     created_at: String,
     updated_at: String,
+    doc_type: String,
     base_relevance_score: f64,
     matching_pages_count: i64,
     occurrences: Vec<OccurrenceResult>,
@@ -73,6 +85,7 @@ pub fn process_search_results(
                 total_pages: row.total_pages,
                 created_at: row.created_at.clone(),
                 updated_at: row.updated_at.clone(),
+                doc_type: row.doc_type.clone(),
                 base_relevance_score: row.doc_relevance_score,
                 matching_pages_count: row.matching_pages_count,
                 occurrences: Vec::new(),
@@ -91,6 +104,19 @@ pub fn process_search_results(
                 row.page_bm25,
                 &encoded_terms,
                 842.0,
+            );
+            doc_map[idx].occurrences.extend(page_occs);
+        } else if !row.page_text_content.trim().is_empty() {
+            // Note Markdown (pas de words_json) : occurrences par lignes avec extraits
+            // texte enrichis rendus nativement en HTML côté client
+            let page_occs = crate::matching::find_occurrences_in_text(
+                &row.page_text_content,
+                terms,
+                query_hash,
+                row.doc_id,
+                row.page_number,
+                row.page_bm25,
+                &encoded_terms,
             );
             doc_map[idx].occurrences.extend(page_occs);
         }
@@ -143,6 +169,7 @@ pub fn process_search_results(
             total_pages: doc.total_pages,
             created_at: doc.created_at,
             updated_at: doc.updated_at,
+            doc_type: doc.doc_type,
             cover_url: format!("/api/cover/{}", doc.id),
             vignettes: ribbon_vignettes.clone(),
             occurrences_by_page: ribbon_vignettes,
