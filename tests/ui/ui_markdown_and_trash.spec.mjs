@@ -881,6 +881,71 @@ test.describe('DocSeeker - Prise de Notes Markdown & Corbeille', () => {
     }, filenameB);
     expect(opfsB).not.toContain(markerA);
   });
+
+  test('MD-19 : Édition hors-ligne préservée lors d\'un basculement de note avant la fin du debounce (Issue #12)', async ({ page, context }) => {
+    const ts = Date.now();
+    const titleA = `OffNoteA_${ts}`;
+    const filenameA = `${titleA}.md`;
+    const titleB = `OffNoteB_${ts}`;
+    const filenameB = `${titleB}.md`;
+    const markerA = `OFFLINE_SAVED_UNIQUE_${ts}`;
+
+    // 1. Créer les notes A et B en ligne
+    const createAPromise = page.waitForResponse(resp => resp.url().includes('/api/files') && resp.request().method() === 'POST');
+    page.once('dialog', async dialog => { await dialog.accept(titleA); });
+    await page.locator('#newMarkdownNoteBtn').click();
+    await createAPromise;
+    await expect(page.locator('#markdownEditorContainer')).toBeVisible({ timeout: 10000 });
+
+    const createBPromise = page.waitForResponse(resp => resp.url().includes('/api/files') && resp.request().method() === 'POST');
+    page.once('dialog', async dialog => { await dialog.accept(titleB); });
+    await page.evaluate(() => window.MarkdownManager.promptCreateNote());
+    await createBPromise;
+    await expect(page.locator('#markdownEditorContainer')).toBeVisible({ timeout: 10000 });
+
+    // 2. Basculer hors ligne
+    await context.setOffline(true);
+    await page.evaluate(() => window.dispatchEvent(new Event('offline')));
+
+    // 3. Ouvrir Note A et modifier (déclenche debounce)
+    await page.evaluate(async (fn) => {
+      await window.MarkdownManager.loadNote(null, fn, fn.replace('.md', ''));
+    }, filenameA);
+    await expect(page.locator('#markdownTitleInput')).toHaveValue(titleA);
+
+    await page.evaluate((marker) => {
+      window.MarkdownManager.onContentChange(`# Note A Offline\n\n${marker}`);
+    }, markerA);
+
+    // 4. Basculer immédiatement sur note B avant la fin du debounce
+    await page.waitForTimeout(100);
+    await page.evaluate(async (fn) => {
+      await window.MarkdownManager.loadNote(null, fn, fn.replace('.md', ''));
+    }, filenameB);
+    await expect(page.locator('#markdownTitleInput')).toHaveValue(titleB);
+
+    // 5. Attendre l'enregistrement local
+    await page.waitForTimeout(2000);
+
+    // 6. Vérifier OPFS local : note A doit avoir son contenu
+    const opfsA = await page.evaluate(async (fn) => {
+      return await window.MarkdownStorage.read(fn);
+    }, filenameA);
+    expect(opfsA).toContain(markerA);
+
+    // 7. Reconnexion et synchronisation
+    await context.setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await page.evaluate(async () => {
+      if (window.SyncManager) await window.SyncManager.runSync();
+    });
+
+    // 8. Vérifier la persistance sur le serveur pour Note A
+    const resA = await page.request.get(`/api/files/${encodeURIComponent(filenameA)}`);
+    expect(resA.status()).toBe(200);
+    const textA = await resA.text();
+    expect(textA).toContain(markerA);
+  });
 });
 
 
