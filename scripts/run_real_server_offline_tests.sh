@@ -23,7 +23,7 @@ fi
 
 # Fonction de récupération du PID du serveur sur le port 8080
 get_server_pid() {
-    lsof -ti :8080 | head -n 1 || true
+    lsof -ti :8080 -sTCP:LISTEN | head -n 1 || true
 }
 
 # Fonction d'extinction RÉELLE du serveur local

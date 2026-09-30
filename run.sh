@@ -5,12 +5,14 @@
 set -e
 cd "$(dirname "$0")"
 
-# Vérifier et libérer le port 8080 s'il est déjà occupé par un ancien processus
-OLD_PID=$(lsof -ti :8080 || true)
+# Vérifier et libérer le port 8080 s'il est déjà occupé par un ancien processus en écoute
+OLD_PID=$(lsof -ti :8080 -sTCP:LISTEN || true)
 if [ -n "$OLD_PID" ]; then
     echo "⚠️ Port 8080 déjà occupé par le processus PID $OLD_PID. Libération..."
+    kill -TERM $OLD_PID 2>/dev/null || true
+    sleep 0.5
     kill -9 $OLD_PID 2>/dev/null || true
-    sleep 1
+    sleep 0.5
 fi
 
 if [ ! -f "backend-rust/target/release/docseeker-backend" ]; then
