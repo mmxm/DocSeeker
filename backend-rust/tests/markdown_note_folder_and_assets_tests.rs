@@ -333,3 +333,84 @@ async fn test_note_folder_structure_and_orphan_assets_cleanup() {
         dl_names
     );
 }
+
+#[tokio::test]
+async fn test_rename_note_rewrites_asset_references() {
+    let (state, token, _tmp) = setup_test_app();
+    let router = create_api_router(Arc::clone(&state)).with_state(Arc::clone(&state));
+    let cookie = format!("docseeker_session={}", token);
+
+    // 1. Créer une note contenant une référence vers un asset
+    let initial_content = "# QA Asset\n\n![img](/api/assets/QA%20Asset%20Note/tiny.png)\n";
+    let req_create = Request::builder()
+        .method("POST")
+        .uri("/api/files")
+        .header(header::COOKIE, &cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::json!({
+            "filename": "QA Asset Note.md",
+            "content": initial_content
+        }).to_string()))
+        .unwrap();
+
+    let res_create = router.clone().oneshot(req_create).await.unwrap();
+    assert_eq!(res_create.status(), StatusCode::CREATED);
+    let create_body = to_bytes(res_create.into_body(), usize::MAX).await.unwrap();
+    let create_json: serde_json::Value = serde_json::from_slice(&create_body).unwrap();
+    let doc_id = create_json["doc_id"].as_i64().expect("doc_id valide");
+
+    // 2. Créer manuellement l'asset tiny.png dans son dossier
+    let note_dir = state.config.documents_dir.join("QA Asset Note");
+    let assets_dir = note_dir.join("assets");
+    std::fs::create_dir_all(&assets_dir).unwrap();
+    std::fs::write(assets_dir.join("tiny.png"), b"\x89PNG\r\n\x1a\nfakeimage").unwrap();
+
+    // Vérifier l'accès à l'asset sous son ancien nom
+    let req_asset_old = Request::builder()
+        .method("GET")
+        .uri("/api/assets/QA%20Asset%20Note/tiny.png")
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap();
+    let res_asset_old = router.clone().oneshot(req_asset_old).await.unwrap();
+    assert_eq!(res_asset_old.status(), StatusCode::OK);
+
+    // 3. Renommer la note via PATCH /api/documents/:id
+    let req_rename = Request::builder()
+        .method("PATCH")
+        .uri(format!("/api/documents/{}", doc_id))
+        .header(header::COOKIE, &cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::json!({
+            "title": "QA Asset Note Renamed"
+        }).to_string()))
+        .unwrap();
+    let res_rename = router.clone().oneshot(req_rename).await.unwrap();
+    assert_eq!(res_rename.status(), StatusCode::OK);
+
+    // 4. Vérifier que les références dans le fichier .md ont été réécrites
+    let new_note_dir = state.config.documents_dir.join("QA Asset Note Renamed");
+    let new_md_file = new_note_dir.join("QA Asset Note Renamed.md");
+    assert!(new_md_file.exists(), "Le nouveau fichier markdown doit exister");
+
+    let updated_content = std::fs::read_to_string(&new_md_file).unwrap();
+    assert!(
+        updated_content.contains("/api/assets/QA%20Asset%20Note%20Renamed/tiny.png"),
+        "La référence d'asset doit être réécrite avec le nouveau nom : {}",
+        updated_content
+    );
+    assert!(
+        !updated_content.contains("/api/assets/QA%20Asset%20Note/"),
+        "L'ancien chemin ne doit plus figurer dans le contenu"
+    );
+
+    // 5. Vérifier que l'asset est accessible sous le nouveau chemin
+    let req_asset_new = Request::builder()
+        .method("GET")
+        .uri("/api/assets/QA%20Asset%20Note%20Renamed/tiny.png")
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap();
+    let res_asset_new = router.clone().oneshot(req_asset_new).await.unwrap();
+    assert_eq!(res_asset_new.status(), StatusCode::OK);
+}
