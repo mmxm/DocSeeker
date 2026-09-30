@@ -7839,6 +7839,34 @@ document.addEventListener("DOMContentLoaded", () => {
     },
 
     async loadNote(docId, filename, title, preloadedContent = null) {
+      // Si un enregistrement est en cours de debounce sur la note sortante, on le flushe immédiatement
+      // avant de changer de note pour éviter d'écraser la nouvelle note avec les modifications de la précédente.
+      if (this.saveTimer) {
+        clearTimeout(this.saveTimer);
+        this.saveTimer = null;
+        const flushFname = this._pendingSaveFilename || this.currentFilename;
+        const flushDocId = this._pendingSaveDocId || this.currentDocId;
+        const flushTitle = this._pendingSaveTitle || this.currentTitle;
+        const flushMd = (this._pendingSaveMarkdown !== null && this._pendingSaveMarkdown !== undefined)
+          ? this._pendingSaveMarkdown
+          : ((this.editorInstance && typeof this.editorInstance.getMarkdown === "function")
+              ? this.editorInstance.getMarkdown()
+              : (document.getElementById("markdownRawContent")?.value || ""));
+
+        this._pendingSaveFilename = null;
+        this._pendingSaveDocId = null;
+        this._pendingSaveTitle = null;
+        this._pendingSaveMarkdown = null;
+
+        if (flushFname && flushMd) {
+          try {
+            await this.saveNote(flushMd, flushFname, flushDocId, flushTitle);
+          } catch (e) {
+            console.warn("[Markdown] Erreur flush de sauvegarde lors du changement de note:", e);
+          }
+        }
+      }
+
       this.currentDocId = docId;
       this.currentFilename = filename;
       this.currentTitle = title;
@@ -7953,35 +7981,57 @@ document.addEventListener("DOMContentLoaded", () => {
       this.setStatus("saving", "Enregistrement...");
       if (this.saveTimer) clearTimeout(this.saveTimer);
 
+      const targetFilename = this.currentFilename;
+      const targetDocId = this.currentDocId;
+      const targetTitle = this.currentTitle;
+      this._pendingSaveMarkdown = markdown;
+      this._pendingSaveFilename = targetFilename;
+      this._pendingSaveDocId = targetDocId;
+      this._pendingSaveTitle = targetTitle;
+
       this.saveTimer = setTimeout(async () => {
-        await this.saveNote(markdown);
+        this.saveTimer = null;
+        this._pendingSaveMarkdown = null;
+        this._pendingSaveFilename = null;
+        this._pendingSaveDocId = null;
+        this._pendingSaveTitle = null;
+        await this.saveNote(markdown, targetFilename, targetDocId, targetTitle);
       }, 1500);
     },
 
-    async saveNote(markdown) {
-      if (!this.currentFilename) return;
-      if (this.saveTimer) {
+    async saveNote(markdown, targetFilename = null, targetDocId = null, targetTitle = null) {
+      const fname = targetFilename || this.currentFilename;
+      const docId = targetDocId || this.currentDocId;
+      const title = targetTitle || this.currentTitle;
+
+      if (!fname) return;
+
+      if (this.saveTimer && (!targetFilename || targetFilename === this.currentFilename)) {
         clearTimeout(this.saveTimer);
         this.saveTimer = null;
+        this._pendingSaveMarkdown = null;
+        this._pendingSaveFilename = null;
+        this._pendingSaveDocId = null;
+        this._pendingSaveTitle = null;
       }
-      if (this._loadingPromise) {
+
+      if (this._loadingPromise && (!targetFilename || targetFilename === this.currentFilename)) {
         this._pendingContent = markdown;
       }
-      const fname = this.currentFilename;
 
       // 1. Sauvegarde locale OPFS garantie
       await MarkdownStorage.write(fname, markdown);
 
       // 2. Réindexation FTS5 locale si offline-worker disponible
       if (window.downloadQueueManager) {
-        if (this.currentDocId) {
-          window.downloadQueueManager.cachedDocIds.add(Number(this.currentDocId));
-          if (typeof updateDocCardCacheUI === "function") updateDocCardCacheUI(Number(this.currentDocId));
+        if (docId) {
+          window.downloadQueueManager.cachedDocIds.add(Number(docId));
+          if (typeof updateDocCardCacheUI === "function") updateDocCardCacheUI(Number(docId));
         }
         window.downloadQueueManager.sendToWorker("INDEX_MARKDOWN_DOC", {
-          docId: this.currentDocId,
+          docId: docId,
           filename: fname,
-          title: this.currentTitle,
+          title: title,
           content: markdown
         }).catch(() => {});
       }
@@ -7996,7 +8046,9 @@ document.addEventListener("DOMContentLoaded", () => {
           });
           if (res.ok) {
             await MarkdownStorage.unmarkDirty(fname);
-            this.setStatus("saved", "Enregistré");
+            if (fname === this.currentFilename) {
+              this.setStatus("saved", "Enregistré");
+            }
             return;
           }
         } catch (e) {
@@ -8006,7 +8058,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // Mode hors-ligne : marquer dirty pour synchro ultérieure
       await MarkdownStorage.markDirty(fname, "modified");
-      this.setStatus("offline", "Enregistré hors-ligne");
+      if (fname === this.currentFilename) {
+        this.setStatus("offline", "Enregistré hors-ligne");
+      }
     },
 
     _isRenaming: false,

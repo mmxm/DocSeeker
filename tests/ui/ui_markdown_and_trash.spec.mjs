@@ -771,6 +771,65 @@ test.describe('DocSeeker - Prise de Notes Markdown & Corbeille', () => {
     expect(zipBytes[2]).toBe(0x03);
     expect(zipBytes[3]).toBe(0x04);
   });
+
+  test('MD-18 : Race debounce de sauvegarde lors du changement rapide de note (Issue #6)', async ({ page }) => {
+    const ts = Date.now();
+    const titleA = `RaceNoteA_${ts}`;
+    const filenameA = `${titleA}.md`;
+    const titleB = `RaceNoteB_${ts}`;
+    const filenameB = `${titleB}.md`;
+    const markerA = `MARQUEUR_A_UNIQUE_${ts}`;
+
+    // 1. Créer la note A
+    const createAPromise = page.waitForResponse(resp => resp.url().includes('/api/files') && resp.request().method() === 'POST');
+    page.once('dialog', async dialog => {
+      await dialog.accept(titleA);
+    });
+    await page.locator('#newMarkdownNoteBtn').click();
+    await createAPromise;
+    await expect(page.locator('#markdownEditorContainer')).toBeVisible({ timeout: 10000 });
+
+    // 2. Modifier note A (déclenche debounce 1500ms)
+    await page.evaluate((marker) => {
+      window.MarkdownManager.onContentChange(`# Note A\n\n${marker}`);
+    }, markerA);
+
+    // 3. Basculer immédiatement sur note B bien avant 1500ms
+    await page.waitForTimeout(100);
+    const createBPromise = page.waitForResponse(resp => resp.url().includes('/api/files') && resp.request().method() === 'POST');
+    page.once('dialog', async dialog => {
+      await dialog.accept(titleB);
+    });
+    await page.evaluate(() => window.MarkdownManager.promptCreateNote());
+    await createBPromise;
+    await expect(page.locator('#markdownEditorContainer')).toBeVisible({ timeout: 10000 });
+
+    // 4. Attendre la fin du cycle de sauvegarde
+    await page.waitForTimeout(2500);
+
+    // 5. Vérifier que la note A contient bien son marqueur
+    const resA = await page.request.get(`/api/files/${encodeURIComponent(filenameA)}`);
+    expect(resA.status()).toBe(200);
+    const textA = await resA.text();
+    expect(textA).toContain(markerA);
+
+    // 6. Vérifier que la note B NE contient PAS le marqueur de la note A
+    const resB = await page.request.get(`/api/files/${encodeURIComponent(filenameB)}`);
+    expect(resB.status()).toBe(200);
+    const textB = await resB.text();
+    expect(textB).not.toContain(markerA);
+
+    // 7. Vérifier OPFS local
+    const opfsA = await page.evaluate(async (fn) => {
+      return await window.MarkdownStorage.read(fn);
+    }, filenameA);
+    expect(opfsA).toContain(markerA);
+
+    const opfsB = await page.evaluate(async (fn) => {
+      return await window.MarkdownStorage.read(fn);
+    }, filenameB);
+    expect(opfsB).not.toContain(markerA);
+  });
 });
 
 
