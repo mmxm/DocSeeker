@@ -1,22 +1,27 @@
 import { Crepe } from '@milkdown/crepe';
+import { replaceAll } from '@milkdown/utils';
 import '@milkdown/crepe/theme/common/style.css';
 import '@milkdown/crepe/theme/frame.css';
 
 // Exposer globalement createMilkdown avec l'API Crepe officielle
 window.createMilkdown = async function(rootElement, options = {}) {
-  const { initialValue = '', onChange = () => {} } = options;
+  const { initialValue = '', onChange = () => {}, onUploadAsset = null } = options;
 
-  // Créer l'instance Crepe officielle avec toutes ses fonctionnalités :
-  // - Toolbar flottante (B, I, S, <>, ∑, 🔗)
-  // - Slash commands '/' (titres, listes, code blocks, images, tables...)
-  // - CodeMirror avec coloration syntaxique
-  // - Support KaTeX mathématique
-  // - Task lists interactives avec cases à cocher [-] et [x]
-  // - Blocs images redimensionnables avec légendes
-  // - Tableaux interactifs (ajout/suppression lignes et colonnes)
+  // Hook d'upload des images : sans lui, le bloc image de Crepe insère une URL
+  // blob: locale (non persistée) au collage/dépôt de fichier, ce qui produisait
+  // des images mortes après rechargement et des doublons avec l'upload assets/.
+  // onUploadAsset retourne l'URL finale du fichier dans assets/<stem>/.
+  const uploadConfig = onUploadAsset
+    ? {
+        imageBlock: { onUpload: onUploadAsset },
+        image: { onUpload: onUploadAsset },
+      }
+    : {};
+
   const crepe = new Crepe({
     root: rootElement,
     defaultValue: initialValue || '',
+    featureConfigs: uploadConfig,
   });
 
   // Branchement de l'écouteur de mise à jour Markdown
@@ -27,5 +32,15 @@ window.createMilkdown = async function(rootElement, options = {}) {
   });
 
   await crepe.create();
+
+  // Méthode pour remplacer le contenu Markdown depuis le panneau brut
+  crepe.setMarkdown = function(md) {
+    try {
+      crepe.editor.action(replaceAll(md));
+    } catch (e) {
+      console.warn('[Milkdown] Error setting markdown:', e);
+    }
+  };
+
   return crepe;
 };
