@@ -410,4 +410,35 @@ async fn test_markdown_rename_assets_and_soft_delete_handler() {
     assert!(!new_note_dir.exists(), "Le dossier de note doit avoir disparu de documents_dir");
     assert!(state.config.trash_dir.join("del_Biochimie.md").exists());
     assert!(state.config.trash_dir.join("del_Biochimie.md.meta.json").exists());
+
+    // 6. Supprimer définitivement via DELETE /api/trash/del_Biochimie.md
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/api/trash/del_Biochimie.md")
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap();
+
+    let res = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // 7. Vérifier l'absence d'orphelins et la suppression complète en BDD
+    let db_conn = state.db.get().unwrap();
+    let orphan_count: i64 = db_conn
+        .query_row(
+            "SELECT count(*) FROM pages p LEFT JOIN documents d ON p.doc_id=d.id WHERE d.id IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(orphan_count, 0, "Aucune page orpheline ne doit subsister après purge");
+
+    let doc_pages_count: i64 = db_conn
+        .query_row(
+            "SELECT count(*) FROM pages WHERE doc_id = ?1",
+            rusqlite::params![doc_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(doc_pages_count, 0, "Les pages du document doivent être supprimées");
 }

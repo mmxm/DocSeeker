@@ -363,9 +363,13 @@ pub fn permanently_delete_trash_item(conn: &Connection, config: &Config, identif
             let _ = fs::remove_dir_all(&assets_path);
         }
 
-        // Nettoyer la ligne de documents dans SQLite si status = 'trashed'
+        // Nettoyer les pages et la ligne de documents dans SQLite si status = 'trashed'
         let _ = conn.execute(
-            "DELETE FROM documents WHERE filename = ?1 AND status = 'trashed'",
+            "DELETE FROM pages WHERE doc_id IN (SELECT id FROM documents WHERE (filename = ?1 OR path = ?1) AND status = 'trashed')",
+            params![orig],
+        );
+        let _ = conn.execute(
+            "DELETE FROM documents WHERE (filename = ?1 OR path = ?1) AND status = 'trashed'",
             params![orig],
         );
     }
