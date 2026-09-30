@@ -639,7 +639,7 @@ function getAllCachedDocuments() {
   const docs = [];
   try {
     db.exec({
-      sql: `SELECT id, filename, title, folder_id, total_pages, file_size, created_at, updated_at FROM documents WHERE status != 'meta-only' ORDER BY title ASC`,
+      sql: `SELECT id, filename, title, folder_id, total_pages, file_size, created_at, updated_at, doc_type FROM documents WHERE status != 'meta-only' ORDER BY title ASC`,
       callback: (row) => {
         docs.push({
           id: row[0],
@@ -650,6 +650,7 @@ function getAllCachedDocuments() {
           file_size: row[5] || 0,
           created_at: row[6],
           updated_at: row[7],
+          doc_type: row[8] || (row[1] && (row[1].endsWith('.md') || row[1].endsWith('.markdown')) ? 'markdown' : 'pdf'),
           cover_url: `/api/cover/${row[0]}`,
           status: 'ready',
           total_occurrences: 0,

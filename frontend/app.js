@@ -3029,10 +3029,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       let occs = [];
+      const matchedDoc = Array.isArray(currentLoadedDocs) ? currentLoadedDocs.find(d => Number(d.id) === Number(currentActiveDocId)) : null;
+      const isMarkdownDoc = (matchedDoc && matchedDoc.doc_type === 'markdown') ||
+                            (matchedDoc && matchedDoc.filename && (matchedDoc.filename.endsWith('.md') || matchedDoc.filename.endsWith('.markdown'))) ||
+                            (currentActiveDocTitle && (currentActiveDocTitle.endsWith('.md') || currentActiveDocTitle.endsWith('.markdown')));
       const isDocCached = window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(currentActiveDocId);
       const isOfflineMode = !navigator.onLine || (filterOfflineOnly && filterOfflineOnly.checked);
 
-      if (isDocCached || isOfflineMode) {
+      if ((isDocCached && !isMarkdownDoc) || isOfflineMode) {
         console.log(`[DocSearch] Recherche locale SQLite-Wasm pour le document ${currentActiveDocId}`);
         if (window.downloadQueueManager) {
           const res = await window.downloadQueueManager.sendToWorker('DOC_SEARCH', {
@@ -4191,6 +4195,10 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
           e.stopPropagation();
           const numericId = Number(doc.id);
+          if (isMd) {
+            showToast(`La note "${doc.title || doc.filename}" est disponible hors-ligne`, "info");
+            return;
+          }
           if (!window.downloadQueueManager) return;
           const now = Date.now();
           if (now - lastCacheActionTime < 60) {
@@ -5944,6 +5952,14 @@ document.addEventListener("DOMContentLoaded", () => {
       viewerCacheBadge.addEventListener("click", async (e) => {
         e.stopPropagation();
         if (!currentActiveDocId) return;
+        const matchedDoc = Array.isArray(currentLoadedDocs) ? currentLoadedDocs.find(d => Number(d.id) === Number(currentActiveDocId)) : null;
+        const isMarkdown = (matchedDoc && matchedDoc.doc_type === 'markdown') ||
+                           (matchedDoc && matchedDoc.filename && (matchedDoc.filename.endsWith('.md') || matchedDoc.filename.endsWith('.markdown'))) ||
+                           (currentActiveDocTitle && (currentActiveDocTitle.endsWith('.md') || currentActiveDocTitle.endsWith('.markdown')));
+        if (isMarkdown) {
+          showToast("Cette note est sauvegardée et disponible hors-ligne", "info");
+          return;
+        }
         const isError = viewerCacheBadge.textContent.includes("Erreur");
         if (isError) {
           if (window.pdfCacheManager) {
@@ -6155,6 +6171,11 @@ document.addEventListener("DOMContentLoaded", () => {
       if (window.MarkdownManager) {
         window.MarkdownManager.loadNote(numericDocId, filename, docTitle);
       }
+      if (window.downloadQueueManager) {
+        window.downloadQueueManager.cachedDocIds.add(numericDocId);
+      }
+      updateCacheUI("complete", 100);
+      updateDocCardCacheUI(numericDocId);
       if (effectiveSearchQuery) {
         setTimeout(() => {
           performDocSearch(effectiveSearchQuery, false);
@@ -7804,6 +7825,11 @@ document.addEventListener("DOMContentLoaded", () => {
       this.currentFilename = filename;
       this.currentTitle = title;
 
+      if (window.downloadQueueManager && docId) {
+        window.downloadQueueManager.cachedDocIds.add(Number(docId));
+        if (typeof updateDocCardCacheUI === "function") updateDocCardCacheUI(Number(docId));
+      }
+
       const titleInput = document.getElementById("markdownTitleInput");
       if (titleInput) {
         titleInput.value = title;
@@ -7930,6 +7956,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // 2. Réindexation FTS5 locale si offline-worker disponible
       if (window.downloadQueueManager) {
+        if (this.currentDocId) {
+          window.downloadQueueManager.cachedDocIds.add(Number(this.currentDocId));
+          if (typeof updateDocCardCacheUI === "function") updateDocCardCacheUI(Number(this.currentDocId));
+        }
         window.downloadQueueManager.sendToWorker("INDEX_MARKDOWN_DOC", {
           docId: this.currentDocId,
           filename: fname,

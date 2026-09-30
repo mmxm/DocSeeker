@@ -265,7 +265,15 @@ class DownloadQueueManager {
   }
 
   isDocumentCached(docId) {
-    return this.cachedDocIds.has(Number(docId));
+    if (!docId) return false;
+    const numId = Number(docId);
+    if (this.cachedDocIds.has(numId)) return true;
+    const doc = this._cachedDocsList?.find(d => Number(d.id) === numId) || this._libraryDocsList?.find(d => Number(d.id) === numId);
+    if (doc && ((doc.doc_type === 'markdown') || (doc.filename && (doc.filename.endsWith('.md') || doc.filename.endsWith('.markdown'))))) {
+      this.cachedDocIds.add(numId);
+      return true;
+    }
+    return false;
   }
 
   async syncFolders(folders) {
@@ -428,6 +436,11 @@ class DownloadQueueManager {
       const verifiedDocs = [];
       for (const d of docs) {
         const id = Number(d.id);
+        const isMarkdown = (d.doc_type === 'markdown') || (d.filename && (d.filename.endsWith('.md') || d.filename.endsWith('.markdown')));
+        if (isMarkdown) {
+          verifiedDocs.push(d);
+          continue;
+        }
         const isPdfComplete = window.pdfCacheManager ? await window.pdfCacheManager.isComplete(id) : true;
         if (isPdfComplete) {
           verifiedDocs.push(d);
