@@ -32,15 +32,73 @@ pub fn to_trash_filename(rel_path: &str) -> String {
 
 /// Résout l'emplacement physique d'un document dans documents_dir
 pub fn resolve_file_path(base_dir: &Path, rel_path: &str) -> Option<PathBuf> {
-    crate::pdf::indexer::resolve_pdf_path(base_dir, rel_path)
-        .or_else(|| {
-            let p = base_dir.join(rel_path);
-            if p.exists() {
-                Some(p)
-            } else {
-                None
+    let clean = rel_path.trim_start_matches('/');
+
+    // 1. Essai direct (si c'est un fichier existant ou chemin direct)
+    let direct = base_dir.join(clean);
+    if direct.is_file() {
+        return Some(direct);
+    }
+
+    // 2. Si c'est un document Markdown dans son dossier de note : base_dir/[parent/]stem/stem.md
+    let path_obj = Path::new(clean);
+    let stem = path_obj.file_stem().and_then(|s| s.to_str()).unwrap_or(clean);
+    let parent = path_obj.parent();
+
+    let note_dir_file = match parent {
+        Some(p) if !p.as_os_str().is_empty() => base_dir.join(p).join(stem).join(format!("{}.md", stem)),
+        _ => base_dir.join(stem).join(format!("{}.md", stem)),
+    };
+    if note_dir_file.is_file() {
+        return Some(note_dir_file);
+    }
+
+    let note_dir_file_mk = match parent {
+        Some(p) if !p.as_os_str().is_empty() => base_dir.join(p).join(stem).join(format!("{}.markdown", stem)),
+        _ => base_dir.join(stem).join(format!("{}.markdown", stem)),
+    };
+    if note_dir_file_mk.is_file() {
+        return Some(note_dir_file_mk);
+    }
+
+    // 3. Recherche par stem de dossier de note
+    if let Some(note_dir) = crate::document::markdown::find_note_dir_by_stem(base_dir, stem) {
+        if let Some(md_file) = crate::document::markdown::find_markdown_file_in_note_dir(&note_dir) {
+            return Some(md_file);
+        }
+    }
+
+    // 4. Fallback sur resolve_pdf_path
+    crate::pdf::indexer::resolve_pdf_path(base_dir, clean)
+}
+
+/// Résout le dossier physique d'une note Markdown (ex: data/documents/nom_de_la_note/)
+pub fn resolve_note_dir(base_dir: &Path, rel_path_or_stem: &str) -> Option<PathBuf> {
+    let clean = rel_path_or_stem.trim_start_matches('/');
+    let path_obj = Path::new(clean);
+    let stem = path_obj.file_stem().and_then(|s| s.to_str()).unwrap_or(clean);
+    let parent = path_obj.parent();
+
+    // 1. Tester base_dir/[parent/]stem
+    let direct_dir = match parent {
+        Some(p) if !p.as_os_str().is_empty() => base_dir.join(p).join(stem),
+        _ => base_dir.join(stem),
+    };
+    if crate::document::markdown::is_markdown_note_dir(&direct_dir) {
+        return Some(direct_dir);
+    }
+
+    // 2. Si le chemin pointe vers le fichier markdown
+    if let Some(file_path) = resolve_file_path(base_dir, clean) {
+        if let Some(p) = file_path.parent() {
+            if crate::document::markdown::is_markdown_note_dir(p) {
+                return Some(p.to_path_buf());
             }
-        })
+        }
+    }
+
+    // 3. Recherche récursive
+    crate::document::markdown::find_note_dir_by_stem(base_dir, stem)
 }
 
 /// Déplace un document vers la corbeille (Soft-Delete)
@@ -60,15 +118,32 @@ pub fn soft_delete(conn: &Connection, config: &Config, filename: &str) -> Result
 
     // 2. Déplacer les assets si Markdown
     let doc_type = detect_doc_type(&src);
-    if doc_type == "markdown" {
+    if doc_type == "markdown" || filename.ends_with(".md") || filename.ends_with(".markdown") {
         let stem = Path::new(filename)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(filename);
-        let assets_src = config.documents_dir.join("assets").join(stem);
-        if assets_src.exists() {
+
+        // Déplacer les assets depuis le dossier de la note (nom_de_la_note/assets/)
+        if let Some(parent) = src.parent() {
+            let note_assets = parent.join("assets");
+            if note_assets.exists() {
+                let assets_dst = trash_dir.join(format!("del_{}_assets", stem));
+                let _ = fs::rename(&note_assets, &assets_dst);
+            }
+            // Si le dossier de la note est vide, le nettoyer
+            let _ = fs::remove_dir(parent);
+        }
+
+        // Fallback rétrocompatible pour l'ancien chemin assets/<stem>
+        let old_assets = config.documents_dir.join("assets").join(stem);
+        if old_assets.exists() {
             let assets_dst = trash_dir.join(format!("del_{}_assets", stem));
-            let _ = fs::rename(&assets_src, &assets_dst);
+            if !assets_dst.exists() {
+                let _ = fs::rename(&old_assets, &assets_dst);
+            } else {
+                let _ = fs::remove_dir_all(&old_assets);
+            }
         }
     }
 
@@ -125,23 +200,46 @@ pub fn restore_from_trash(conn: &Connection, config: &Config, identifier: &str) 
     }
 
     // 1. Remettre le fichier à son emplacement d'origine
-    let dest = config.documents_dir.join(&meta.original_path);
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
+    let doc_type = detect_doc_type(&src_file);
+    let is_md = doc_type == "markdown" || meta.original_path.ends_with(".md") || meta.original_path.ends_with(".markdown");
+
+    let (dest, note_dir_opt) = if is_md {
+        let stem = Path::new(&meta.original_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&meta.original_path);
+        let orig_parent = Path::new(&meta.original_path).parent();
+        let target_note_dir = match orig_parent {
+            Some(p) if !p.as_os_str().is_empty() => config.documents_dir.join(p).join(stem),
+            _ => config.documents_dir.join(stem),
+        };
+        fs::create_dir_all(&target_note_dir).map_err(|e| e.to_string())?;
+        let md_target = target_note_dir.join(format!("{}.md", stem));
+        (md_target, Some(target_note_dir))
+    } else {
+        let dest = config.documents_dir.join(&meta.original_path);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        (dest, None)
+    };
+
     fs::rename(&src_file, &dest)
         .map_err(|e| format!("Impossible de restaurer le fichier vers {:?} : {}", dest, e))?;
 
     // 2. Restaurer les assets si Markdown
-    let doc_type = detect_doc_type(&dest);
-    if doc_type == "markdown" {
+    if is_md {
         let stem = Path::new(&meta.original_path)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(&meta.original_path);
         let assets_src = trash_dir.join(format!("del_{}_assets", stem));
         if assets_src.exists() {
-            let assets_dst = config.documents_dir.join("assets").join(stem);
+            let assets_dst = if let Some(ref nd) = note_dir_opt {
+                nd.join("assets")
+            } else {
+                config.documents_dir.join("assets").join(stem)
+            };
             if let Some(parent) = assets_dst.parent() {
                 let _ = fs::create_dir_all(parent);
             }

@@ -225,7 +225,54 @@ pub async fn update_document(
             }
 
             // Renommage physique du fichier sur le disque du volume
-            if let Some(src_path) = crate::document::trash::resolve_file_path(&state.config.documents_dir, &current_fname) {
+            let is_md = current_fname.ends_with(".md") || current_fname.ends_with(".markdown");
+            if is_md {
+                let old_stem = std::path::Path::new(&current_fname).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let new_stem = std::path::Path::new(&norm_new_fname).file_stem().and_then(|s| s.to_str()).unwrap_or(&clean_title);
+
+                if let Some(old_note_dir) = crate::document::trash::resolve_note_dir(&state.config.documents_dir, &current_fname) {
+                    let parent_dir = old_note_dir.parent().unwrap_or(&state.config.documents_dir);
+                    let new_note_dir = parent_dir.join(new_stem);
+
+                    // 1. Renommer le fichier markdown dans le dossier
+                    let old_md_in_dir = old_note_dir.join(format!("{}.md", old_stem));
+                    let new_md_in_dir = old_note_dir.join(format!("{}.md", new_stem));
+                    if old_md_in_dir.exists() {
+                        let _ = std::fs::rename(&old_md_in_dir, &new_md_in_dir);
+                    }
+
+                    // 2. Renommer le dossier de note lui-même (nom_de_la_note/)
+                    if old_note_dir != new_note_dir {
+                        if let Err(e) = std::fs::rename(&old_note_dir, &new_note_dir) {
+                            tracing::warn!("[Documents] Échec renommage dossier note {} -> {} : {}", old_note_dir.display(), new_note_dir.display(), e);
+                            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Impossible de renommer le dossier de la note sur le disque : {}", e)}))).into_response());
+                        }
+                    }
+
+                    // 3. Migration rétrocompatible d'anciens assets globaux
+                    let old_global_assets = state.config.documents_dir.join("assets").join(old_stem);
+                    if old_global_assets.exists() {
+                        let new_assets = new_note_dir.join("assets");
+                        let _ = std::fs::create_dir_all(&new_assets);
+                        if let Ok(entries) = std::fs::read_dir(&old_global_assets) {
+                            for entry in entries.flatten() {
+                                let p = entry.path();
+                                if let Some(n) = p.file_name() {
+                                    let _ = std::fs::rename(&p, new_assets.join(n));
+                                }
+                            }
+                        }
+                        let _ = std::fs::remove_dir(&old_global_assets);
+                    }
+                } else if let Some(src_path) = crate::document::trash::resolve_file_path(&state.config.documents_dir, &current_fname) {
+                    // Si ancien format fichier simple sans dossier, convertir en dossier de note
+                    let parent_dir = src_path.parent().unwrap_or(&state.config.documents_dir);
+                    let new_note_dir = parent_dir.join(new_stem);
+                    let _ = std::fs::create_dir_all(new_note_dir.join("assets"));
+                    let dest_md = new_note_dir.join(format!("{}.md", new_stem));
+                    let _ = std::fs::rename(&src_path, &dest_md);
+                }
+            } else if let Some(src_path) = crate::document::trash::resolve_file_path(&state.config.documents_dir, &current_fname) {
                 let dest_path = state.config.documents_dir.join(&norm_new_fname);
                 if let Some(parent) = dest_path.parent() {
                     let _ = std::fs::create_dir_all(parent);
@@ -236,19 +283,6 @@ pub async fn update_document(
                         return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Impossible de renommer le fichier sur le disque : {}", e)}))).into_response());
                     }
                     tracing::info!("[Documents] Fichier renommé physiquement sur le disque : {} -> {}", src_path.display(), dest_path.display());
-                }
-
-                // Renommage transparent du dossier assets associé si markdown
-                if current_fname.ends_with(".md") || current_fname.ends_with(".markdown") {
-                    let old_stem = std::path::Path::new(&current_fname).file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    let new_stem = std::path::Path::new(&norm_new_fname).file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    if !old_stem.is_empty() && !new_stem.is_empty() && old_stem != new_stem {
-                        let old_assets = state.config.documents_dir.join("assets").join(old_stem);
-                        let new_assets = state.config.documents_dir.join("assets").join(new_stem);
-                        if old_assets.exists() {
-                            let _ = std::fs::rename(&old_assets, &new_assets);
-                        }
-                    }
                 }
             }
 
@@ -318,12 +352,31 @@ fn move_doc_physical(
         None => (base_name.clone(), config.documents_dir.clone()),
     };
 
-    // Déplacer physiquement le fichier sur le disque
-    if let Some(src_path) = crate::pdf::indexer::resolve_pdf_path(&config.documents_dir, &current_fname) {
-        let _ = std::fs::create_dir_all(&dest_dir);
-        let dest_file_path = dest_dir.join(&base_name);
-        if src_path != dest_file_path {
+    let is_md = current_fname.ends_with(".md") || current_fname.ends_with(".markdown");
+    if is_md {
+        // Déplacement de tout le dossier de note Markdown
+        if let Some(src_note_dir) = crate::document::trash::resolve_note_dir(&config.documents_dir, &current_fname) {
+            let note_folder_name = src_note_dir.file_name().unwrap();
+            let dest_note_dir = dest_dir.join(note_folder_name);
+            if src_note_dir != dest_note_dir {
+                let _ = std::fs::create_dir_all(&dest_dir);
+                let _ = std::fs::rename(&src_note_dir, &dest_note_dir);
+            }
+        } else if let Some(src_path) = crate::document::trash::resolve_file_path(&config.documents_dir, &current_fname) {
+            let stem = std::path::Path::new(&base_name).file_stem().and_then(|s| s.to_str()).unwrap_or(&base_name);
+            let dest_note_dir = dest_dir.join(stem);
+            let _ = std::fs::create_dir_all(dest_note_dir.join("assets"));
+            let dest_file_path = dest_note_dir.join(&base_name);
             let _ = std::fs::rename(&src_path, &dest_file_path);
+        }
+    } else {
+        // Déplacer physiquement le fichier sur le disque
+        if let Some(src_path) = crate::pdf::indexer::resolve_pdf_path(&config.documents_dir, &current_fname) {
+            let _ = std::fs::create_dir_all(&dest_dir);
+            let dest_file_path = dest_dir.join(&base_name);
+            if src_path != dest_file_path {
+                let _ = std::fs::rename(&src_path, &dest_file_path);
+            }
         }
     }
 
@@ -949,5 +1002,93 @@ pub async fn sync_check_handler(
         deleted_ids,
         server_time,
     }))
+}
+
+/// GET /api/documents/:id/download : Télécharge un document (archive .zip avec assets pour Markdown, fichier source pour PDF)
+pub async fn download_document_handler(
+    State(state): State<Arc<AppState>>,
+    Path(doc_id): Path<i64>,
+) -> Response {
+    let conn = match state.db.get() {
+        Ok(c) => c,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Base de données inaccessible"})),
+            )
+                .into_response();
+        }
+    };
+
+    let doc_res = conn.query_row(
+        "SELECT filename, title, COALESCE(doc_type, 'pdf') FROM documents WHERE id = ?1",
+        params![doc_id],
+        |row| {
+            let filename: String = row.get(0)?;
+            let title: String = row.get(1)?;
+            let doc_type: String = row.get(2)?;
+            Ok((filename, title, doc_type))
+        },
+    );
+
+    let (filename, _title, doc_type) = match doc_res {
+        Ok(res) => res,
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": format!("Document {} introuvable", doc_id)})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    };
+
+    if doc_type == "markdown" || filename.ends_with(".md") || filename.ends_with(".markdown") {
+        crate::routes::files::generate_note_zip_response(&state.config.documents_dir, &filename)
+    } else {
+        use axum::http::header;
+        let file_path = match crate::document::trash::resolve_file_path(&state.config.documents_dir, &filename) {
+            Some(path) => path,
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error": format!("Fichier {} introuvable sur le disque", filename)})),
+                )
+                    .into_response();
+            }
+        };
+
+        match std::fs::read(&file_path) {
+            Ok(bytes) => {
+                let download_name = std::path::Path::new(&filename)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("document.pdf");
+                (
+                    StatusCode::OK,
+                    [
+                        (header::CONTENT_TYPE, "application/pdf"),
+                        (
+                            header::CONTENT_DISPOSITION,
+                            &format!("attachment; filename=\"{}\"", download_name),
+                        ),
+                    ],
+                    bytes,
+                )
+                    .into_response()
+            }
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Erreur lecture fichier: {}", e)})),
+            )
+                .into_response(),
+        }
+    }
 }
 

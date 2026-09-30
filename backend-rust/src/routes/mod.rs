@@ -49,6 +49,7 @@ pub fn create_api_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/documents/batch-reindex", post(documents::batch_reindex_documents))
         .route("/documents/reindex-all", post(documents::reindex_all_documents))
         .route("/documents/:id/reindex", post(documents::reindex_document))
+        .route("/documents/:id/download", get(documents::download_document_handler))
         .route("/check-hash/:file_hash", get(documents::check_hash))
         .route("/upload", post(documents::upload_document).layer(DefaultBodyLimit::max(1024 * 1024 * 1024)))
         .route("/sync", post(documents::sync_documents_handler))
@@ -68,6 +69,7 @@ pub fn create_api_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/documents/:id/save-pdf", post(annotations::save_pdf))
         // Filesystem-First : Fichiers, Notes Markdown & Corbeille
         .route("/files", post(files::create_file_handler))
+        .route("/files/export-zip/*filename", get(files::export_note_zip_handler))
         .route("/files/*filename", get(files::get_file_handler).put(files::save_file_handler).delete(files::soft_delete_file_handler))
         .route("/trash", get(files::list_trash_handler))
         .route("/trash/restore", post(files::restore_payload_handler))

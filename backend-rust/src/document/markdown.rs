@@ -566,7 +566,26 @@ fn find_first_image_in_markdown(content: &str, file_path: &Path) -> Option<Vec<s
 
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
 
-    // 1. Recherche prioritaire dans le dossier assets dédié à cette note (ex. assets/Ma note pref 1/)
+    // 1. Recherche prioritaire dans le dossier assets direct de la note (nom_de_la_note/assets/)
+    let direct_note_assets = parent_dir.join("assets");
+    if direct_note_assets.is_dir() {
+        if let Ok(entries) = fs::read_dir(&direct_note_assets) {
+            let mut img_files = Vec::new();
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() && is_img_ext(&p) {
+                    let mtime = fs::metadata(&p).and_then(|m| m.modified()).ok();
+                    img_files.push((p, mtime));
+                }
+            }
+            img_files.sort_by(|a, b| b.1.cmp(&a.1));
+            for (best_img, _) in img_files {
+                candidates.push(best_img);
+            }
+        }
+    }
+
+    // Fallback rétrocompatible dans l'ancien format assets_base (ex. assets/Ma note pref 1/)
     if !current_stem.is_empty() {
         let current_stem_nfc: String = current_stem.nfc().collect();
         let current_stem_nfd: String = current_stem.nfd().collect();
@@ -762,6 +781,267 @@ impl MarkdownProcessor {
     }
 }
 
+/// Détermine si un répertoire est un dossier de note Markdown (`nom_de_la_note/`).
+/// Un tel dossier contient :
+/// - `nom_de_la_note.md` (ou `.markdown`)
+/// - `assets/` (dossier des pièces jointes et images)
+/// Ce dossier ne doit pas être affiché comme un sous-dossier de navigation dans l'UI.
+pub fn is_markdown_note_dir(dir: &Path) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    let folder_name = match dir.file_name().and_then(|s| s.to_str()) {
+        Some(n) => n,
+        None => return false,
+    };
+    if folder_name.starts_with('.') || folder_name.eq_ignore_ascii_case("assets") {
+        return false;
+    }
+
+    let folder_nfc: String = folder_name.nfc().collect();
+    let folder_lower = folder_nfc.to_lowercase();
+
+    // 1. Tester fichier direct [folder_name].md ou [folder_name].markdown
+    if dir.join(format!("{}.md", folder_name)).is_file()
+        || dir.join(format!("{}.markdown", folder_name)).is_file()
+    {
+        return true;
+    }
+
+    // 2. Tester avec normalisation Unicode insensible à la casse
+    if let Ok(entries) = fs::read_dir(dir) {
+        let mut md_count = 0;
+        let mut has_matching_name = false;
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
+                    let lext = ext.to_lowercase();
+                    if lext == "md" || lext == "markdown" {
+                        md_count += 1;
+                        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                            let stem_nfc: String = stem.nfc().collect();
+                            if stem_nfc.to_lowercase() == folder_lower {
+                                has_matching_name = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if has_matching_name || (dir.join("assets").is_dir() && md_count == 1) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Trouve le fichier Markdown principal au sein d'un dossier de note
+pub fn find_markdown_file_in_note_dir(dir: &Path) -> Option<std::path::PathBuf> {
+    if !dir.is_dir() {
+        return None;
+    }
+    let folder_name = dir.file_name().and_then(|s| s.to_str())?;
+    let direct_md = dir.join(format!("{}.md", folder_name));
+    if direct_md.is_file() {
+        return Some(direct_md);
+    }
+    let direct_markdown = dir.join(format!("{}.markdown", folder_name));
+    if direct_markdown.is_file() {
+        return Some(direct_markdown);
+    }
+
+    let folder_nfc: String = folder_name.nfc().collect();
+    let folder_lower = folder_nfc.to_lowercase();
+
+    let mut first_md = None;
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
+                    let lext = ext.to_lowercase();
+                    if lext == "md" || lext == "markdown" {
+                        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                            let stem_nfc: String = stem.nfc().collect();
+                            if stem_nfc.to_lowercase() == folder_lower {
+                                return Some(p);
+                            }
+                        }
+                        if first_md.is_none() {
+                            first_md = Some(p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    first_md
+}
+
+/// Recherche le dossier d'une note dans base_dir en comparant le nom du dossier ou le stem
+pub fn find_note_dir_by_stem(base_dir: &Path, stem: &str) -> Option<std::path::PathBuf> {
+    let clean_stem = stem.trim_start_matches('/').trim_end_matches(".md").trim_end_matches(".markdown");
+    let stem_nfc: String = clean_stem.nfc().collect();
+    let stem_lower = stem_nfc.to_lowercase();
+
+    // 1. Test direct dans base_dir
+    let direct = base_dir.join(clean_stem);
+    if is_markdown_note_dir(&direct) {
+        return Some(direct);
+    }
+
+    // 2. Recherche récursive dans les sous-dossiers
+    fn search_rec(dir: &Path, target_lower: &str) -> Option<std::path::PathBuf> {
+        let entries = fs::read_dir(dir).ok()?;
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                let name = p.file_name().and_then(|s| s.to_str())?;
+                if name.starts_with('.') || name.eq_ignore_ascii_case("assets") {
+                    continue;
+                }
+                let name_nfc: String = name.nfc().collect();
+                if is_markdown_note_dir(&p) {
+                    if name_nfc.to_lowercase() == target_lower {
+                        return Some(p);
+                    }
+                } else if let Some(found) = search_rec(&p, target_lower) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+
+    search_rec(base_dir, &stem_lower)
+}
+
+/// Nettoie les pièces jointes orphelines : si un fichier dans note_dir/assets/
+/// n'est plus référencé dans le contenu Markdown de la note, il est supprimé physiquement du serveur.
+pub fn clean_orphan_markdown_assets(note_dir: &Path, content: &str) -> Vec<String> {
+    let assets_dir = note_dir.join("assets");
+    if !assets_dir.is_dir() {
+        return Vec::new();
+    }
+
+    let entries = match fs::read_dir(&assets_dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut deleted = Vec::new();
+
+    let content_nfc: String = content.nfc().collect();
+    let content_lower = content_nfc.to_lowercase();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let file_name = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        if file_name.starts_with('.') {
+            continue;
+        }
+
+        let name_nfc: String = file_name.nfc().collect();
+        let name_encoded = urlencoding::encode(&name_nfc).to_string();
+        let name_lower = name_nfc.to_lowercase();
+        let encoded_lower = name_encoded.to_lowercase();
+
+        // Référencé soit en nom brut, soit en URL-encodé
+        let is_referenced = content_lower.contains(&name_lower)
+            || content_lower.contains(&encoded_lower);
+
+        if !is_referenced {
+            if let Ok(()) = fs::remove_file(&path) {
+                tracing::info!(
+                    "[Markdown Assets GC] Pièce jointe orpheline supprimée du serveur : {:?}",
+                    path
+                );
+                deleted.push(file_name.to_string());
+            }
+        }
+    }
+
+    deleted
+}
+
+/// Crée une archive zip contenant l'intégralité du dossier d'une note Markdown (le fichier .md et le dossier assets/)
+pub fn create_note_dir_zip(note_dir: &Path, note_stem: &str) -> Result<Vec<u8>, String> {
+    use std::io::{Cursor, Write};
+    use zip::write::SimpleFileOptions;
+    use zip::ZipWriter;
+
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+
+    let dir_opt = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o755);
+
+    let file_opt = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+
+    let root_entry = format!("{}/", note_stem);
+    zip.add_directory(&root_entry, dir_opt)
+        .map_err(|e| format!("Erreur création dossier racine zip: {}", e))?;
+
+    // Assurer la présence du dossier assets/ dans l'archive zip
+    let assets_dir = note_dir.join("assets");
+    if !assets_dir.exists() {
+        let assets_entry = format!("{}assets/", root_entry);
+        zip.add_directory(&assets_entry, dir_opt)
+            .map_err(|e| format!("Erreur création dossier assets zip: {}", e))?;
+    }
+
+    fn add_dir_contents<W: Write + std::io::Seek>(
+        zip: &mut ZipWriter<W>,
+        current_dir: &Path,
+        zip_prefix: &str,
+        dir_opt: SimpleFileOptions,
+        file_opt: SimpleFileOptions,
+    ) -> Result<(), String> {
+        let entries = match fs::read_dir(current_dir) {
+            Ok(e) => e,
+            Err(_) => return Ok(()),
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if file_name.starts_with('.') {
+                continue;
+            }
+            let zip_path = format!("{}{}", zip_prefix, file_name);
+            if path.is_dir() {
+                let dir_path = format!("{}/", zip_path);
+                zip.add_directory(&dir_path, dir_opt)
+                    .map_err(|e| e.to_string())?;
+                add_dir_contents(zip, &path, &dir_path, dir_opt, file_opt)?;
+            } else if path.is_file() {
+                let data = fs::read(&path).map_err(|e| e.to_string())?;
+                zip.start_file(&zip_path, file_opt).map_err(|e| e.to_string())?;
+                zip.write_all(&data).map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
+    add_dir_contents(&mut zip, note_dir, &root_entry, dir_opt, file_opt)?;
+
+    let cursor = zip.finish().map_err(|e| format!("Erreur finalisation zip: {}", e))?;
+    Ok(cursor.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -784,5 +1064,39 @@ mod tests {
     fn test_derive_title() {
         assert_eq!(derive_title_from_filename("cours_cardiologie.md"), "cours cardiologie");
         assert_eq!(derive_title_from_filename("subfolder/ma note.markdown"), "ma note");
+    }
+
+    #[test]
+    fn test_is_markdown_note_dir_and_clean_orphan_assets() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let note_dir = temp_dir.path().join("Ma Note");
+        let assets_dir = note_dir.join("assets");
+        fs::create_dir_all(&assets_dir).unwrap();
+
+        let md_file = note_dir.join("Ma Note.md");
+        fs::write(&md_file, "# Ma Note\n\n![Radio](assets/radio.png)").unwrap();
+
+        // Créer deux assets : un référencé (radio.png), un orphelin (unused.png)
+        fs::write(assets_dir.join("radio.png"), b"PNG1").unwrap();
+        fs::write(assets_dir.join("unused.png"), b"PNG2").unwrap();
+
+        // 1. Vérifier la reconnaissance du dossier de note
+        assert!(is_markdown_note_dir(&note_dir));
+        assert_eq!(find_markdown_file_in_note_dir(&note_dir), Some(md_file));
+
+        // 2. Nettoyage des assets orphelins
+        let content = fs::read_to_string(&note_dir.join("Ma Note.md")).unwrap();
+        let deleted = clean_orphan_markdown_assets(&note_dir, &content);
+        assert_eq!(deleted, vec!["unused.png".to_string()]);
+
+        // Vérifier que radio.png est conservé et unused.png est supprimé
+        assert!(assets_dir.join("radio.png").exists());
+        assert!(!assets_dir.join("unused.png").exists());
+
+        // 3. Si on supprime la référence à radio.png du markdown
+        let updated_content = "# Ma Note\n\nTexte sans images.";
+        let deleted_second = clean_orphan_markdown_assets(&note_dir, updated_content);
+        assert_eq!(deleted_second, vec!["radio.png".to_string()]);
+        assert!(!assets_dir.join("radio.png").exists());
     }
 }

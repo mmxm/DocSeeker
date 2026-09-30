@@ -2672,8 +2672,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (inDocDrawerClearBtn) {
     inDocDrawerClearBtn.addEventListener("click", () => {
+      if (_docSearchDebounceTimer) clearTimeout(_docSearchDebounceTimer);
       syncDocSearchInputs("");
       performDocSearch("", true);
+      if (inDocDrawerSearchInput) inDocDrawerSearchInput.focus();
     });
   }
 
@@ -2874,9 +2876,16 @@ document.addEventListener("DOMContentLoaded", () => {
   [viewerDocSearchInput, docSearchInput, drawerDocSearchInput, inDocDrawerSearchInput].forEach(inp => {
     if (inp) {
       inp.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && inp.value) {
+          e.preventDefault();
+          if (_docSearchDebounceTimer) clearTimeout(_docSearchDebounceTimer);
+          syncDocSearchInputs("");
+          performDocSearch("", true);
+          return;
+        }
         if (e.key === "Enter") {
           e.preventDefault();
-          clearTimeout(docSearchDebounceTimer);
+          if (_docSearchDebounceTimer) clearTimeout(_docSearchDebounceTimer);
           const query = (inp.value || "").trim();
           if (query !== lastExecutedDocSearchQuery || lastExecutedDocSearchDocId !== Number(currentActiveDocId)) {
             lastExecutedDocSearchQuery = query;
@@ -2982,12 +2991,15 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (!query) {
-      // Effacement : restaurer la base de l'ONGLET (extrait cliqué), pas un autre document
       tab.searchActive = false;
-      currentDocOriginalOccurrences = tab.occurrences || [];
-      const origCount = currentDocOriginalOccurrences ? currentDocOriginalOccurrences.length : 0;
-      const countText = `${origCount} résultat${origCount > 1 ? 's' : ''}`;
-      const pillText = `${origCount} extrait${origCount > 1 ? 's' : ''}`;
+      tab.searchQuery = "";
+      tab.occurrences = [];
+      currentDocOriginalOccurrences = [];
+      currentActiveOccurrences = [];
+      currentActiveOccurrenceIndex = -1;
+
+      const countText = "0 résultat";
+      const pillText = "0 extrait";
 
       if (docDetailCount) docDetailCount.textContent = countText;
       if (viewerDocSearchResultCount) viewerDocSearchResultCount.textContent = "";
@@ -3000,19 +3012,18 @@ document.addEventListener("DOMContentLoaded", () => {
         docDetailView.style.display = "block";
       }
 
-      currentActiveOccurrences = sortDocOccurrences(currentDocOriginalOccurrences || [], currentDocOccurrencesSortMode);
-      renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, currentActiveOccurrences);
-      renderDrawerOccurrences(currentActiveDocId, currentActiveDocTitle, currentActiveOccurrences);
-      updateViewerSearchHighlight(tab.searchQuery || "");
-
-      if (currentActiveOccurrences.length > 0) {
-        const curPage = getCurrentViewerPage();
-        const bestIdx = findClosestOccurrenceIndex(currentActiveOccurrences, curPage);
-        jumpToOccurrenceByIndex(bestIdx);
-      } else {
-        currentActiveOccurrenceIndex = -1;
-        updateOccurrenceStepperUI();
+      renderVerticalOccurrences(currentActiveDocId, currentActiveDocTitle, []);
+      renderDrawerOccurrences(currentActiveDocId, currentActiveDocTitle, []);
+      if (inDocDrawerOccurrencesList) {
+        inDocDrawerOccurrencesList.innerHTML = "";
       }
+
+      updateViewerSearchHighlight("");
+      if (window.MarkdownManager && typeof window.MarkdownManager.clearSearchHighlight === "function") {
+        window.MarkdownManager.clearSearchHighlight();
+      }
+
+      updateOccurrenceStepperUI();
       return;
     }
 
@@ -5567,9 +5578,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (isHidden) {
         if (typeof syncInDocDrawerIfNeeded === "function") syncInDocDrawerIfNeeded();
         const tabTerm = getActiveDocSearchTerm();
-        if (inDocDrawerSearchInput && !inDocDrawerSearchInput.value && tabTerm) {
-          inDocDrawerSearchInput.value = tabTerm;
-        }
+        syncDocSearchInputs(tabTerm || "");
         if (inDocDrawerOccurrencesList) {
           const activeCard = inDocDrawerOccurrencesList.querySelector(".vertical-occ-card.active");
           if (activeCard) {
@@ -5597,8 +5606,19 @@ document.addEventListener("DOMContentLoaded", () => {
   if (readerShareBtn) {
     readerShareBtn.addEventListener("click", () => {
       if (!currentActiveDocId) return;
+      const matchedDoc = Array.isArray(currentLoadedDocs) ? currentLoadedDocs.find(d => Number(d.id) === Number(currentActiveDocId)) : null;
+      const isMarkdownDoc = (matchedDoc && matchedDoc.doc_type === 'markdown') ||
+                            (matchedDoc && matchedDoc.filename && (matchedDoc.filename.endsWith('.md') || matchedDoc.filename.endsWith('.markdown'))) ||
+                            (currentActiveDocTitle && (currentActiveDocTitle.endsWith('.md') || currentActiveDocTitle.endsWith('.markdown'))) ||
+                            (window.MarkdownManager && Number(window.MarkdownManager.currentDocId) === Number(currentActiveDocId));
+
+      if (isMarkdownDoc && window.MarkdownManager) {
+        window.MarkdownManager.exportCurrentNote();
+        return;
+      }
+
       const a = document.createElement("a");
-      a.href = buildPdfUrl(currentActiveDocId);
+      a.href = `/api/documents/${currentActiveDocId}/download`;
       a.download = `${currentActiveDocTitle || "document"}.pdf`;
       document.body.appendChild(a);
       a.click();
@@ -8259,16 +8279,36 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         }
 
-        const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = this.currentFilename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        showToast(`Note "${this.currentFilename}" exportée`, "success");
+        // Sauvegarder d'abord pour garantir que l'archive contienne les modifications récentes
+        if (content) {
+          await this.saveNote(content);
+        }
+
+        const stem = this.currentFilename.replace(/\.(md|markdown)$/i, "").split("/").pop() || "note";
+        const cleanFilename = this.currentFilename.replace(/^\/+/, "");
+
+        if (navigator.onLine) {
+          const downloadUrl = `/api/files/export-zip/${cleanFilename.split('/').map(encodeURIComponent).join('/')}`;
+          const a = document.createElement("a");
+          a.href = downloadUrl;
+          a.download = `${stem}.zip`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          showToast(`Archive zip de la note et de ses assets téléchargée`, "success");
+        } else {
+          // Fallback hors-ligne sans accès au serveur distant
+          const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `${stem}.md`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          showToast(`Note exportée en .md (mode hors-ligne)`, "info");
+        }
       } catch (err) {
         console.error("[Markdown] Erreur lors de l'exportation:", err);
         showToast("Erreur lors de l'exportation de la note", "error");
@@ -8366,7 +8406,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!this.currentFilename) {
         throw new Error("Aucune note active pour l'upload d'image");
       }
-      const stem = this.currentFilename.replace(/\.[^/.]+$/, "");
+      const stem = this.currentFilename.split("/").pop().replace(/\.[^/.]+$/, "");
       const formData = new FormData();
       formData.append("file", file, file.name || "image.png");
 

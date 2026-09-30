@@ -769,7 +769,12 @@
                   <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                 </svg>
                 <input type="text" id="inDocDrawerSearchInput" placeholder="Rechercher dans ce document..." autocomplete="off" />
-                <button id="inDocDrawerClearBtn" class="clear-btn" title="Effacer la recherche" aria-label="Effacer la recherche" style="display: none;">&times;</button>
+                <button id="inDocDrawerClearBtn" class="clear-btn" title="Effacer la recherche" aria-label="Effacer la recherche" style="display: none;">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
               </div>
               <div class="in-doc-drawer-meta-row">
                 <span id="inDocDrawerCount" class="in-doc-count">0 résultat</span>
@@ -802,7 +807,7 @@
                       <polyline points="8 6 2 12 8 18"></polyline>
                     </svg>
                   </button>
-                  <button id="markdownExportBtn" class="btn btn-icon btn-sm" title="Exporter la note (.md)" aria-label="Exporter la note (.md)">
+                  <button id="markdownExportBtn" class="btn btn-icon btn-sm" title="Télécharger la note avec ses assets (.zip)" aria-label="Télécharger la note avec ses assets (.zip)">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                       <polyline points="7 10 12 15 17 10"></polyline>

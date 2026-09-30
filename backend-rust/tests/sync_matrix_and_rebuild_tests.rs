@@ -223,11 +223,11 @@ async fn test_sync_manifest_10_files_concurrency_matrix() {
     assert_eq!(res.status(), StatusCode::OK);
 
     // 4. Vérification finale de l'état du serveur
-    assert!(state.config.documents_dir.join("note_1.md").exists());
-    assert!(state.config.documents_dir.join("note_7.md").exists());
-    assert!(state.config.documents_dir.join("note_9.md").exists(), "note_9.md doit être restaurée dans documents/");
+    assert!(docseeker_backend::document::trash::resolve_file_path(&state.config.documents_dir, "note_1.md").is_some());
+    assert!(docseeker_backend::document::trash::resolve_file_path(&state.config.documents_dir, "note_7.md").is_some());
+    assert!(docseeker_backend::document::trash::resolve_file_path(&state.config.documents_dir, "note_9.md").is_some(), "note_9.md doit être restaurée dans documents/");
     assert!(!state.config.trash_dir.join("del_note_9.md").exists(), "del_note_9.md doit être retiré de trash/");
-    assert!(!state.config.documents_dir.join("note_5.md").exists(), "note_5.md doit être retiré de documents/");
+    assert!(docseeker_backend::document::trash::resolve_file_path(&state.config.documents_dir, "note_5.md").is_none(), "note_5.md doit être retiré de documents/");
     assert!(state.config.trash_dir.join("del_note_5.md").exists(), "del_note_5.md doit être en corbeille");
 }
 

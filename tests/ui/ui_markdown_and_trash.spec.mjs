@@ -324,6 +324,30 @@ test.describe('DocSeeker - Prise de Notes Markdown & Corbeille', () => {
       }, uniqueTerm);
     }, { timeout: 5000 }).toBe(true);
 
+    // 6b. Vérifier que la croix d'effacement est visible dans le volet intra-document
+    const inDocClearBtn = page.locator('#inDocDrawerClearBtn');
+    await expect(inDocClearBtn).toBeVisible();
+
+    // 6c. Cliquer sur la croix pour vider et réinitialiser la recherche
+    await inDocClearBtn.click();
+    await expect(inDocInput).toHaveValue('');
+    await expect(inDocClearBtn).toBeHidden();
+
+    // Vérifier la réinitialisation du compteur et l'absence d'occurrences
+    await expect(page.locator('#inDocDrawerCount')).toHaveText('0 résultat');
+    expect(await page.locator('#inDocDrawerOccurrencesList .vertical-occ-card').count()).toBe(0);
+
+    // Vérifier que plus aucun mot n'est surligné dans l'éditeur
+    await expect.poll(async () => {
+      return await page.evaluate(() => {
+        const root = document.getElementById("milkdownRoot");
+        if (!root) return false;
+        const hasDataHit = !!root.querySelector('[data-search-hit="true"]');
+        const hasCssHighlight = (typeof CSS !== 'undefined' && CSS.highlights && CSS.highlights.has('markdown-search'));
+        return hasDataHit || hasCssHighlight;
+      });
+    }, { timeout: 5000 }).toBe(false);
+
     // 7. Vérifier qu'aucun crash Pdfium "Invalid PDF structure" n'a eu lieu
     const pdfiumErrors = consoleErrors.filter(err => err.includes('Invalid PDF structure'));
     expect(pdfiumErrors).toHaveLength(0);
@@ -686,6 +710,62 @@ test.describe('DocSeeker - Prise de Notes Markdown & Corbeille', () => {
       diff.ratio,
       `L'image rendue doit être visuellement identique avant/après réouverture (${(diff.ratio * 100).toFixed(2)}% de pixels divergents > 3%)`
     ).toBeLessThanOrEqual(0.03);
+  });
+
+  test('MD-13 : Téléchargement du dossier complet de la note en archive ZIP avec assets inclus', async ({ page }) => {
+    const noteTitle = `ZipExportNote ${Date.now()}`;
+
+    // 1. Créer la note
+    const createNotePromise = page.waitForResponse(resp => resp.url().includes('/api/files') && resp.request().method() === 'POST');
+    page.once('dialog', async dialog => {
+      await dialog.accept(noteTitle);
+    });
+    await page.locator('#newMarkdownNoteBtn').click();
+    const noteRes = await createNotePromise;
+    const noteData = await noteRes.json();
+    const filename = noteData.filename;
+    expect(filename).toBeDefined();
+
+    await page.waitForFunction(() => !!window.MarkdownManager?.editorInstance && !window.MarkdownManager?._loadingPromise, { timeout: 10000 });
+
+    // 2. Coller une image d'asset dans la note
+    const pngB64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const uploadPromise = page.waitForResponse(resp => resp.url().includes('/api/assets/') && resp.status() === 200, { timeout: 15000 });
+    await page.evaluate((b64) => {
+      const byteChars = atob(b64);
+      const byteArr = new Uint8Array(byteChars.length);
+      for (let i = 0; i < byteChars.length; i++) byteArr[i] = byteChars.charCodeAt(i);
+      const blob = new Blob([byteArr], { type: 'image/png' });
+      const file = new File([blob], 'export_asset.png', { type: 'image/png' });
+      const dt = { items: [{ type: 'image/png', getAsFile: () => file }] };
+      const pasteEvt = new Event('paste', { bubbles: true, cancelable: true });
+      Object.defineProperty(pasteEvt, 'clipboardData', { value: dt });
+      document.getElementById('markdownEditorContainer').dispatchEvent(pasteEvt);
+    }, pngB64);
+    await uploadPromise;
+
+    // 3. Déclencher le téléchargement via #markdownExportBtn
+    const [ download ] = await Promise.all([
+      page.waitForEvent('download', { timeout: 10000 }),
+      page.locator('#markdownExportBtn').click(),
+    ]);
+
+    expect(download.suggestedFilename()).toMatch(/\.zip$/i);
+
+    // 4. Vérifier que l'API d'export ZIP répond bien 200 avec Content-Type application/zip
+    const cleanFn = filename.replace(/^\/+/, '');
+    const apiRes = await page.request.get(`/api/files/export-zip/${cleanFn}`);
+    expect(apiRes.status()).toBe(200);
+    expect(apiRes.headers()['content-type']).toContain('application/zip');
+    expect(apiRes.headers()['content-disposition']).toContain('.zip');
+    const zipBytes = await apiRes.body();
+    expect(zipBytes.length).toBeGreaterThan(100);
+
+    // Signature PK de fichier zip (0x50, 0x4B, 0x03, 0x04)
+    expect(zipBytes[0]).toBe(0x50);
+    expect(zipBytes[1]).toBe(0x4B);
+    expect(zipBytes[2]).toBe(0x03);
+    expect(zipBytes[3]).toBe(0x04);
   });
 });
 

@@ -36,6 +36,28 @@ pub fn collect_document_files_recursive(dir: &Path, base: &Path) -> Vec<(PathBuf
             if file_name.eq_ignore_ascii_case("assets") {
                 continue;
             }
+
+            // Détection du dossier de note Markdown : nom_de_la_note/ qui contient nom_de_la_note.md et assets/
+            if crate::document::markdown::is_markdown_note_dir(&path) {
+                if let Some(md_file) = crate::document::markdown::find_markdown_file_in_note_dir(&path) {
+                    if let Ok(meta) = fs::metadata(&md_file) {
+                        if meta.len() > 0 {
+                            let rel_dir = path.strip_prefix(base).unwrap_or(&path);
+                            let parent_rel = rel_dir.parent();
+                            let md_name = md_file.file_name().and_then(|s| s.to_str()).unwrap_or("note.md").to_string();
+                            let norm_fname = match parent_rel {
+                                Some(p) if !p.as_os_str().is_empty() => format!("{}/{}", p.to_string_lossy(), md_name),
+                                _ => md_name,
+                            };
+                            let norm_fname: String = norm_fname.nfc().collect();
+                            results.push((md_file, norm_fname));
+                        }
+                    }
+                }
+                // Ne pas descendre dans assets/ à l'intérieur de la note
+                continue;
+            }
+
             results.extend(collect_document_files_recursive(&path, base));
         } else if path.is_file() && is_supported_document(&path) {
             if let Ok(meta) = fs::metadata(&path) {
@@ -75,8 +97,8 @@ pub fn sync_physical_folders(
                 Some(n) => n,
                 None => continue,
             };
-            // Ignorer assets et répertoires cachés
-            if !name.starts_with('.') && !name.eq_ignore_ascii_case("assets") {
+            // Ignorer assets, répertoires cachés, ET dossiers de notes markdown
+            if !name.starts_with('.') && !name.eq_ignore_ascii_case("assets") && !crate::document::markdown::is_markdown_note_dir(&p) {
                 sub_dirs.push(p);
             }
         }

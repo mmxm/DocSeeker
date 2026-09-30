@@ -1,5 +1,7 @@
 import { Crepe } from '@milkdown/crepe';
 import { replaceAll } from '@milkdown/utils';
+import { history } from '@milkdown/kit/plugin/history';
+import { clipboard } from '@milkdown/kit/plugin/clipboard';
 import '@milkdown/crepe/theme/common/style.css';
 import '@milkdown/crepe/theme/frame.css';
 
@@ -23,6 +25,9 @@ window.createMilkdown = async function(rootElement, options = {}) {
     defaultValue: initialValue || '',
     featureConfigs: uploadConfig,
   });
+
+  // Plugins Milkdown Kit : History (Undo/Redo) & Clipboard (Markdown Copy/Paste)
+  crepe.editor.use(history).use(clipboard);
 
   // Branchement de l'écouteur de mise à jour Markdown
   crepe.on((listener) => {
