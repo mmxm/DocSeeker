@@ -282,6 +282,102 @@ async fn test_sync_manifest_differential_protocol() {
 }
 
 #[tokio::test]
+async fn test_server_trash_not_resurrected_by_ready_client_file() {
+    let (state, token, _tmp) = setup_test_app();
+    let router = create_api_router(Arc::clone(&state)).with_state(Arc::clone(&state));
+    let cookie = format!("docseeker_session={}", token);
+
+    // 1. Créer un fichier sur le serveur et le mettre en corbeille
+    let file_path = state.config.documents_dir.join("QAProbeSync.md");
+    std::fs::write(&file_path, "# Probe").unwrap();
+    let db_conn = state.db.get().unwrap();
+    db_conn.execute(
+        "INSERT INTO documents (filename, title, doc_type, status) VALUES ('QAProbeSync.md', 'QAProbeSync', 'markdown', 'ready')",
+        [],
+    ).unwrap();
+    docseeker_backend::document::trash::soft_delete(&db_conn, &state.config, "QAProbeSync.md").unwrap();
+
+    let now = chrono::Utc::now().timestamp();
+
+    // 2. Client envoie un manifeste avec status="ready" et mtime récent
+    let manifest_ready = SyncManifestRequest {
+        files: vec![
+            ClientFileEntry {
+                filename: "QAProbeSync.md".to_string(),
+                hash: None,
+                mtime: now + 500,
+                status: Some("ready".to_string()),
+            },
+        ],
+        trash: vec![],
+    };
+
+    let req_ready = Request::builder()
+        .method("POST")
+        .uri("/api/sync/manifest")
+        .header(header::COOKIE, &cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_string(&manifest_ready).unwrap()))
+        .unwrap();
+
+    let res_ready = router.clone().oneshot(req_ready).await.unwrap();
+    assert_eq!(res_ready.status(), StatusCode::OK);
+    let body_ready = to_bytes(res_ready.into_body(), usize::MAX).await.unwrap();
+    let plan_ready: serde_json::Value = serde_json::from_slice(&body_ready).unwrap();
+
+    let delete_local: Vec<String> = plan_ready["delete_local"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    let push_ready: Vec<String> = plan_ready["push"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+
+    assert!(delete_local.contains(&"QAProbeSync.md".to_string()), "La note en corbeille serveur doit être supprimée en local pour un client non-modifié (ready)");
+    assert!(!push_ready.contains(&"QAProbeSync.md".to_string()), "La note ne doit pas être ressuscitée dans push");
+
+    // 3. Client envoie un manifeste avec status="modified" et mtime plus récent -> push (restauration explicite)
+    let manifest_modified = SyncManifestRequest {
+        files: vec![
+            ClientFileEntry {
+                filename: "QAProbeSync.md".to_string(),
+                hash: None,
+                mtime: now + 500,
+                status: Some("modified".to_string()),
+            },
+        ],
+        trash: vec![],
+    };
+
+    let req_mod = Request::builder()
+        .method("POST")
+        .uri("/api/sync/manifest")
+        .header(header::COOKIE, &cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_string(&manifest_modified).unwrap()))
+        .unwrap();
+
+    let res_mod = router.clone().oneshot(req_mod).await.unwrap();
+    assert_eq!(res_mod.status(), StatusCode::OK);
+    let body_mod = to_bytes(res_mod.into_body(), usize::MAX).await.unwrap();
+    let plan_mod: serde_json::Value = serde_json::from_slice(&body_mod).unwrap();
+
+    let push_mod: Vec<String> = plan_mod["push"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+
+    assert!(push_mod.contains(&"QAProbeSync.md".to_string()), "Une modification explicite client (modified) doit être pushée");
+}
+
+#[tokio::test]
 async fn test_rebuild_db_from_filesystem_recovery() {
     let (state, token, _tmp) = setup_test_app();
     let router = create_api_router(Arc::clone(&state)).with_state(Arc::clone(&state));
