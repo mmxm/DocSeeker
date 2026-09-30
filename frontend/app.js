@@ -7437,10 +7437,17 @@ document.addEventListener("DOMContentLoaded", () => {
               const filename = this.decodeName(entry.name);
               try {
                 const f = await entry.getFile();
+                let hash = null;
+                try {
+                  const buf = await f.arrayBuffer();
+                  const hashBuf = await crypto.subtle.digest("SHA-256", buf);
+                  hash = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
+                } catch (_) {}
                 files.push({
                   filename,
                   mtime: new Date(f.lastModified).toISOString(),
-                  file_size: f.size
+                  file_size: f.size,
+                  hash
                 });
               } catch (_) {}
             }
@@ -7545,6 +7552,7 @@ document.addEventListener("DOMContentLoaded", () => {
           const rawMtime = dirty ? dirty.mtime : f.mtime;
           return {
             filename: f.filename,
+            hash: f.hash || undefined,
             mtime: toUnixSecs(rawMtime),
             status: dirty ? dirty.action : "ready"
           };
@@ -7552,8 +7560,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
         for (const d of dirtyList) {
           if (!manifestFiles.some(f => f.filename === d.filename)) {
+            let hash = undefined;
+            try {
+              const text = await MarkdownStorage.read(d.filename);
+              if (text !== null) {
+                const buf = new TextEncoder().encode(text);
+                const hashBuf = await crypto.subtle.digest("SHA-256", buf);
+                hash = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
+              }
+            } catch (_) {}
             manifestFiles.push({
               filename: d.filename,
+              hash: hash,
               mtime: toUnixSecs(d.mtime),
               status: d.action
             });
