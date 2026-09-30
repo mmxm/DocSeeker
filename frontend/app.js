@@ -7740,6 +7740,10 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!title || !title.trim()) return;
 
       const cleanTitle = title.trim();
+      if (cleanTitle.includes("/") || cleanTitle.includes("\\")) {
+        showToast("Le titre d'une note ne peut pas contenir de barre oblique ('/' ou '\\').", "error");
+        return;
+      }
       const filename = cleanTitle.endsWith(".md") ? cleanTitle : `${cleanTitle}.md`;
       const initialContent = `# ${cleanTitle}\n\n`;
 

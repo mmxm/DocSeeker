@@ -128,6 +128,20 @@ async fn test_markdown_file_crud_and_trash_lifecycle() {
     let res_dup = router.clone().oneshot(req_dup).await.unwrap();
     assert_eq!(res_dup.status(), StatusCode::CONFLICT);
 
+    // 2b. Tenter de créer une note avec '/' ou '\' dans le titre -> 400 BAD_REQUEST
+    let req_slash = Request::builder()
+        .method("POST")
+        .uri("/api/files")
+        .header(header::COOKIE, &cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::json!({
+            "filename": "QA imbric/deux/note.md",
+            "content": "# Test"
+        }).to_string()))
+        .unwrap();
+    let res_slash = router.clone().oneshot(req_slash).await.unwrap();
+    assert_eq!(res_slash.status(), StatusCode::BAD_REQUEST);
+
     // 3. Lire le contenu brut du fichier via GET /api/files/*filename
     let req_get = Request::builder()
         .uri("/api/files/Sémiologie%20Cardiaque.md")
