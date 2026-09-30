@@ -7843,19 +7843,35 @@ document.addEventListener("DOMContentLoaded", () => {
     },
 
     async loadNote(docId, filename, title, preloadedContent = null) {
-      // Si un enregistrement est en cours de debounce sur la note sortante, on le flushe immédiatement
-      // avant de changer de note pour éviter d'écraser la nouvelle note avec les modifications de la précédente.
-      if (this.saveTimer) {
-        clearTimeout(this.saveTimer);
-        this.saveTimer = null;
-        const flushFname = this._pendingSaveFilename || this.currentFilename;
-        const flushDocId = this._pendingSaveDocId || this.currentDocId;
-        const flushTitle = this._pendingSaveTitle || this.currentTitle;
-        const flushMd = (this._pendingSaveMarkdown !== null && this._pendingSaveMarkdown !== undefined)
-          ? this._pendingSaveMarkdown
-          : ((this.editorInstance && typeof this.editorInstance.getMarkdown === "function")
-              ? this.editorInstance.getMarkdown()
-              : (document.getElementById("markdownRawContent")?.value || ""));
+      // Flush/récolte de la note sortante AVANT de changer de note.
+      // Source de vérité : le contenu vivant de l'éditeur s'il diffère du contenu
+      // chargé — milkdown notifie onChange avec ~200 ms de retard, donc le timer
+      // peut ne pas être armé alors que des frappes existent (sinon perte des
+      // derniers caractères, cf. régression MD-18 #24×#15). Fallback : dernier
+      // markdown notifié (_pendingSave* : panneau brut, appels programmatiques).
+      const outFname = this.currentFilename;
+      const outDocId = this.currentDocId;
+      const outTitle = this.currentTitle;
+      const liveMd = (this.editorInstance && typeof this.editorInstance.getMarkdown === "function")
+        ? this.editorInstance.getMarkdown()
+        : null;
+      const liveDiffers = (liveMd !== null && liveMd !== undefined && liveMd !== this._loadedContent);
+      if (this.saveTimer || liveDiffers) {
+        if (this.saveTimer) {
+          clearTimeout(this.saveTimer);
+          this.saveTimer = null;
+        }
+        const flushFname = outFname;
+        const flushDocId = outDocId;
+        const flushTitle = outTitle;
+        let flushMd;
+        if (liveDiffers) {
+          flushMd = liveMd;
+        } else if (this._pendingSaveMarkdown !== null && this._pendingSaveMarkdown !== undefined) {
+          flushMd = this._pendingSaveMarkdown;
+        } else {
+          flushMd = document.getElementById("markdownRawContent")?.value || "";
+        }
 
         this._pendingSaveFilename = null;
         this._pendingSaveDocId = null;
@@ -7919,6 +7935,22 @@ document.addEventListener("DOMContentLoaded", () => {
       if (this.saveTimer) {
         clearTimeout(this.saveTimer);
         this.saveTimer = null;
+        // Ré-armement tardif possible entre le début de loadNote et ce point
+        // (notifications markdownUpdated différées ~200 ms par milkdown) : flusher
+        // la note sortante au lieu de jeter le timer (sinon perte des frappes, MD-18).
+        const pendMd = this._pendingSaveMarkdown;
+        const pendFn = this._pendingSaveFilename || this.currentFilename;
+        this._pendingSaveMarkdown = null;
+        this._pendingSaveFilename = null;
+        this._pendingSaveDocId = null;
+        this._pendingSaveTitle = null;
+        if (pendMd && pendFn === this.currentFilename) {
+          try {
+            await this.saveNote(pendMd, pendFn, this.currentDocId, this.currentTitle);
+          } catch (e) {
+            console.warn("[Markdown] Erreur flush tardif lors du changement de note:", e);
+          }
+        }
       }
       this._isLoadingNote = true;
       this._loadedContent = content;
@@ -7930,7 +7962,10 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       const root = document.getElementById("milkdownRoot");
-      if (!root) return;
+      if (!root) {
+        this._isLoadingNote = false;
+        return;
+      }
 
       if (this.editorInstance && typeof this.editorInstance.destroy === "function") {
         try { this.editorInstance.destroy(); } catch (e) {}
@@ -7948,6 +7983,9 @@ document.addEventListener("DOMContentLoaded", () => {
           });
           this.editorInstance = await this._loadingPromise;
           this._loadingPromise = null;
+          // Fin de la fenêtre de chargement : reset synchrone. Un reset différé (setTimeout)
+          // avale les onContentChange légitimes arrivant juste après le montage (régression #24×#15, MD-18).
+          this._isLoadingNote = false;
           if (this._pendingContent) {
             const pending = this._pendingContent;
             this._pendingContent = null;
@@ -7959,11 +7997,9 @@ document.addEventListener("DOMContentLoaded", () => {
           root.innerHTML = `<textarea class="fallback-md-textarea" style="width:100%; height:500px; padding:16px; border:1px solid var(--border-color); border-radius:8px; font-family:monospace;">${escapeHtml(content)}</textarea>`;
           const ta = root.querySelector("textarea");
           ta.addEventListener("input", () => this.onContentChange(ta.value));
+          this._isLoadingNote = false;
         }
         this.setStatus("saved", "Enregistré");
-        setTimeout(() => {
-          this._isLoadingNote = false;
-        }, 50);
         const activeSearchTerm = getActiveDocSearchTerm() || (document.getElementById("docSearchInput")?.value || "").trim();
         if (activeSearchTerm) {
           setTimeout(() => {
@@ -7996,9 +8032,9 @@ document.addEventListener("DOMContentLoaded", () => {
     },
 
     onContentChange(markdown) {
-      if (this._isLoadingNote) {
-        return;
-      }
+      // Pas de garde _isLoadingNote ici : la couche crepe (userEdited) bloque déjà
+      // les markdownUpdated de montage à la source, et une garde ici avale les
+      // frappes légitimes arrivant pendant le montage async (régression #24×#15, MD-18).
 
       const rawTextarea = document.getElementById("markdownRawContent");
       if (rawTextarea && document.activeElement !== rawTextarea) {
