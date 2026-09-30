@@ -875,7 +875,7 @@ pub fn encode_uri_component(s: &str) -> String {
     for byte in s.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'!' | b'~' | b'*'
-            | b'\'' | b'(' | b')' => out.push(byte as char),
+            | b'\'' => out.push(byte as char),
             other => {
                 out.push('%');
                 out.push_str(&format!("{:02X}", other));
@@ -939,12 +939,50 @@ pub fn heal_asset_references(md: &str) -> String {
         let trimmed = line.trim_start();
         if trimmed.starts_with("![") || trimmed.starts_with("!\\[") {
             if let Some(open) = line.find("](") {
-                if let Some(close_rel) = line[open + 2..].find(')') {
+                let rest = &line[open + 2..];
+                let close_rel = if rest.starts_with("/api/assets/") || rest.starts_with("assets/") {
+                    // Trouver la parenthèse fermante de l'asset en ignorant les ')' incluses dans le nom du fichier (ex: a)b.png)
+                    let limit = rest.find("![").unwrap_or(rest.len());
+                    let slice = &rest[..limit];
+                    let mut candidate = None;
+                    for (idx, ch) in slice.char_indices() {
+                        if ch == ')' {
+                            let after = &slice[idx + 1..];
+                            let is_boundary = after.is_empty()
+                                || after.starts_with(char::is_whitespace)
+                                || after.starts_with(|c: char| c == '.' || c == ',' || c == ';' || c == ':' || c == '\n');
+                            if is_boundary {
+                                candidate = Some(idx);
+                                break;
+                            } else {
+                                candidate = Some(idx);
+                            }
+                        }
+                    }
+                    candidate
+                } else {
+                    let mut depth = 1;
+                    let mut found = None;
+                    for (idx, ch) in rest.char_indices() {
+                        if ch == '(' {
+                            depth += 1;
+                        } else if ch == ')' {
+                            depth -= 1;
+                            if depth == 0 {
+                                found = Some(idx);
+                                break;
+                            }
+                        }
+                    }
+                    found
+                };
+
+                if let Some(close_rel) = close_rel {
                     let close = open + 2 + close_rel;
                     let url = &line[open + 2..close];
                     // Normalisation : `assets/…` (relatif, aucune route HTTP) → `/api/assets/…`.
                     // Encodage si l'URL contient des caractères interdits en destination
-                    // CommonMark (espaces, accents bruts) ou reste relative.
+                    // CommonMark (espaces, accents bruts, parenthèses) ou reste relative.
                     let normalized = if let Some(rest) = url.strip_prefix("assets/") {
                         format!("/api/assets/{rest}")
                     } else {
@@ -952,7 +990,7 @@ pub fn heal_asset_references(md: &str) -> String {
                     };
                     let is_asset = normalized.starts_with("/api/assets/");
                     let needs_fix = is_asset
-                        && (normalized.bytes().any(|b| b <= 0x20 || b >= 0x7F)
+                        && (normalized.bytes().any(|b| b <= 0x20 || b >= 0x7F || b == b'(' || b == b')')
                             || url.starts_with("assets/"));
                     // Alt dégénéré : le bloc image de Crepe insère parfois un alt
                     // numérique (« 1.00 ») — on le remplace par le nom du fichier.
@@ -1031,7 +1069,7 @@ fn percent_decode(s: &str) -> String {
 /// Encodage d'un segment en préservant les séquences %XX déjà valides (pas de
 /// double-encodage `%20` → `%2520`) : les segments mixtes (texte brut + %XX) restent corrects.
 fn encode_uri_segment(s: &str) -> String {
-    if !s.bytes().any(|b| b <= 0x20 || b >= 0x7F) {
+    if !s.bytes().any(|b| b <= 0x20 || b >= 0x7F || b == b'(' || b == b')') {
         return s.to_string(); // déjà propre (éventuellement %XX), ne pas retoucher
     }
     let chars: Vec<char> = s.chars().collect();
@@ -1127,6 +1165,25 @@ mod heal_tests {
         let md = "![a](assets/S/t e.png)\n";
         let out = heal_asset_references(md);
         assert!(out.ends_with('\n'));
+    }
+
+    #[test]
+    fn test_heal_encodes_parentheses_in_asset_filename() {
+        let md = "# Edge\n\n![img](/api/assets/QAEdge/a)b.png)\n";
+        let out = heal_asset_references(md);
+        assert!(out.contains("/api/assets/QAEdge/a%29b.png"), "{out}");
+
+        // Vérifier que clean_orphan_markdown_assets ne supprime pas l'asset référencé
+        let tmp = tempfile::tempdir().unwrap();
+        let note_dir = tmp.path().join("QAEdge");
+        let assets_dir = note_dir.join("assets");
+        std::fs::create_dir_all(&assets_dir).unwrap();
+        let asset_file = assets_dir.join("a)b.png");
+        std::fs::write(&asset_file, b"fake png").unwrap();
+
+        let deleted = crate::document::markdown::clean_orphan_markdown_assets(&note_dir, &out);
+        assert!(deleted.is_empty(), "L'asset référencé a)b.png ne doit pas être purgé : {:?}", deleted);
+        assert!(asset_file.exists(), "Le fichier asset doit toujours exister");
     }
 }
 

@@ -155,11 +155,13 @@ pub fn compute_sync_plan(config: &Config, req: &SyncManifestRequest) -> SyncPlan
             if client_file.status.as_deref() == Some("deleted") {
                 // Déjà supprimé des deux côtés
                 delete_local.push(fname.clone());
-            } else if client_file.mtime > *trash_deleted_at {
-                // Modification client plus récente que la mise en corbeille -> Restauration implicite / push
+            } else if (client_file.status.as_deref() == Some("modified") || client_file.status.as_deref() == Some("created"))
+                && client_file.mtime > *trash_deleted_at
+            {
+                // Modification client explicite plus récente que la mise en corbeille -> Restauration implicite / push
                 push.push(fname.clone());
             } else {
-                // Fichier supprimé sur le serveur après la dernière modif client -> delete local
+                // Fichier supprimé sur le serveur et non modifié par le client ("ready") -> delete local
                 delete_local.push(fname.clone());
             }
         } else {

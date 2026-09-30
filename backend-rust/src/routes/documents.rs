@@ -272,6 +272,27 @@ pub async fn update_document(
                     let dest_md = new_note_dir.join(format!("{}.md", new_stem));
                     let _ = std::fs::rename(&src_path, &dest_md);
                 }
+
+                // 4. Réécriture des références d'assets (/api/assets/<ancien_stem>/ -> /api/assets/<nouveau_stem>/) dans le fichier .md
+                if let Some(dest_note_dir) = crate::document::trash::resolve_note_dir(&state.config.documents_dir, &norm_new_fname) {
+                    let dest_md_file = dest_note_dir.join(format!("{}.md", new_stem));
+                    if dest_md_file.exists() {
+                        if let Ok(content) = std::fs::read_to_string(&dest_md_file) {
+                            let old_raw = format!("/api/assets/{}/", old_stem);
+                            let new_raw = format!("/api/assets/{}/", new_stem);
+                            let old_enc = format!("/api/assets/{}/", urlencoding::encode(old_stem));
+                            let new_enc = format!("/api/assets/{}/", urlencoding::encode(new_stem));
+
+                            let mut updated = content.replace(&old_raw, &new_raw);
+                            if old_enc != old_raw {
+                                updated = updated.replace(&old_enc, &new_enc);
+                            }
+                            if updated != content {
+                                let _ = std::fs::write(&dest_md_file, updated);
+                            }
+                        }
+                    }
+                }
             } else if let Some(src_path) = crate::document::trash::resolve_file_path(&state.config.documents_dir, &current_fname) {
                 let dest_path = state.config.documents_dir.join(&norm_new_fname);
                 if let Some(parent) = dest_path.parent() {

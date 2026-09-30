@@ -143,11 +143,15 @@ fn clean_links_and_images(input: &str) -> String {
             if i < len && chars[i] == ']' {
                 i += 1; // skip ']'
                 if i < len && chars[i] == '(' {
-                    while i < len && chars[i] != ')' {
+                    let mut depth = 1;
+                    i += 1;
+                    while i < len && depth > 0 {
+                        if chars[i] == '(' {
+                            depth += 1;
+                        } else if chars[i] == ')' {
+                            depth -= 1;
+                        }
                         i += 1;
-                    }
-                    if i < len && chars[i] == ')' {
-                        i += 1; // skip ')'
                     }
                 }
             }
@@ -165,11 +169,15 @@ fn clean_links_and_images(input: &str) -> String {
             if i < len && chars[i] == ']' {
                 i += 1; // skip ']'
                 if i < len && chars[i] == '(' {
-                    while i < len && chars[i] != ')' {
+                    let mut depth = 1;
+                    i += 1;
+                    while i < len && depth > 0 {
+                        if chars[i] == '(' {
+                            depth += 1;
+                        } else if chars[i] == ')' {
+                            depth -= 1;
+                        }
                         i += 1;
-                    }
-                    if i < len && chars[i] == ')' {
-                        i += 1; // skip ')'
                     }
                 }
             }

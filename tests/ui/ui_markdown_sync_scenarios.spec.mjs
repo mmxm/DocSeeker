@@ -97,6 +97,7 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
           SELECT id FROM documents WHERE filename LIKE '%AutoSync%' OR filename LIKE '%OfflineDelete%' OR filename LIKE '%ServerDelete%' OR filename LIKE '%RestoreLocal%' OR filename LIKE '%ServerRestore%' OR filename LIKE '%Export Note%' OR filename LIKE '%RebuildClient%'
         );
         DELETE FROM documents WHERE filename LIKE '%AutoSync%' OR filename LIKE '%OfflineDelete%' OR filename LIKE '%ServerDelete%' OR filename LIKE '%RestoreLocal%' OR filename LIKE '%ServerRestore%' OR filename LIKE '%Export Note%' OR filename LIKE '%RebuildClient%';
+        DELETE FROM pages WHERE doc_id NOT IN (SELECT id FROM documents);
       "`, { stdio: 'ignore' });
 
       const docsDir = path.resolve('data/documents');
@@ -104,7 +105,7 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
         const files = fs.readdirSync(docsDir);
         for (const f of files) {
           if (f.startsWith('AutoSync') || f.startsWith('OfflineDelete') || f.startsWith('ServerDelete') || f.startsWith('RestoreLocal') || f.startsWith('ServerRestore') || f.startsWith('Export Note') || f.startsWith('RebuildClient')) {
-            try { fs.unlinkSync(path.join(docsDir, f)); } catch {}
+            try { fs.rmSync(path.join(docsDir, f), { recursive: true, force: true }); } catch {}
           }
         }
       }
@@ -113,7 +114,7 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
       if (fs.existsSync(trashDir)) {
         const tFiles = fs.readdirSync(trashDir);
         for (const f of tFiles) {
-          try { fs.unlinkSync(path.join(trashDir, f)); } catch {}
+          try { fs.rmSync(path.join(trashDir, f), { recursive: true, force: true }); } catch {}
         }
       }
     } catch {}
@@ -189,8 +190,11 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
     await page.waitForTimeout(500);
 
     // 7. Triple Vérification :
-    // A) Système de fichiers serveur
-    const docPath = path.join(process.cwd(), 'data', 'documents', filename);
+    // A) Système de fichiers serveur (compatible format dossier de note et chemin direct)
+    const stem = filename.replace(/\.md$/, '');
+    const folderDocPath = path.join(process.cwd(), 'data', 'documents', stem, filename);
+    const flatDocPath = path.join(process.cwd(), 'data', 'documents', filename);
+    const docPath = fs.existsSync(folderDocPath) ? folderDocPath : flatDocPath;
     expect(fs.existsSync(docPath)).toBeTruthy();
     expect(fs.readFileSync(docPath, 'utf-8')).toContain('Contenu enrichi et sauvegardé en mode hors-ligne sans serveur.');
 
@@ -358,7 +362,10 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
 
     // 5. Triple Vérification :
     // A) Système de fichiers serveur (réapparu dans documents/ et sorti de trash/ avec .meta.json purgé)
-    const activeDocPath = path.join(process.cwd(), 'data', 'documents', filename);
+    const stem = filename.replace(/\.md$/, '');
+    const folderDocPath = path.join(process.cwd(), 'data', 'documents', stem, filename);
+    const flatDocPath = path.join(process.cwd(), 'data', 'documents', filename);
+    const activeDocPath = fs.existsSync(folderDocPath) ? folderDocPath : flatDocPath;
     const trashDocPath = path.join(process.cwd(), 'data', 'trash', `del_${filename}`);
     const trashMetaPath = path.join(process.cwd(), 'data', 'trash', `del_${filename}.meta.json`);
     expect(fs.existsSync(activeDocPath)).toBeTruthy();
@@ -432,8 +439,8 @@ test.describe('DocSeeker - Scénarios E2E Synchronisation Offline & Résilience'
     await page.locator('#markdownExportBtn').click();
     const download = await downloadPromise;
 
-    // 3. Vérifier le nom de fichier et l'extension
-    expect(download.suggestedFilename()).toBe(`${noteTitle}.md`);
+    // 3. Vérifier le nom de fichier et l'extension (archive ZIP complète avec note et assets)
+    expect(download.suggestedFilename()).toBe(`${noteTitle}.zip`);
   });
 
   test('SC-7 : Reconstruction de l\'index local client après réinitialisation', async ({ page }) => {

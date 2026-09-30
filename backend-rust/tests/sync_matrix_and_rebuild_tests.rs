@@ -339,3 +339,48 @@ La sémiologie cardiaque repose sur :
 
     println!("Vignette WebP générée avec succès : {} octets", bytes.len());
 }
+
+#[tokio::test]
+async fn test_sync_manifest_hash_divergence_detection() {
+    let (state, token, _tmp) = setup_test_app();
+    let router = create_api_router(Arc::clone(&state)).with_state(Arc::clone(&state));
+    let cookie = format!("docseeker_session={}", token);
+
+    // 1. Créer un fichier sur le serveur
+    let server_file = state.config.documents_dir.join("divergence_test.md");
+    std::fs::write(&server_file, "# Contenu Serveur Officiel\n").unwrap();
+    let metadata = std::fs::metadata(&server_file).unwrap();
+    let server_mtime = metadata.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+
+    // 2. Client envoie un manifeste avec mtime identique mais hash différent (divergence locale)
+    let manifest_req = SyncManifestRequest {
+        files: vec![
+            ClientFileEntry {
+                filename: "divergence_test.md".to_string(),
+                hash: Some("divergent_client_hash_abcdef0123456789".to_string()),
+                mtime: server_mtime,
+                status: Some("ready".to_string()),
+            },
+        ],
+        trash: vec![],
+    };
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/sync/manifest")
+        .header(header::COOKIE, &cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_string(&manifest_req).unwrap()))
+        .unwrap();
+
+    let res = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let plan: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let pull_items = plan["pull"].as_array().expect("pull array");
+    let mismatch = pull_items.iter().find(|item| item["filename"] == "divergence_test.md");
+    assert!(mismatch.is_some(), "Le fichier avec hash divergent doit être inclus dans pull : {:?}", pull_items);
+    assert_eq!(mismatch.unwrap()["reason"], "hash_mismatch");
+}
