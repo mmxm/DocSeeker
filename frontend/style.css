@@ -5034,6 +5034,40 @@ body.dark-theme .in-doc-drawer-header {
   min-height: 100%;
 }
 
+/* Zone éditable ProseMirror */
+.milkdown .ProseMirror {
+  padding: 40px 32px 140px;
+  outline: none;
+  min-height: calc(100vh - 220px);
+  box-sizing: border-box;
+}
+
+/* Menu contextuel flottant Slash / Crepe Milkdown */
+.milkdown .milkdown-slash-menu[data-show='false'] {
+  display: none !important;
+}
+
+.milkdown .milkdown-slash-menu[data-show='true'] {
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.milkdown .milkdown-slash-menu {
+  z-index: 100 !important;
+  max-height: min(360px, calc(100vh - 180px)) !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important;
+}
+
+.milkdown .milkdown-slash-menu .tab-group {
+  flex-shrink: 0 !important;
+}
+
+.milkdown .milkdown-slash-menu .menu-groups {
+  max-height: min(260px, calc(100vh - 250px)) !important;
+  flex: 1 1 auto !important;
+  overflow-y: auto !important;
+}
+
 /* Adaptation responsive de la zone éditable ProseMirror sur mobile/tablette */
 @media (max-width: 768px) {
   .milkdown .ProseMirror {
