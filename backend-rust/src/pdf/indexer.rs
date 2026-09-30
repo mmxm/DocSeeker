@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 use rusqlite::{params, Connection, Result};
-use tracing::{info, warn, error};
+use tracing::{info, error};
 
 use crate::config::Config;
 use super::engine::PdfEngine;
@@ -28,7 +28,7 @@ pub fn compute_file_hash(path: &Path) -> std::io::Result<String> {
 pub fn index_pdf_file(
     conn: &Connection,
     pdf_engine: &PdfEngine,
-    config: &Config,
+    _config: &Config,
     file_path: &Path,
     original_filename: &str,
     custom_title: Option<&str>,
@@ -80,10 +80,12 @@ pub fn index_pdf_file(
     let inferred_folder_id: Option<i64> = Path::new(original_filename)
         .parent()
         .and_then(|p| p.to_str())
-        .filter(|p| !p.is_empty())
+        // 'assets' (et ses sous-chemins) est le stockage des pièces jointes, pas un dossier utilisateur
+        .filter(|p| !p.is_empty() && !p.split('/').any(|seg| seg.eq_ignore_ascii_case("assets")))
         .and_then(|sub_dir| {
             conn.query_row("SELECT id FROM folders WHERE name = ?1", params![sub_dir], |r| r.get(0)).ok()
                 .or_else(|| {
+                    tracing::warn!("[FolderInfer-PDF] Création dossier '{}' depuis fichier '{}'", sub_dir, original_filename);
                     conn.execute("INSERT INTO folders (name, color) VALUES (?1, '#3b82f6')", params![sub_dir])
                         .ok()
                         .map(|_| conn.last_insert_rowid())
@@ -105,13 +107,7 @@ pub fn index_pdf_file(
         conn.last_insert_rowid()
     };
 
-    // Générer la couverture WebP si au moins 1 page
-    if metadata.total_pages > 0 {
-        let cover_webp = config.covers_dir.join(format!("{}.webp", doc_id));
-        if let Err(e) = pdf_engine.render_cover(file_path, &cover_webp) {
-            warn!("[Indexer] Impossible de générer la couverture pour doc {} : {}", doc_id, e);
-        }
-    }
+    // Plus de couverture pré-générée sur disque : /api/cover rend à la volée.
 
     // 1. Extraction en mémoire hors de toute transaction SQLite :
     //    Le parsing Pdfium (qui peut durer des dizaines de secondes sur un gros livre)
@@ -174,11 +170,9 @@ pub fn remove_document(conn: &Connection, config: &Config, doc_id: i64) -> Resul
         let _ = std::fs::remove_file(pdf_path);
     }
 
-    // Supprimer la couverture WebP
+    // Nettoyer les éventuels restes de caches de vignettes (versions antérieures)
     let cover_webp = config.covers_dir.join(format!("{}.webp", doc_id));
     let _ = std::fs::remove_file(cover_webp);
-
-    // Nettoyer les crops en cache
     let doc_cache_dir = config.cache_dir.join(format!("doc_{}", doc_id));
     if doc_cache_dir.exists() {
         let _ = std::fs::remove_dir_all(doc_cache_dir);
@@ -394,6 +388,11 @@ fn sync_physical_folders_to_db(
             Some(n) => n,
             None => continue,
         };
+        // Ignorer le dossier réservé aux pièces jointes markdown et les dossiers cachés
+        // (même convention que document/scanner.rs : 'assets' n'est pas un dossier utilisateur)
+        if folder_name.starts_with('.') || folder_name.eq_ignore_ascii_case("assets") {
+            continue;
+        }
         let clean_name: String = folder_name.nfc().collect();
         let res = conn.execute(
             "INSERT INTO folders (name, parent_id, color) VALUES (?1, ?2, '#3b82f6')",
