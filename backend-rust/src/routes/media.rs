@@ -12,7 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 
 use crate::AppState;
-use crate::pdf::crop::{compute_crop_path, generate_crops_for_page};
+use crate::pdf::crop::generate_crops_for_page;
 
 #[derive(Deserialize)]
 pub struct CropQueryParams {
@@ -20,69 +20,56 @@ pub struct CropQueryParams {
     pub terms: Option<String>,
 }
 
-/// Helper pour servir un fichier statique avec ETag et en-têtes de cache immutables
-async fn serve_file_cache(
-    path: &std::path::Path,
-    content_type: &'static str,
+/// Helper pour servir des octets d'image WebP générés à la volée.
+/// `cache_control: no-store` : les vignettes sont toujours fraîches, le navigateur
+/// ne doit jamais resservir une image obsolète (note éditée, image collée ajoutée...).
+async fn serve_image_bytes(
+    bytes: Vec<u8>,
+    etag: String,
     if_none_match: Option<&str>,
 ) -> Response {
-    // ETag déterministe basé sur le nom du fichier (contenant doc, page, occ et query_hash statiques)
-    let etag = if let Some(file_name) = path.file_name().and_then(|f| f.to_str()) {
-        format!("\"w-{}\"", file_name)
-    } else {
-        "\"w-crop\"".to_string()
-    };
-
     if let Some(req_etag) = if_none_match {
         if req_etag == etag {
             return Response::builder()
                 .status(StatusCode::NOT_MODIFIED)
                 .header(header::ETAG, etag)
-                .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+                .header(header::CACHE_CONTROL, "no-store")
                 .body(Body::empty())
                 .unwrap_or_else(|_| (StatusCode::NOT_MODIFIED, "").into_response());
         }
     }
 
-    match tokio::fs::read(path).await {
-        Ok(bytes) => (
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, content_type),
-                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
-                (header::ETAG, &etag),
-            ],
-            bytes,
-        ).into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "Fichier introuvable").into_response(),
-    }
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "image/webp"),
+            (header::CACHE_CONTROL, "no-store"),
+            (header::ETAG, etag.as_str()),
+        ],
+        bytes,
+    )
+        .into_response()
 }
 
-/// GET /api/cover/{doc_id}
+/// GET /api/cover/{doc_id} — génération à la volée, AUCUN cache disque.
 pub async fn get_cover(
     State(state): State<Arc<AppState>>,
     Path(doc_id): Path<i64>,
     headers: HeaderMap,
 ) -> Response {
-    let cover_webp = state.config.covers_dir.join(format!("{}.webp", doc_id));
     let if_none_match = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
 
-    // 1. FAST-PATH: Servir immédiatement si le fichier WebP existe déjà sur disque
-    if cover_webp.exists() {
-        return serve_file_cache(&cover_webp, "image/webp", if_none_match).await;
-    }
-
-    // 2. Vérification DB : récupérer le nom et l'état du document
-    let (filename, status): (Option<String>, Option<String>) = {
+    // 1. Vérification DB : récupérer le nom, l'état et le type du document
+    let (filename, status, doc_type): (Option<String>, Option<String>, Option<String>) = {
         let conn = match state.db.get() {
             Ok(c) => c,
             Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur DB").into_response(),
         };
         conn.query_row(
-            "SELECT filename, COALESCE(status, 'ready') FROM documents WHERE id = ?1",
+            "SELECT filename, COALESCE(status, 'ready'), COALESCE(doc_type, 'pdf') FROM documents WHERE id = ?1",
             params![doc_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        ).unwrap_or((None, None))
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).unwrap_or((None, None, None))
     };
 
     let fname = match filename {
@@ -90,94 +77,65 @@ pub async fn get_cover(
         None => return (StatusCode::NOT_FOUND, "Document introuvable en base").into_response(),
     };
 
-    // Si le document est en attente ou en cours d'indexation par le pipeline,
+    let is_markdown = doc_type.as_deref() == Some("markdown") || fname.ends_with(".md") || fname.ends_with(".markdown");
+
+    // Résolution du chemin physique
+    let file_path = if is_markdown {
+        match crate::document::trash::resolve_file_path(&state.config.documents_dir, &fname) {
+            Some(p) => p,
+            None => return (StatusCode::NOT_FOUND, "Fichier note introuvable sur disque").into_response(),
+        }
+    } else {
+        match crate::pdf::indexer::resolve_pdf_path(&state.config.documents_dir, &fname) {
+            Some(p) => p,
+            None => return (StatusCode::NOT_FOUND, "Fichier PDF introuvable sur disque").into_response(),
+        }
+    };
+
+    // Si le document PDF est en attente ou en cours d'indexation par le pipeline,
     // renvoyer immédiatement 202 Accepted sans bloquer sur Pdfium
-    if let Some(ref st) = status {
-        if st == "pending" || st == "indexing" {
-            return (StatusCode::ACCEPTED, "Couverture en cours de génération").into_response();
-        }
-    }
-
-    let file_path = match crate::pdf::indexer::resolve_pdf_path(&state.config.documents_dir, &fname) {
-        Some(p) => p,
-        None => return (StatusCode::NOT_FOUND, "Fichier PDF introuvable sur disque").into_response(),
-    };
-
-    // 3. Coalescence Single-Flight pour la couverture de ce document
-    let flight_key = format!("cover_{}", doc_id);
-    let maybe_wait_notify = {
-        let mut inflight = match state.crop_in_flight.lock() {
-            Ok(guard) => guard,
-            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur lock in-flight").into_response(),
-        };
-        if let Some(notify) = inflight.get(&flight_key) {
-            Some(Arc::clone(notify))
-        } else {
-            inflight.insert(flight_key.clone(), Arc::new(tokio::sync::Notify::new()));
-            None
-        }
-    };
-
-    if let Some(notify) = maybe_wait_notify {
-        notify.notified().await;
-        if cover_webp.exists() {
-            return serve_file_cache(&cover_webp, "image/webp", if_none_match).await;
-        }
-    }
-
-    struct CoverFlightGuard {
-        key: String,
-        state: Arc<AppState>,
-    }
-    impl Drop for CoverFlightGuard {
-        fn drop(&mut self) {
-            if let Ok(mut inflight) = self.state.crop_in_flight.lock() {
-                if let Some(notify) = inflight.remove(&self.key) {
-                    notify.notify_waiters();
-                }
+    if !is_markdown {
+        if let Some(ref st) = status {
+            if st == "pending" || st == "indexing" {
+                return (StatusCode::ACCEPTED, "Couverture en cours de génération").into_response();
             }
         }
     }
-    let _flight_guard = CoverFlightGuard {
-        key: flight_key,
-        state: Arc::clone(&state),
-    };
 
-    // 4. Concurrence bornée via le sémaphore pour préserver les ressources CPU
+    // 2. Concurrence bornée via le sémaphore pour préserver les ressources CPU
     let _permit = match state.crop_semaphore.clone().acquire_owned().await {
         Ok(p) => p,
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur sémaphore").into_response(),
     };
 
-    if cover_webp.exists() {
-        drop(_permit);
-        drop(_flight_guard);
-        return serve_file_cache(&cover_webp, "image/webp", if_none_match).await;
-    }
-
     let state_clone = Arc::clone(&state);
-    let cover_path_clone = cover_webp.clone();
+    let is_md = is_markdown;
     let render_res = tokio::task::spawn_blocking(move || {
         let _permit = _permit;
-        state_clone.pdf_engine.render_cover(&file_path, &cover_path_clone)
+        if is_md {
+            crate::document::markdown::MarkdownProcessor::generate_cover_bytes(&file_path)
+        } else {
+            state_clone.pdf_engine.render_cover(&file_path)
+        }
     }).await;
 
     match render_res {
-        Ok(Ok(())) => {},
+        Ok(Ok(bytes)) => {
+            let etag = format!("\"cover-{}\"", doc_id);
+            serve_image_bytes(bytes, etag, if_none_match).await
+        },
         Ok(Err(e)) => {
             tracing::warn!("[Media] Échec génération couverture doc {}: {}", doc_id, e);
-            return (StatusCode::NOT_FOUND, "Échec rendu couverture").into_response();
+            (StatusCode::NOT_FOUND, "Échec rendu couverture").into_response()
         },
         Err(e) => {
             tracing::warn!("[Media] Erreur tâche bloquante couverture doc {}: {}", doc_id, e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur rendu couverture").into_response();
+            (StatusCode::INTERNAL_SERVER_ERROR, "Erreur rendu couverture").into_response()
         }
     }
-
-    serve_file_cache(&cover_webp, "image/webp", if_none_match).await
 }
 
-/// GET /api/crop/{doc_id}/{page}/{occ_id}
+/// GET /api/crop/{doc_id}/{page}/{occ_id} — génération à la volée, AUCUN cache disque.
 pub async fn get_crop(
     State(state): State<Arc<AppState>>,
     Path((doc_id, page, occ_id)): Path<(i64, i64, usize)>,
@@ -188,91 +146,97 @@ pub async fn get_crop(
     let terms = params.terms.unwrap_or_default();
     let if_none_match = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
 
-    // 1. FAST-PATH: Servir immédiatement si déjà sur disque sans toucher SQLite ni le sémaphore
-    let webp_path = compute_crop_path(&state.config, doc_id, page, occ_id, &query_hash);
-    if webp_path.exists() {
-        return serve_file_cache(&webp_path, "image/webp", if_none_match).await;
-    }
-
-    // 2. Coalescence Single-Flight par page : si une tâche pour cette page est déjà en cours, attendre sa fin
-    let flight_key = format!("{}_{}_{}", doc_id, page, query_hash);
-    let maybe_wait_notify = {
-        let mut inflight = match state.crop_in_flight.lock() {
-            Ok(guard) => guard,
-            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur lock in-flight").into_response(),
-        };
-        if let Some(notify) = inflight.get(&flight_key) {
-            Some(Arc::clone(notify))
-        } else {
-            inflight.insert(flight_key.clone(), Arc::new(tokio::sync::Notify::new()));
-            None
-        }
-    };
-
-    if let Some(notify) = maybe_wait_notify {
-        // Une autre requête génère déjà le lot de cette page : attendre la fin du rendu
-        notify.notified().await;
-        if webp_path.exists() {
-            return serve_file_cache(&webp_path, "image/webp", if_none_match).await;
-        }
-    }
-
-    // Guard RAII garantissant la notification des requêtes en attente à la sortie du scope
-    struct FlightGuard {
-        key: String,
-        state: Arc<AppState>,
-    }
-    impl Drop for FlightGuard {
-        fn drop(&mut self) {
-            if let Ok(mut inflight) = self.state.crop_in_flight.lock() {
-                if let Some(notify) = inflight.remove(&self.key) {
-                    notify.notify_waiters();
-                }
-            }
-        }
-    }
-    let _flight_guard = FlightGuard {
-        key: flight_key,
-        state: Arc::clone(&state),
-    };
-
-    // 3. Récupération des données en base avec libération IMMÉDIATE du verrou SQLite
-    let (words_json, filename) = {
+    // 1. Récupération des données en base avec libération IMMÉDIATE du verrou SQLite
+    let (filename, doc_type) = {
         let conn = match state.db.get() {
             Ok(c) => c,
             Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur DB").into_response(),
         };
         let mut stmt = match conn.prepare(
-            "SELECT p.words_json, d.filename FROM pages p JOIN documents d ON d.id = p.doc_id WHERE p.doc_id = ?1 AND p.page_number = ?2",
+            "SELECT filename, COALESCE(doc_type, 'pdf') FROM documents WHERE id = ?1",
+        ) {
+            Ok(s) => s,
+            Err(_) => return (StatusCode::NOT_FOUND, "Document introuvable").into_response(),
+        };
+
+        match stmt.query_row(params![doc_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+            Ok(val) => val,
+            Err(_) => return (StatusCode::NOT_FOUND, "Document introuvable").into_response(),
+        }
+    };
+
+    let is_markdown = doc_type == "markdown" || filename.ends_with(".md") || filename.ends_with(".markdown");
+    if is_markdown {
+        // Pour les notes Markdown : générer une vignette d'extrait spécifique avec contexte et surbrillance
+        let terms_vec: Vec<String> = terms
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let md_bytes = match crate::document::trash::resolve_file_path(&state.config.documents_dir, &filename) {
+            Some(file_path) => tokio::task::spawn_blocking(move || {
+                crate::document::markdown::MarkdownProcessor::generate_crop_bytes(&file_path, occ_id, &terms_vec)
+            }).await.unwrap_or_else(|_| Err("task join error".to_string())),
+            None => Err("Fichier note introuvable sur disque".to_string()),
+        };
+
+        match md_bytes {
+            Ok(bytes) if !bytes.is_empty() => {
+                let etag = format!("\"crop-{}-{}-{}\"", doc_id, page, occ_id);
+                return serve_image_bytes(bytes, etag, if_none_match).await;
+            }
+            _ => {
+                // Fallback sur la couverture du document si l'extrait n'a pas pu aboutir
+                let cover_state = Arc::clone(&state);
+                let cover_bytes = tokio::task::spawn_blocking(move || {
+                    let fname = cover_state
+                        .db
+                        .get()
+                        .ok()
+                        .and_then(|c| {
+                            c.query_row("SELECT filename FROM documents WHERE id = ?1", params![doc_id], |r| r.get::<_, String>(0)).ok()
+                        })
+                        .and_then(|f| crate::document::trash::resolve_file_path(&cover_state.config.documents_dir, &f));
+                    fname.and_then(|p| crate::document::markdown::MarkdownProcessor::generate_cover_bytes(&p).ok())
+                }).await.unwrap_or(None);
+
+                if let Some(bytes) = cover_bytes {
+                    let etag = format!("\"cover-{}\"", doc_id);
+                    return serve_image_bytes(bytes, etag, if_none_match).await;
+                }
+                return (StatusCode::NOT_FOUND, "Vignette Markdown introuvable").into_response();
+            }
+        }
+    }
+
+    let words_json = {
+        let conn = match state.db.get() {
+            Ok(c) => c,
+            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur DB").into_response(),
+        };
+        let mut stmt = match conn.prepare(
+            "SELECT words_json FROM pages WHERE doc_id = ?1 AND page_number = ?2",
         ) {
             Ok(s) => s,
             Err(_) => return (StatusCode::NOT_FOUND, "Page introuvable").into_response(),
         };
 
-        let row = stmt.query_row(params![doc_id, page], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        });
-
-        match row {
-            Ok(val) => val,
-            Err(_) => return (StatusCode::NOT_FOUND, "Document ou page introuvable").into_response(),
+        match stmt.query_row(params![doc_id, page], |r| r.get::<_, Option<String>>(0)) {
+            Ok(Some(w)) => w,
+            Ok(None) => "[]".to_string(),
+            Err(_) => return (StatusCode::NOT_FOUND, "Page introuvable").into_response(),
         }
-    }; // <-- La connexion SQLite est déverrouillée immédiatement ici !
+    };
 
-    // 4. Acquisition d'un permis de rendu Pdfium dynamique
+    // 2. Acquisition d'un permis de rendu Pdfium dynamique
     let permit = match state.crop_semaphore.clone().acquire_owned().await {
         Ok(p) => p,
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur sémaphore").into_response(),
     };
 
-    // Vérification rapide post-sémaphore : un autre thread a pu générer le lot pour cette page entre temps
-    if webp_path.exists() {
-        drop(permit);
-        return serve_file_cache(&webp_path, "image/webp", if_none_match).await;
-    }
-
     let state_clone = Arc::clone(&state);
-    let crop_path = match tokio::task::spawn_blocking(move || {
+    let crop_bytes = match tokio::task::spawn_blocking(move || {
         let _permit = permit; // Maintient le permis actif pendant l'exécution Pdfium
         generate_crops_for_page(
             &state_clone.pdf_engine,
@@ -290,12 +254,13 @@ pub async fn get_crop(
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur génération vignette").into_response(),
     };
 
-    let path = match crop_path {
-        Some(p) if p.exists() => p,
-        _ => return (StatusCode::NOT_FOUND, "Vignette introuvable").into_response(),
-    };
-
-    serve_file_cache(&path, "image/webp", if_none_match).await
+    match crop_bytes {
+        Some(bytes) => {
+            let etag = format!("\"crop-{}-{}-{}\"", doc_id, page, occ_id);
+            serve_image_bytes(bytes, etag, if_none_match).await
+        }
+        None => (StatusCode::NOT_FOUND, "Vignette introuvable").into_response(),
+    }
 }
 
 

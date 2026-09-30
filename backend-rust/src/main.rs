@@ -13,7 +13,7 @@ use axum::{
 use tower_http::compression::Predicate;
 use tower_http::cors::{Any, CorsLayer};
 
-use tracing::{info, warn};
+use tracing::info;
 
 
 fn setup_panic_hook(data_dir: std::path::PathBuf) {
@@ -276,26 +276,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     info!("[DocSeeker] {} document(s) synchronisé(s) en tâche de fond : {:?}", added, files);
                 }
 
-                // Vérification et génération en arrière-plan des couvertures manquantes
-                if let Ok(mut stmt) = conn.prepare("SELECT id, filename FROM documents WHERE total_pages > 0") {
-                    if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))) {
-                        let missing: Vec<(i64, String)> = rows.flatten()
-                            .filter(|(id, _)| !bg_config.covers_dir.join(format!("{}.webp", id)).exists())
-                            .collect();
-                        if !missing.is_empty() {
-                            info!("[Couvertures] {} couverture(s) manquante(s) détectée(s), génération en tâche de fond...", missing.len());
-                            for (id, fname) in missing {
-                                if let Some(pdf_path) = docseeker_backend::pdf::indexer::resolve_pdf_path(&bg_config.documents_dir, &fname) {
-                                    let cover_path = bg_config.covers_dir.join(format!("{}.webp", id));
-                                    if let Err(e) = bg_engine.render_cover(&pdf_path, &cover_path) {
-                                        warn!("[Couvertures] Échec génération couverture doc {} : {}", id, e);
-                                    }
-                                }
-                            }
-                            info!("[Couvertures] Toutes les couvertures manquantes ont été générées avec succès !");
-                        }
-                    }
-                }
+                // Plus de pré-génération de couvertures en arrière-plan :
+                // /api/cover rend à la volée depuis l'état courant des documents.
             }
         });
     }

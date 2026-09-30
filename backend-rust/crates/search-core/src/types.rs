@@ -30,6 +30,9 @@ pub struct DocumentSearchResult {
     pub total_pages: i64,
     pub created_at: String,
     pub updated_at: String,
+    /// Type de document ('pdf' | 'markdown') — permet au client d'adapter le rendu des vignettes
+    #[serde(default = "default_doc_type")]
+    pub doc_type: String,
     pub cover_url: String,
     pub vignettes: Vec<OccurrenceResult>,
     pub occurrences_by_page: Vec<OccurrenceResult>,

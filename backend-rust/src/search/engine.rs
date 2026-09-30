@@ -129,13 +129,14 @@ pub fn search_titles(
             row.get::<_, Option<i64>>(4)?.unwrap_or(0),
             row.get::<_, Option<String>>(5)?.unwrap_or_default(),
             row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+            row.get::<_, Option<String>>(7)?.unwrap_or_else(|| "pdf".to_string()),
         ))
     })?;
 
     let mut results = Vec::new();
     let norm_terms: Vec<String> = terms.iter().map(|t| normalize_text(t)).collect();
     for r in rows.flatten() {
-        let (id, filename, title, doc_folder_id, total_pages, created_at, updated_at) = r;
+        let (id, filename, title, doc_folder_id, total_pages, created_at, updated_at, doc_type) = r;
         let title_norm = normalize_text(&title);
         let bonus = if norm_terms.iter().any(|t| t == &title_norm) { 100.0 } else { 0.0 };
         results.push(DocumentSearchResult {
@@ -146,6 +147,7 @@ pub fn search_titles(
             total_pages,
             created_at,
             updated_at,
+            doc_type,
             cover_url: format!("/api/cover/{}", id),
             vignettes: Vec::new(),
             occurrences_by_page: Vec::new(),
@@ -253,6 +255,8 @@ pub fn search_documents(
                 page_bm25: r.get(11)?,
                 total_docs: r.get::<_, i64>(12)? as usize,
                 total_occurrences: r.get::<_, i64>(13)? as usize,
+                doc_type: r.get::<_, Option<String>>(14)?.unwrap_or_else(|| "pdf".to_string()),
+                page_text_content: r.get::<_, Option<String>>(15)?.unwrap_or_default(),
             })
         })?;
         let mut list = Vec::new();

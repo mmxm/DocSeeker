@@ -183,11 +183,12 @@ impl PdfEngine {
     }
 
     /// Génère la vignette de couverture (première page) au format WebP.
+    /// Rend la couverture (1ère page) en mémoire et retourne les octets WebP.
+    /// Aucun cache disque : l'image reflète toujours le fichier courant.
     pub fn render_cover(
         &self,
         file_path: &Path,
-        output_webp: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<u8>, String> {
         let pdfium = self.pdfium.lock().map_err(|e| e.to_string())?;
         let doc = pdfium
             .load_pdf_from_file(file_path, None)
@@ -206,14 +207,11 @@ impl PdfEngine {
         let pixmap = first_page.render_with_config(&render_config).map_err(|e| e.to_string())?;
         let img = pixmap.as_image();
 
-        if let Some(parent) = output_webp.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-
-        img.save_with_format(output_webp, ImageFormat::WebP)
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut buffer, ImageFormat::WebP)
             .map_err(|e| e.to_string())?;
 
-        Ok(())
+        Ok(buffer.into_inner())
     }
 
     fn render_page_internal(
@@ -238,14 +236,15 @@ impl PdfEngine {
     }
 
     /// Génère une vignette cropée avec surbrillance jaune translucide autour de l'occurrence.
+    /// Rend la vignette d'extrait (crop) en mémoire et retourne les octets WebP.
+    /// Aucun cache disque : la vignette est recalculée à chaque requête depuis la page.
     pub fn render_crop(
         &self,
         file_path: &Path,
         page_number: i64,
         rect: [f64; 4],
-        output_webp: &Path,
         highlight_rects: &[[f64; 4]],
-    ) -> Result<(), String> {
+    ) -> Result<Vec<u8>, String> {
         let render_scale = 1.5;
 
         // Récupération de la page rendue (depuis le cache LRU en RAM ou rendu Pdfium)
@@ -312,17 +311,12 @@ impl PdfEngine {
             }
         }
 
-        if let Some(parent) = output_webp.parent() {
-            if !parent.exists() {
-                std::fs::create_dir_all(parent).ok();
-            }
-        }
-
+        let mut buffer = std::io::Cursor::new(Vec::new());
         cropped
-            .save_with_format(output_webp, ImageFormat::WebP)
+            .write_to(&mut buffer, ImageFormat::WebP)
             .map_err(|e| e.to_string())?;
 
-        Ok(())
+        Ok(buffer.into_inner())
     }
 }
 
