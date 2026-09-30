@@ -290,10 +290,14 @@ pub fn search_documents(
     }
 
     let total_documents = sql_rows[0].total_docs;
-    let total_occurrences = sql_rows[0].total_occurrences;
 
     // Traitement unifié par search-core (tri multi-critères, scoring Goodnotes, 25 vignettes)
     let final_results = process_search_results(&sql_rows, &search_sql_data.terms, &query_hash);
+
+    // Pour les documents Markdown (et cas où les occurrences réelles dépassent le simple compte de pages matchées),
+    // total_occurrences global doit refléter le nombre réel d'occurrences trouvées.
+    let doc_occurrences_sum: usize = final_results.iter().map(|r| r.total_occurrences).sum();
+    let total_occurrences = sql_rows[0].total_occurrences.max(doc_occurrences_sum);
 
     let total_pages = if total_documents > 0 && page_size > 0 {
         total_documents.div_ceil(page_size)
