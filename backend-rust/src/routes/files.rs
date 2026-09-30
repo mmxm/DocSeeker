@@ -385,10 +385,10 @@ pub async fn create_file_handler(
         fname.push_str(".md");
     }
 
-    if fname.contains("..") {
+    if payload.filename.contains('/') || payload.filename.contains('\\') || fname.contains("..") {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Chemin invalide"})),
+            Json(serde_json::json!({"error": "Le titre d'une note ne peut pas contenir de barre oblique ('/' ou '\\')"})),
         )
             .into_response();
     }
