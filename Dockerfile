@@ -80,10 +80,11 @@ RUN mkdir -p src && echo "fn main() {}" > src/main.rs && \
     cargo build --release --target "$RUST_TARGET" && \
     rm -rf src target/"$RUST_TARGET"/release/deps/docseeker_backend* target/"$RUST_TARGET"/release/docseeker-backend*
 
-# 4. Copie du code source applicatif réel, des crates internes et du frontend MINIFIÉ
+# 4. Copie du code source applicatif réel, des crates internes, des assets et du frontend MINIFIÉ
 COPY backend-rust/src/ ./src/
 COPY backend-rust/tests/ ./tests/
 COPY backend-rust/crates/ ./crates/
+COPY backend-rust/assets/ ./assets/
 COPY --from=minifier /minify/frontend/ /build/frontend/
 
 # 5. Compilation applicative ultra-rapide et copie vers un chemin fixe
