@@ -101,67 +101,26 @@ pub async fn get_file_handler(
 }
 
 /// Génère la réponse HTTP contenant le dossier complet de la note au format .zip (fichier .md et assets/)
+/// Génère la réponse HTTP contenant le dossier complet de la note au format .zip (fichier .md et assets/)
 pub fn generate_note_zip_response(documents_dir: &std::path::Path, clean_fname: &str) -> Response {
-    let note_dir_opt = crate::document::trash::resolve_note_dir(documents_dir, clean_fname);
     let note_stem = std::path::Path::new(clean_fname)
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or(clean_fname)
         .to_string();
 
-    let zip_bytes_res = match note_dir_opt {
-        Some(ref dir) if crate::document::markdown::is_markdown_note_dir(dir) => {
-            let actual_stem = dir.file_name().and_then(|s| s.to_str()).unwrap_or(&note_stem);
-            crate::document::markdown::create_note_dir_zip(dir, actual_stem)
-        }
-        _ => {
-            if let Some(file_path) = resolve_file_path(documents_dir, clean_fname) {
-                use std::io::{Cursor, Write};
-                use zip::write::SimpleFileOptions;
-                use zip::ZipWriter;
-
-                let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
-                let dir_opt = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-                let file_opt = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-
-                let root_entry = format!("{}/", note_stem);
-                let _ = zip.add_directory(&root_entry, dir_opt);
-                let assets_entry = format!("{}assets/", root_entry);
-                let _ = zip.add_directory(&assets_entry, dir_opt);
-                if let Ok(data) = fs::read(&file_path) {
-                    let _ = zip.start_file(format!("{}{}.md", root_entry, note_stem), file_opt);
-                    let _ = zip.write_all(&data);
-                }
-
-                // Fallback rétrocompatible pour les assets historiques dans documents/assets/<stem>/
-                let legacy_assets_dir = documents_dir.join("assets").join(&note_stem);
-                if legacy_assets_dir.is_dir() {
-                    if let Ok(entries) = fs::read_dir(&legacy_assets_dir) {
-                        for entry in entries.flatten() {
-                            let p = entry.path();
-                            if p.is_file() {
-                                if let Some(fname) = p.file_name().and_then(|s| s.to_str()) {
-                                    if let Ok(adata) = fs::read(&p) {
-                                        let _ = zip.start_file(format!("{}{}", assets_entry, fname), file_opt);
-                                        let _ = zip.write_all(&adata);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                zip.finish()
-                    .map(|cursor| cursor.into_inner())
-                    .map_err(|e| e.to_string())
-            } else {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": format!("Note introuvable : {}", clean_fname)})),
-                )
-                    .into_response();
-            }
-        }
+    let zip_bytes_res = if let Some(file_path) = resolve_file_path(documents_dir, clean_fname) {
+        let assets_dir = crate::document::trash::resolve_note_assets_dir(documents_dir, clean_fname);
+        crate::document::markdown::create_note_zip(&file_path, assets_dir.as_deref(), &note_stem)
+    } else if let Some(ref dir) = crate::document::trash::resolve_note_dir(documents_dir, clean_fname) {
+        let actual_stem = dir.file_name().and_then(|s| s.to_str()).unwrap_or(&note_stem);
+        crate::document::markdown::create_note_dir_zip(dir, actual_stem)
+    } else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("Note introuvable : {}", clean_fname)})),
+        )
+            .into_response();
     };
 
     match zip_bytes_res {
@@ -226,17 +185,7 @@ pub async fn save_file_handler(
 
     let target_path = if is_markdown {
         crate::document::trash::resolve_file_path(&state.config.documents_dir, clean_fname)
-            .unwrap_or_else(|| {
-                let path_obj = std::path::Path::new(clean_fname);
-                let stem = path_obj.file_stem().and_then(|s| s.to_str()).unwrap_or(clean_fname);
-                let parent = path_obj.parent();
-                let note_dir = match parent {
-                    Some(p) if !p.as_os_str().is_empty() => state.config.documents_dir.join(p).join(stem),
-                    _ => state.config.documents_dir.join(stem),
-                };
-                let _ = fs::create_dir_all(note_dir.join("assets"));
-                note_dir.join(format!("{}.md", stem))
-            })
+            .unwrap_or_else(|| state.config.documents_dir.join(clean_fname))
     } else {
         state.config.documents_dir.join(clean_fname)
     };
@@ -286,10 +235,10 @@ pub async fn save_file_handler(
 
     // Nettoyage immédiat des pièces jointes orphelines (PJ supprimées du texte)
     if is_markdown {
-        if let Some(note_dir) = target_path.parent() {
-            let _ = fs::create_dir_all(note_dir.join("assets"));
+        if let Some(assets_dir) = crate::document::trash::resolve_note_assets_dir(&state.config.documents_dir, clean_fname) {
+            let _ = fs::create_dir_all(&assets_dir);
             if let Ok(text) = std::str::from_utf8(&body_bytes) {
-                crate::document::markdown::clean_orphan_markdown_assets(note_dir, text);
+                crate::document::markdown::clean_orphan_markdown_assets(&assets_dir, text);
             }
         }
     }
@@ -406,37 +355,33 @@ pub async fn create_file_handler(
         .trim()
         .to_string();
 
-    let (note_dir, target_path, rel_fname, target_folder_id) = match payload.folder_id {
+    let (target_path, rel_fname, target_folder_id) = match payload.folder_id {
         Some(fid) => {
             let conn_res = state.db.get();
             if let Ok(conn) = conn_res {
                 if let Some(folder_rel) = crate::routes::folders::get_folder_relative_path(&conn, fid) {
                     let parent_dir = state.config.documents_dir.join(&folder_rel);
-                    let n_dir = parent_dir.join(&stem);
-                    let t_path = n_dir.join(format!("{}.md", stem));
-                    let full_rel = format!("{}/{}", folder_rel.to_string_lossy(), raw_name);
-                    (n_dir, t_path, full_rel, Some(fid))
+                    let t_path = parent_dir.join(format!("{}.md", stem));
+                    let full_rel = format!("{}/{}", folder_rel.to_string_lossy(), format!("{}.md", stem));
+                    (t_path, full_rel, Some(fid))
                 } else {
-                    let n_dir = state.config.documents_dir.join(&stem);
-                    let t_path = n_dir.join(format!("{}.md", stem));
-                    (n_dir, t_path, fname.clone(), None)
+                    let t_path = state.config.documents_dir.join(format!("{}.md", stem));
+                    (t_path, format!("{}.md", stem), None)
                 }
             } else {
-                let n_dir = state.config.documents_dir.join(&stem);
-                let t_path = n_dir.join(format!("{}.md", stem));
-                (n_dir, t_path, fname.clone(), None)
+                let t_path = state.config.documents_dir.join(format!("{}.md", stem));
+                (t_path, format!("{}.md", stem), None)
             }
         }
         None => {
-            let n_dir = state.config.documents_dir.join(&stem);
-            let t_path = n_dir.join(format!("{}.md", stem));
-            (n_dir, t_path, fname.clone(), None)
+            let t_path = state.config.documents_dir.join(format!("{}.md", stem));
+            (t_path, format!("{}.md", stem), None)
         }
     };
 
     if target_path.exists()
-        || (note_dir.is_dir() && note_dir.join(format!("{}.md", stem)).exists())
-        || (state.config.documents_dir.join(&rel_fname).is_file())
+        || state.config.documents_dir.join(&rel_fname).is_file()
+        || crate::document::trash::resolve_file_path(&state.config.documents_dir, &rel_fname).is_some()
     {
         return (
             StatusCode::CONFLICT,
@@ -447,13 +392,16 @@ pub async fn create_file_handler(
             .into_response();
     }
 
-    let assets_dir = note_dir.join("assets");
-    if let Err(e) = fs::create_dir_all(&assets_dir) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Impossible de créer le dossier de note : {}", e)})),
-        )
-            .into_response();
+    if let Some(parent) = target_path.parent() {
+        let _ = fs::create_dir_all(parent);
+        let assets_dir = parent.join(".assets").join(&stem);
+        if let Err(e) = fs::create_dir_all(&assets_dir) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Impossible de créer le dossier d'assets : {}", e)})),
+            )
+                .into_response();
+        }
     }
 
     let content = if payload.content.is_empty() {
@@ -678,10 +626,8 @@ pub async fn upload_asset_handler(
     mut multipart: Multipart,
 ) -> Response {
     let clean_stem = stem.trim_start_matches('/').replace('/', "_");
-    // Résoudre le dossier de la note ou le préparer dans documents_dir/<clean_stem>
-    let note_dir = crate::document::trash::resolve_note_dir(&state.config.documents_dir, &clean_stem)
-        .unwrap_or_else(|| state.config.documents_dir.join(&clean_stem));
-    let assets_dir = note_dir.join("assets");
+    let assets_dir = crate::document::trash::resolve_note_assets_dir(&state.config.documents_dir, &clean_stem)
+        .unwrap_or_else(|| state.config.documents_dir.join(".assets").join(&clean_stem));
     if let Err(e) = fs::create_dir_all(&assets_dir) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -718,9 +664,6 @@ pub async fn upload_asset_handler(
             }
         }
     }
-
-    // Plus d'invalidation de vignettes : /api/cover et /api/crop regénèrent
-    // toujours à la volée depuis l'état courant de la note et de ses assets.
 
     (
         StatusCode::OK,
@@ -786,25 +729,9 @@ pub async fn get_asset_handler(
         .unwrap_or(&asset_name)
         .to_string();
 
-    // 1. Chercher dans le dossier de la note résolu (nom_de_la_note/assets/)
-    let note_asset = crate::document::trash::resolve_note_dir(&state.config.documents_dir, &clean_stem)
-        .map(|nd| nd.join("assets").join(&safe_asset))
-        .filter(|p| p.is_file());
-
-    // 2. Chercher dans documents_dir/<clean_stem>/assets/<safe_asset>
-    let direct_note_asset = state.config.documents_dir.join(&clean_stem).join("assets").join(&safe_asset);
-
-    // 3. Fallback sur l'ancien format documents_dir/assets/<clean_stem>/<safe_asset>
-    let legacy_asset = state.config.documents_dir.join("assets").join(&clean_stem).join(&safe_asset);
-
-    let asset_path = if let Some(p) = note_asset {
-        p
-    } else if direct_note_asset.is_file() {
-        direct_note_asset
-    } else if legacy_asset.is_file() {
-        legacy_asset
-    } else {
-        return (StatusCode::NOT_FOUND, "Asset non trouvé").into_response();
+    let asset_path = match crate::document::trash::resolve_note_assets_dir(&state.config.documents_dir, &clean_stem) {
+        Some(dir) if dir.join(&safe_asset).is_file() => dir.join(&safe_asset),
+        _ => return (StatusCode::NOT_FOUND, "Asset non trouvé").into_response(),
     };
 
     let bytes = match fs::read(&asset_path) {

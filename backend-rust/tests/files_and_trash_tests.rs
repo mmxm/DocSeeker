@@ -106,13 +106,12 @@ async fn test_markdown_file_crud_and_trash_lifecycle() {
     assert_eq!(json["status"], "created");
     assert_eq!(json["filename"], "Sémiologie Cardiaque.md");
 
-    // Vérifier présence physique sur le disque du dossier de la note, du fichier markdown et de assets/
-    let note_dir = state.config.documents_dir.join("Sémiologie Cardiaque");
-    let physical_file = note_dir.join("Sémiologie Cardiaque.md");
-    let assets_dir = note_dir.join("assets");
-    assert!(note_dir.exists(), "Le dossier de la note doit exister");
-    assert!(physical_file.exists(), "Le fichier markdown dans le dossier de note doit exister");
-    assert!(assets_dir.exists(), "Le sous-dossier assets/ dans le dossier de note doit exister");
+    // Vérifier présence physique sur le disque du fichier markdown et de .assets/
+    let physical_file = state.config.documents_dir.join("Sémiologie Cardiaque.md");
+    let assets_dir = state.config.documents_dir.join(".assets").join("Sémiologie Cardiaque");
+    assert!(physical_file.exists(), "Le fichier markdown direct doit exister");
+    assert!(assets_dir.exists(), "Le dossier d'assets dans .assets/ doit exister");
+    assert!(!state.config.documents_dir.join("Sémiologie Cardiaque").is_dir(), "Aucun dossier visible ne doit exister");
 
     // 2. Tenter de créer une note avec le même nom -> 409 CONFLICT (Règle Absolue : Pas de doublon)
     let req_dup = Request::builder()
@@ -184,9 +183,9 @@ async fn test_markdown_file_crud_and_trash_lifecycle() {
     let res_del = router.clone().oneshot(req_del).await.unwrap();
     assert_eq!(res_del.status(), StatusCode::OK);
 
-    // Le fichier et le dossier de note ne doivent plus être dans documents_dir
+    // Le fichier et le dossier d'assets ne doivent plus être dans documents_dir
     assert!(!physical_file.exists());
-    assert!(!note_dir.exists());
+    assert!(!assets_dir.exists());
 
     // Le fichier physique doit être dans trash_dir avec del_ et son .meta.json
     let trash_file = state.config.trash_dir.join("del_Sémiologie Cardiaque.md");
@@ -223,10 +222,10 @@ async fn test_markdown_file_crud_and_trash_lifecycle() {
     let res_restore = router.clone().oneshot(req_restore).await.unwrap();
     assert_eq!(res_restore.status(), StatusCode::OK);
 
-    // Le dossier de note et son fichier doivent être restaurés dans documents_dir
-    assert!(note_dir.exists());
+    // Le fichier direct et son dossier d'assets doivent être restaurés dans documents_dir
     assert!(physical_file.exists());
     assert!(assets_dir.exists());
+    assert!(!state.config.documents_dir.join("Sémiologie Cardiaque").is_dir());
     // Et le .meta.json de corbeille supprimé
     assert!(!meta_file.exists());
 }
@@ -453,8 +452,8 @@ async fn test_markdown_rename_assets_and_soft_delete_handler() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let doc_id = json["doc_id"].as_i64().unwrap();
 
-    // 2. Créer un asset physique pour cette note dans son sous-dossier assets/
-    let assets_dir = state.config.documents_dir.join("biologie").join("assets");
+    // 2. Créer un asset physique pour cette note dans son dossier .assets/
+    let assets_dir = state.config.documents_dir.join(".assets").join("biologie");
     std::fs::create_dir_all(&assets_dir).unwrap();
     std::fs::write(assets_dir.join("cellule.png"), b"FAKE_PNG_BYTES").unwrap();
 
@@ -472,14 +471,13 @@ async fn test_markdown_rename_assets_and_soft_delete_handler() {
     let res = router.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
-    // Vérifier que le dossier de la note, le fichier markdown et le dossier d'assets ont été renommés
-    let new_note_dir = state.config.documents_dir.join("Biochimie");
-    let new_md_file = new_note_dir.join("Biochimie.md");
-    let new_asset_file = new_note_dir.join("assets").join("cellule.png");
-    assert!(new_note_dir.exists(), "Le nouveau dossier de note doit exister");
-    assert!(new_md_file.exists(), "Le fichier markdown renommé doit exister dans le dossier");
-    assert!(new_asset_file.exists(), "L'asset doit avoir suivi dans le dossier de note renommé");
-    assert!(!state.config.documents_dir.join("biologie").exists(), "L'ancien dossier de note ne doit plus exister");
+    // Vérifier que le fichier markdown et le dossier d'assets ont été renommés
+    let new_md_file = state.config.documents_dir.join("Biochimie.md");
+    let new_asset_file = state.config.documents_dir.join(".assets").join("Biochimie").join("cellule.png");
+    assert!(new_md_file.exists(), "Le fichier markdown renommé doit exister");
+    assert!(new_asset_file.exists(), "L'asset doit avoir suivi dans le nouveau dossier .assets");
+    assert!(!state.config.documents_dir.join("biologie.md").exists(), "L'ancien fichier markdown ne doit plus exister");
+    assert!(!assets_dir.exists(), "L'ancien dossier d'assets ne doit plus exister");
 
     // Indexer la note pour qu'elle passe au statut 'ready'
     {
@@ -517,8 +515,9 @@ async fn test_markdown_rename_assets_and_soft_delete_handler() {
     let res = router.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
-    // Vérifier que le dossier de note est parti en corbeille (soft-delete)
-    assert!(!new_note_dir.exists(), "Le dossier de note doit avoir disparu de documents_dir");
+    // Vérifier que la note et ses assets sont partis en corbeille (soft-delete)
+    assert!(!new_md_file.exists(), "Le fichier de note doit avoir disparu de documents_dir");
+    assert!(!new_asset_file.exists(), "Le fichier d'asset doit avoir disparu de documents_dir");
     assert!(state.config.trash_dir.join("del_Biochimie.md").exists());
     assert!(state.config.trash_dir.join("del_Biochimie.md.meta.json").exists());
 
@@ -660,7 +659,11 @@ async fn test_upload_and_note_creation_into_current_folder() {
 
     let physical_note_file = state.config.documents_dir
         .join("Cardiologie")
-        .join("Syndrome coronarien")
         .join("Syndrome coronarien.md");
-    assert!(physical_note_file.is_file(), "La note Markdown doit être créée physiquement dans le dossier courant");
+    let assets_dir = state.config.documents_dir
+        .join("Cardiologie")
+        .join(".assets")
+        .join("Syndrome coronarien");
+    assert!(physical_note_file.is_file(), "La note Markdown doit être créée physiquement comme fichier direct dans le dossier courant");
+    assert!(assets_dir.is_dir(), "Le dossier d'assets .assets/ doit être créé dans le dossier courant");
 }

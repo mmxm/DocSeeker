@@ -574,7 +574,28 @@ fn find_first_image_in_markdown(content: &str, file_path: &Path) -> Option<Vec<s
 
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
 
-    // 1. Recherche prioritaire dans le dossier assets direct de la note (nom_de_la_note/assets/)
+    // 1. Recherche prioritaire dans le dossier Solution 1 : parent_dir/.assets/<current_stem>/
+    if !current_stem.is_empty() {
+        let s1_assets = parent_dir.join(".assets").join(current_stem);
+        if s1_assets.is_dir() {
+            if let Ok(entries) = fs::read_dir(&s1_assets) {
+                let mut img_files = Vec::new();
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_file() && is_img_ext(&p) {
+                        let mtime = fs::metadata(&p).and_then(|m| m.modified()).ok();
+                        img_files.push((p, mtime));
+                    }
+                }
+                img_files.sort_by(|a, b| b.1.cmp(&a.1));
+                for (best_img, _) in img_files {
+                    candidates.push(best_img);
+                }
+            }
+        }
+    }
+
+    // 2. Recherche dans le dossier assets direct de la note (ancien format bundle : nom_de_la_note/assets/)
     let direct_note_assets = parent_dir.join("assets");
     if direct_note_assets.is_dir() {
         if let Ok(entries) = fs::read_dir(&direct_note_assets) {
@@ -637,7 +658,7 @@ fn find_first_image_in_markdown(content: &str, file_path: &Path) -> Option<Vec<s
         }
     }
 
-    // 2. Recherche dans le contenu Markdown (liens ![alt](url), !\[alt\]\(url\), <img src="url">)
+    // 3. Recherche dans le contenu Markdown (liens ![alt](url), !\[alt\]\(url\), <img src="url">)
     let re = regex::Regex::new(r#"(?:!\\?\[.*?\\?\]\\?\((.+?)\)|<img[^>]+src=["']([^"']+)["'])"#).ok()?;
 
     for cap in re.captures_iter(content) {
@@ -675,6 +696,20 @@ fn find_first_image_in_markdown(content: &str, file_path: &Path) -> Option<Vec<s
         let direct_path = parent_dir.join(clean_target);
         if direct_path.is_file() && is_img_ext(&direct_path) {
             candidates.push(direct_path);
+        }
+
+        // Test Solution 1 : parent_dir/.assets/<clean_target> (ex: parent/.assets/HTA/radio.png)
+        let s1_target_path = parent_dir.join(".assets").join(clean_target);
+        if s1_target_path.is_file() && is_img_ext(&s1_target_path) {
+            candidates.push(s1_target_path);
+        }
+
+        // Test Solution 1 dans le sous-dossier de la note : parent_dir/.assets/<current_stem>/<clean_target>
+        if !current_stem.is_empty() {
+            let s1_stem_path = parent_dir.join(".assets").join(current_stem).join(clean_target);
+            if s1_stem_path.is_file() && is_img_ext(&s1_stem_path) {
+                candidates.push(s1_stem_path);
+            }
         }
 
         // Test avec préfixe assets/
@@ -928,10 +963,15 @@ pub fn find_note_dir_by_stem(base_dir: &Path, stem: &str) -> Option<std::path::P
     search_rec(base_dir, &stem_lower)
 }
 
-/// Nettoie les pièces jointes orphelines : si un fichier dans note_dir/assets/
+/// Nettoie les pièces jointes orphelines : si un fichier dans le dossier d'assets
 /// n'est plus référencé dans le contenu Markdown de la note, il est supprimé physiquement du serveur.
-pub fn clean_orphan_markdown_assets(note_dir: &Path, content: &str) -> Vec<String> {
-    let assets_dir = note_dir.join("assets");
+/// Tolérant : accepte soit directement le dossier d'assets (ex: parent/.assets/stem), soit le dossier de note (note_dir).
+pub fn clean_orphan_markdown_assets(assets_or_note_dir: &Path, content: &str) -> Vec<String> {
+    let assets_dir = if assets_or_note_dir.join("assets").is_dir() {
+        assets_or_note_dir.join("assets")
+    } else {
+        assets_or_note_dir.to_path_buf()
+    };
     if !assets_dir.is_dir() {
         return Vec::new();
     }
@@ -984,7 +1024,73 @@ pub fn clean_orphan_markdown_assets(note_dir: &Path, content: &str) -> Vec<Strin
     deleted
 }
 
-/// Crée une archive zip contenant l'intégralité du dossier d'une note Markdown (le fichier .md et le dossier assets/)
+/// Crée une archive zip contenant la note Markdown et ses assets (Solution 1).
+/// Structure de l'archive :
+/// <stem>/
+/// <stem>/<stem>.md
+/// <stem>/assets/
+/// <stem>/assets/<asset_files...>
+pub fn create_note_zip(md_file: &Path, assets_dir: Option<&Path>, note_stem: &str) -> Result<Vec<u8>, String> {
+    use std::io::{Cursor, Write};
+    use zip::write::SimpleFileOptions;
+    use zip::ZipWriter;
+
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+
+    let dir_opt = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o755);
+
+    let file_opt = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+
+    let root_entry = format!("{}/", note_stem);
+    zip.add_directory(&root_entry, dir_opt)
+        .map_err(|e| format!("Erreur création dossier racine zip: {}", e))?;
+
+    // Assurer la présence du dossier assets/ dans l'archive zip
+    let assets_entry = format!("{}assets/", root_entry);
+    zip.add_directory(&assets_entry, dir_opt)
+        .map_err(|e| format!("Erreur création dossier assets zip: {}", e))?;
+
+    // Ajouter le fichier markdown
+    if md_file.is_file() {
+        let data = fs::read(md_file).map_err(|e| e.to_string())?;
+        let entry_name = format!("{}{}.md", root_entry, note_stem);
+        zip.start_file(&entry_name, file_opt).map_err(|e| e.to_string())?;
+        zip.write_all(&data).map_err(|e| e.to_string())?;
+    }
+
+    // Ajouter les assets
+    if let Some(adir) = assets_dir {
+        if adir.is_dir() {
+            if let Ok(entries) = fs::read_dir(adir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        let fname = match path.file_name().and_then(|s| s.to_str()) {
+                            Some(n) => n,
+                            None => continue,
+                        };
+                        if fname.starts_with('.') {
+                            continue;
+                        }
+                        let data = fs::read(&path).map_err(|e| e.to_string())?;
+                        let zip_path = format!("{}{}", assets_entry, fname);
+                        zip.start_file(&zip_path, file_opt).map_err(|e| e.to_string())?;
+                        zip.write_all(&data).map_err(|e| e.to_string())?;
+                    }
+                }
+            }
+        }
+    }
+
+    let cursor = zip.finish().map_err(|e| format!("Erreur finalisation zip: {}", e))?;
+    Ok(cursor.into_inner())
+}
+
+/// Crée une archive zip contenant l'intégralité du dossier d'une note Markdown (rétrocompatibilité format bundle)
 pub fn create_note_dir_zip(note_dir: &Path, note_stem: &str) -> Result<Vec<u8>, String> {
     use std::io::{Cursor, Write};
     use zip::write::SimpleFileOptions;
@@ -1075,35 +1181,30 @@ mod tests {
     }
 
     #[test]
-    fn test_is_markdown_note_dir_and_clean_orphan_assets() {
+    fn test_solution1_assets_and_clean_orphan_assets() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let note_dir = temp_dir.path().join("Ma Note");
-        let assets_dir = note_dir.join("assets");
+        let md_file = temp_dir.path().join("Ma Note.md");
+        let assets_dir = temp_dir.path().join(".assets").join("Ma Note");
         fs::create_dir_all(&assets_dir).unwrap();
 
-        let md_file = note_dir.join("Ma Note.md");
-        fs::write(&md_file, "# Ma Note\n\n![Radio](assets/radio.png)").unwrap();
+        fs::write(&md_file, "# Ma Note\n\n![Radio](/api/assets/Ma%20Note/radio.png)").unwrap();
 
         // Créer deux assets : un référencé (radio.png), un orphelin (unused.png)
         fs::write(assets_dir.join("radio.png"), b"PNG1").unwrap();
         fs::write(assets_dir.join("unused.png"), b"PNG2").unwrap();
 
-        // 1. Vérifier la reconnaissance du dossier de note
-        assert!(is_markdown_note_dir(&note_dir));
-        assert_eq!(find_markdown_file_in_note_dir(&note_dir), Some(md_file));
-
-        // 2. Nettoyage des assets orphelins
-        let content = fs::read_to_string(&note_dir.join("Ma Note.md")).unwrap();
-        let deleted = clean_orphan_markdown_assets(&note_dir, &content);
+        // 1. Nettoyage des assets orphelins
+        let content = fs::read_to_string(&md_file).unwrap();
+        let deleted = clean_orphan_markdown_assets(&assets_dir, &content);
         assert_eq!(deleted, vec!["unused.png".to_string()]);
 
         // Vérifier que radio.png est conservé et unused.png est supprimé
         assert!(assets_dir.join("radio.png").exists());
         assert!(!assets_dir.join("unused.png").exists());
 
-        // 3. Si on supprime la référence à radio.png du markdown
+        // 2. Si on supprime la référence à radio.png du markdown
         let updated_content = "# Ma Note\n\nTexte sans images.";
-        let deleted_second = clean_orphan_markdown_assets(&note_dir, updated_content);
+        let deleted_second = clean_orphan_markdown_assets(&assets_dir, updated_content);
         assert_eq!(deleted_second, vec!["radio.png".to_string()]);
         assert!(!assets_dir.join("radio.png").exists());
     }

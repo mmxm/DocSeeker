@@ -103,18 +103,19 @@ async fn test_note_folder_structure_and_orphan_assets_cleanup() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let doc_id = json["doc_id"].as_i64().unwrap();
 
-    // 2. Vérification physique : un dossier "Neurologie Clinique/" contenant :
-    // - "Neurologie Clinique.md"
-    // - "assets/"
-    let note_dir = state.config.documents_dir.join("Neurologie Clinique");
-    let md_file = note_dir.join("Neurologie Clinique.md");
-    let assets_dir = note_dir.join("assets");
+    // 2. Vérification physique Solution 1 :
+    // - Le fichier est "documents/Neurologie Clinique.md" (fichier direct)
+    // - Le dossier d'assets est "documents/.assets/Neurologie Clinique/"
+    // - Aucun dossier visible "documents/Neurologie Clinique/"
+    let md_file = state.config.documents_dir.join("Neurologie Clinique.md");
+    let assets_dir = state.config.documents_dir.join(".assets").join("Neurologie Clinique");
+    let legacy_folder = state.config.documents_dir.join("Neurologie Clinique");
 
-    assert!(note_dir.is_dir(), "La note doit être un dossier sur le volume");
-    assert!(md_file.is_file(), "Le dossier doit contenir le fichier markdown");
-    assert!(assets_dir.is_dir(), "Le dossier doit contenir le sous-dossier assets/");
+    assert!(md_file.is_file(), "La note doit être un fichier direct sur le volume");
+    assert!(assets_dir.is_dir(), "Le dossier d'assets doit être dans .assets/<stem>/");
+    assert!(!legacy_folder.is_dir(), "La note ne doit PAS créer de dossier visible");
 
-    // 3. Vérification UI : la liste des dossiers /api/folders NE DOIT PAS contenir "Neurologie Clinique"
+    // 3. Vérification UI : la liste des dossiers /api/folders NE DOIT PAS contenir "Neurologie Clinique" ni ".assets"
     let req_folders = Request::builder()
         .uri("/api/folders")
         .header(header::COOKIE, &cookie)
@@ -126,11 +127,11 @@ async fn test_note_folder_structure_and_orphan_assets_cleanup() {
     let json_f: serde_json::Value = serde_json::from_slice(&body_f).unwrap();
     let folders = json_f["folders"].as_array().unwrap();
     assert!(
-        !folders.iter().any(|f| f["name"] == "Neurologie Clinique"),
-        "Le dossier de la note ne doit pas apparaître dans les dossiers UI"
+        !folders.iter().any(|f| f["name"] == "Neurologie Clinique" || f["name"] == ".assets"),
+        "Aucun dossier de note ni .assets ne doit apparaître dans les dossiers UI"
     );
 
-    // 4. Ajouter deux assets physiques dans assets/
+    // 4. Ajouter deux assets physiques dans .assets/Neurologie Clinique/
     // Asset 1 : cerveau.png (sera référencé dans le markdown)
     // Asset 2 : orphelin.png (non référencé)
     std::fs::write(assets_dir.join("cerveau.png"), b"PNG_CERVEAU").unwrap();
@@ -140,7 +141,7 @@ async fn test_note_folder_structure_and_orphan_assets_cleanup() {
 
     // 5. Sauvegarder la note avec SEULEMENT cerveau.png référencé
     // Le serveur doit physiquement supprimer orphelin.png
-    let updated_md = "# Neurologie Clinique\n\nVoici le schéma du cerveau :\n\n![Cerveau](assets/cerveau.png)";
+    let updated_md = "# Neurologie Clinique\n\nVoici le schéma du cerveau :\n\n![Cerveau](/api/assets/Neurologie%20Clinique/cerveau.png)";
     let req_put = Request::builder()
         .method("PUT")
         .uri("/api/files/Neurologie%20Clinique.md")
@@ -188,15 +189,16 @@ async fn test_note_folder_structure_and_orphan_assets_cleanup() {
     let res_patch = router.clone().oneshot(req_patch).await.unwrap();
     assert_eq!(res_patch.status(), StatusCode::OK);
 
-    // Vérifier que le dossier ET le fichier markdown ont été renommés physiquement
-    let new_note_dir = state.config.documents_dir.join("Neuroanatomie");
-    let new_md_file = new_note_dir.join("Neuroanatomie.md");
-    let new_asset = new_note_dir.join("assets").join("moelle.png");
+    // Vérifier que le fichier markdown ET le dossier d'assets ont été renommés physiquement
+    let new_md_file = state.config.documents_dir.join("Neuroanatomie.md");
+    let new_assets_dir = state.config.documents_dir.join(".assets").join("Neuroanatomie");
+    let new_asset = new_assets_dir.join("moelle.png");
 
-    assert!(new_note_dir.is_dir(), "Le dossier physique de la note doit être renommé");
-    assert!(new_md_file.is_file(), "Le fichier markdown doit être renommé dans le nouveau dossier");
-    assert!(new_asset.is_file(), "Les assets doivent avoir suivi dans le dossier de note renommé");
-    assert!(!note_dir.exists(), "L'ancien dossier de note ne doit plus exister");
+    assert!(new_md_file.is_file(), "Le fichier markdown doit être renommé");
+    assert!(new_assets_dir.is_dir(), "Le dossier d'assets dans .assets/ doit être renommé");
+    assert!(new_asset.is_file(), "Les assets doivent avoir suivi dans le nouveau dossier d'assets");
+    assert!(!md_file.exists(), "L'ancien fichier markdown ne doit plus exister");
+    assert!(!assets_dir.exists(), "L'ancien dossier d'assets ne doit plus exister");
 
     // 8. Déplacement dans l'arborescence : Créer un dossier utilisateur "Médecine" et déplacer la note dedans
     let req_create_folder = Request::builder()
@@ -229,15 +231,16 @@ async fn test_note_folder_structure_and_orphan_assets_cleanup() {
     let res_move = router.clone().oneshot(req_move).await.unwrap();
     assert_eq!(res_move.status(), StatusCode::OK);
 
-    // Vérifier que tout le dossier de note a été déplacé dans Médecine/
-    let moved_note_dir = state.config.documents_dir.join("Médecine").join("Neuroanatomie");
-    let moved_md_file = moved_note_dir.join("Neuroanatomie.md");
-    let moved_asset = moved_note_dir.join("assets").join("moelle.png");
+    // Vérifier que le fichier et ses assets ont été déplacés dans Médecine/
+    let moved_md_file = state.config.documents_dir.join("Médecine").join("Neuroanatomie.md");
+    let moved_assets_dir = state.config.documents_dir.join("Médecine").join(".assets").join("Neuroanatomie");
+    let moved_asset = moved_assets_dir.join("moelle.png");
 
-    assert!(moved_note_dir.is_dir(), "Le dossier de note entier doit avoir été déplacé dans Médecine/");
-    assert!(moved_md_file.is_file(), "Le fichier markdown doit être présent dans le dossier déplacé");
-    assert!(moved_asset.is_file(), "Les assets doivent avoir été déplacés avec le dossier");
-    assert!(!new_note_dir.exists(), "L'ancien emplacement à la racine ne doit plus exister");
+    assert!(moved_md_file.is_file(), "Le fichier markdown doit être présent dans Médecine/");
+    assert!(moved_assets_dir.is_dir(), "Le dossier d'assets doit être dans Médecine/.assets/Neuroanatomie");
+    assert!(moved_asset.is_file(), "L'asset moelle.png doit avoir été déplacé avec la note");
+    assert!(!new_md_file.exists(), "L'ancien emplacement à la racine ne doit plus exister");
+    assert!(!new_assets_dir.exists(), "L'ancien dossier d'assets racine ne doit plus exister");
 
     // 9. Suppression et mise à la corbeille (Soft-Delete)
     let req_del = Request::builder()
@@ -250,8 +253,10 @@ async fn test_note_folder_structure_and_orphan_assets_cleanup() {
     let res_del = router.clone().oneshot(req_del).await.unwrap();
     assert_eq!(res_del.status(), StatusCode::OK);
 
-    assert!(!moved_note_dir.exists(), "Le dossier de note doit avoir disparu de documents/");
+    assert!(!moved_md_file.exists(), "Le fichier markdown doit avoir disparu de documents/");
+    assert!(!moved_assets_dir.exists(), "Le dossier d'assets doit avoir disparu de documents/");
     assert!(state.config.trash_dir.join("del_Médecine__Neuroanatomie.md").exists());
+    assert!(state.config.trash_dir.join("del_Médecine__Neuroanatomie_assets").exists());
     assert!(state.config.trash_dir.join("del_Médecine__Neuroanatomie.md.meta.json").exists());
 
     // 10. Restauration depuis la corbeille
@@ -267,9 +272,9 @@ async fn test_note_folder_structure_and_orphan_assets_cleanup() {
     let res_restore = router.clone().oneshot(req_restore).await.unwrap();
     assert_eq!(res_restore.status(), StatusCode::OK);
 
-    assert!(moved_note_dir.is_dir(), "Le dossier de note restauré doit réapparaître");
     assert!(moved_md_file.is_file(), "Le fichier markdown doit être restauré");
-    assert!(moved_asset.is_file(), "Les assets doivent être restaurés");
+    assert!(moved_assets_dir.is_dir(), "Le dossier d'assets doit être restauré");
+    assert!(moved_asset.is_file(), "L'asset moelle.png doit être restauré");
 
     // 11. Téléchargement de la note en archive ZIP avec assets inclus via /api/files/export-zip/*filename
     let req_zip = Request::builder()
@@ -360,9 +365,8 @@ async fn test_rename_note_rewrites_asset_references() {
     let create_json: serde_json::Value = serde_json::from_slice(&create_body).unwrap();
     let doc_id = create_json["doc_id"].as_i64().expect("doc_id valide");
 
-    // 2. Créer manuellement l'asset tiny.png dans son dossier
-    let note_dir = state.config.documents_dir.join("QA Asset Note");
-    let assets_dir = note_dir.join("assets");
+    // 2. Créer l'asset tiny.png dans son dossier .assets/QA Asset Note/
+    let assets_dir = state.config.documents_dir.join(".assets").join("QA Asset Note");
     std::fs::create_dir_all(&assets_dir).unwrap();
     std::fs::write(assets_dir.join("tiny.png"), b"\x89PNG\r\n\x1a\nfakeimage").unwrap();
 
@@ -389,10 +393,11 @@ async fn test_rename_note_rewrites_asset_references() {
     let res_rename = router.clone().oneshot(req_rename).await.unwrap();
     assert_eq!(res_rename.status(), StatusCode::OK);
 
-    // 4. Vérifier que les références dans le fichier .md ont été réécrites
-    let new_note_dir = state.config.documents_dir.join("QA Asset Note Renamed");
-    let new_md_file = new_note_dir.join("QA Asset Note Renamed.md");
+    // 4. Vérifier que le fichier .md et le dossier .assets ont été renommés
+    let new_md_file = state.config.documents_dir.join("QA Asset Note Renamed.md");
+    let new_assets_dir = state.config.documents_dir.join(".assets").join("QA Asset Note Renamed");
     assert!(new_md_file.exists(), "Le nouveau fichier markdown doit exister");
+    assert!(new_assets_dir.exists(), "Le nouveau dossier d'assets doit exister");
 
     let updated_content = std::fs::read_to_string(&new_md_file).unwrap();
     assert!(

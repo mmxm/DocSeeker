@@ -233,54 +233,31 @@ pub async fn update_document(
                 let old_stem = std::path::Path::new(&current_fname).file_stem().and_then(|s| s.to_str()).unwrap_or("");
                 let new_stem = std::path::Path::new(&norm_new_fname).file_stem().and_then(|s| s.to_str()).unwrap_or(&clean_title);
 
-                if let Some(old_note_dir) = crate::document::trash::resolve_note_dir(&state.config.documents_dir, &current_fname) {
-                    let parent_dir = old_note_dir.parent().unwrap_or(&state.config.documents_dir);
-                    let new_note_dir = parent_dir.join(new_stem);
-
-                    // 1. Renommer le fichier markdown dans le dossier
-                    let old_md_in_dir = old_note_dir.join(format!("{}.md", old_stem));
-                    let new_md_in_dir = old_note_dir.join(format!("{}.md", new_stem));
-                    if old_md_in_dir.exists() {
-                        let _ = std::fs::rename(&old_md_in_dir, &new_md_in_dir);
-                    }
-
-                    // 2. Renommer le dossier de note lui-même (nom_de_la_note/)
-                    if old_note_dir != new_note_dir {
-                        if let Err(e) = std::fs::rename(&old_note_dir, &new_note_dir) {
-                            tracing::warn!("[Documents] Échec renommage dossier note {} -> {} : {}", old_note_dir.display(), new_note_dir.display(), e);
-                            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Impossible de renommer le dossier de la note sur le disque : {}", e)}))).into_response());
-                        }
-                    }
-
-                    // 3. Migration rétrocompatible d'anciens assets globaux
-                    let old_global_assets = state.config.documents_dir.join("assets").join(old_stem);
-                    if old_global_assets.exists() {
-                        let new_assets = new_note_dir.join("assets");
-                        let _ = std::fs::create_dir_all(&new_assets);
-                        if let Ok(entries) = std::fs::read_dir(&old_global_assets) {
-                            for entry in entries.flatten() {
-                                let p = entry.path();
-                                if let Some(n) = p.file_name() {
-                                    let _ = std::fs::rename(&p, new_assets.join(n));
-                                }
-                            }
-                        }
-                        let _ = std::fs::remove_dir(&old_global_assets);
-                    }
-                } else if let Some(src_path) = crate::document::trash::resolve_file_path(&state.config.documents_dir, &current_fname) {
-                    // Si ancien format fichier simple sans dossier, convertir en dossier de note
+                if let Some(src_path) = crate::document::trash::resolve_file_path(&state.config.documents_dir, &current_fname) {
                     let parent_dir = src_path.parent().unwrap_or(&state.config.documents_dir);
-                    let new_note_dir = parent_dir.join(new_stem);
-                    let _ = std::fs::create_dir_all(new_note_dir.join("assets"));
-                    let dest_md = new_note_dir.join(format!("{}.md", new_stem));
-                    let _ = std::fs::rename(&src_path, &dest_md);
-                }
+                    let dest_path = parent_dir.join(format!("{}.md", new_stem));
 
-                // 4. Réécriture des références d'assets (/api/assets/<ancien_stem>/ -> /api/assets/<nouveau_stem>/) dans le fichier .md
-                if let Some(dest_note_dir) = crate::document::trash::resolve_note_dir(&state.config.documents_dir, &norm_new_fname) {
-                    let dest_md_file = dest_note_dir.join(format!("{}.md", new_stem));
-                    if dest_md_file.exists() {
-                        if let Ok(content) = std::fs::read_to_string(&dest_md_file) {
+                    // 1. Renommer le fichier .md
+                    if src_path != dest_path {
+                        if let Err(e) = std::fs::rename(&src_path, &dest_path) {
+                            tracing::warn!("[Documents] Échec renommage fichier note {} -> {} : {}", src_path.display(), dest_path.display(), e);
+                            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Impossible de renommer le fichier de la note sur le disque : {}", e)}))).into_response());
+                        }
+                    }
+
+                    // 2. Renommer le dossier d'assets dans .assets/ : parent/.assets/<old_stem> -> parent/.assets/<new_stem>
+                    let old_assets = parent_dir.join(".assets").join(old_stem);
+                    let new_assets = parent_dir.join(".assets").join(new_stem);
+                    if old_assets.is_dir() && old_assets != new_assets {
+                        let _ = std::fs::create_dir_all(parent_dir.join(".assets"));
+                        if let Err(e) = std::fs::rename(&old_assets, &new_assets) {
+                            tracing::warn!("[Documents] Échec renommage dossier assets {} -> {} : {}", old_assets.display(), new_assets.display(), e);
+                        }
+                    }
+
+                    // 3. Réécriture des références d'assets (/api/assets/<ancien_stem>/ -> /api/assets/<nouveau_stem>/) dans le fichier .md
+                    if dest_path.exists() {
+                        if let Ok(content) = std::fs::read_to_string(&dest_path) {
                             let old_raw = format!("/api/assets/{}/", old_stem);
                             let new_raw = format!("/api/assets/{}/", new_stem);
                             let old_enc = format!("/api/assets/{}/", urlencoding::encode(old_stem));
@@ -291,7 +268,7 @@ pub async fn update_document(
                                 updated = updated.replace(&old_enc, &new_enc);
                             }
                             if updated != content {
-                                let _ = std::fs::write(&dest_md_file, updated);
+                                let _ = std::fs::write(&dest_path, updated);
                             }
                         }
                     }
@@ -378,20 +355,30 @@ fn move_doc_physical(
 
     let is_md = current_fname.ends_with(".md") || current_fname.ends_with(".markdown");
     if is_md {
-        // Déplacement de tout le dossier de note Markdown
-        if let Some(src_note_dir) = crate::document::trash::resolve_note_dir(&config.documents_dir, &current_fname) {
-            let note_folder_name = src_note_dir.file_name().unwrap();
-            let dest_note_dir = dest_dir.join(note_folder_name);
-            if src_note_dir != dest_note_dir {
-                let _ = std::fs::create_dir_all(&dest_dir);
-                let _ = std::fs::rename(&src_note_dir, &dest_note_dir);
-            }
-        } else if let Some(src_path) = crate::document::trash::resolve_file_path(&config.documents_dir, &current_fname) {
+        if let Some(src_path) = crate::document::trash::resolve_file_path(&config.documents_dir, &current_fname) {
             let stem = std::path::Path::new(&base_name).file_stem().and_then(|s| s.to_str()).unwrap_or(&base_name);
-            let dest_note_dir = dest_dir.join(stem);
-            let _ = std::fs::create_dir_all(dest_note_dir.join("assets"));
-            let dest_file_path = dest_note_dir.join(&base_name);
-            let _ = std::fs::rename(&src_path, &dest_file_path);
+            let _ = std::fs::create_dir_all(&dest_dir);
+            let dest_file_path = dest_dir.join(&base_name);
+
+            // 1. Déplacer le fichier .md
+            if src_path != dest_file_path {
+                let _ = std::fs::rename(&src_path, &dest_file_path);
+            }
+
+            // 2. Déplacer le dossier d'assets associé : src_parent/.assets/<stem> -> dest_dir/.assets/<stem>
+            if let Some(src_parent) = src_path.parent() {
+                let src_assets = src_parent.join(".assets").join(stem);
+                if src_assets.is_dir() {
+                    let dest_assets_parent = dest_dir.join(".assets");
+                    let _ = std::fs::create_dir_all(&dest_assets_parent);
+                    let dest_assets = dest_assets_parent.join(stem);
+                    if src_assets != dest_assets {
+                        let _ = std::fs::rename(&src_assets, &dest_assets);
+                        // Nettoyer src_parent/.assets si vide
+                        let _ = std::fs::remove_dir(src_parent.join(".assets"));
+                    }
+                }
+            }
         }
     } else {
         // Déplacer physiquement le fichier sur le disque
