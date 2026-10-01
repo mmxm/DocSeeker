@@ -912,5 +912,68 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
 
     console.log('✅ [Core-19] Volet de miniatures interne PDF.js reste fermé sur tous les onglets.');
   });
+
+  // Core-20 : Défilement horizontal des onglets (molette, boutons et auto-scroll onglet actif)
+  test('Core-20 - Défilement Horizontal des Onglets Multiples (Molette, Boutons & Visibilité)', async ({ page }) => {
+    test.setTimeout(45000);
+
+    // 1. Ouvrir 12 onglets avec des titres longs pour forcer le débordement horizontal
+    await page.evaluate(() => {
+      for (let i = 1; i <= 12; i++) {
+        window.tabManager.openTab(i, `Document de Médecine Spécialisée N° ${i} - Grand Chapitre Clinique`, 1);
+      }
+    });
+
+    await expect(page.locator('.reader-tab-item')).toHaveCount(12);
+
+    // 2. Vérifier que la zone d'onglets déborde horizontalement (scrollWidth > clientWidth)
+    const isOverflowing = await page.evaluate(() => {
+      const el = document.getElementById('readerTabsScrollArea');
+      return el ? el.scrollWidth > el.clientWidth : false;
+    });
+    expect(isOverflowing).toBe(true);
+
+    // 3. Vérifier que le bouton de défilement vers la droite est affiché
+    const rightBtn = page.locator('#readerTabsScrollRightBtn');
+    await expect(rightBtn).toBeVisible();
+
+    // 4. Tester le défilement par clic sur le bouton droit
+    const initialScrollLeft = await page.evaluate(() => document.getElementById('readerTabsScrollArea').scrollLeft);
+    await rightBtn.click();
+    await page.waitForTimeout(400);
+
+    const scrolledRightPos = await page.evaluate(() => document.getElementById('readerTabsScrollArea').scrollLeft);
+    expect(scrolledRightPos).toBeGreaterThan(initialScrollLeft);
+
+    // 5. Tester le défilement à la molette verticale vers horizontale
+    await page.evaluate(() => {
+      const el = document.getElementById('readerTabsScrollArea');
+      el.dispatchEvent(new WheelEvent('wheel', { deltaY: 300, cancelable: true }));
+    });
+    await page.waitForTimeout(300);
+
+    const wheelScrolledPos = await page.evaluate(() => document.getElementById('readerTabsScrollArea').scrollLeft);
+    expect(wheelScrolledPos).toBeGreaterThanOrEqual(scrolledRightPos);
+
+    // 6. Tester le bouton gauche
+    const leftBtn = page.locator('#readerTabsScrollLeftBtn');
+    await expect(leftBtn).toBeVisible();
+    await leftBtn.click();
+    await page.waitForTimeout(400);
+
+    const scrolledLeftPos = await page.evaluate(() => document.getElementById('readerTabsScrollArea').scrollLeft);
+    expect(scrolledLeftPos).toBeLessThan(wheelScrolledPos);
+
+    // 7. Sélectionner le tout premier onglet et vérifier l'auto-scroll
+    const firstTab = page.locator('.reader-tab-item').first();
+    await firstTab.click();
+    await page.waitForTimeout(400);
+
+    const finalScrollPos = await page.evaluate(() => document.getElementById('readerTabsScrollArea').scrollLeft);
+    expect(finalScrollPos).toBeLessThan(scrolledLeftPos);
+
+    console.log('✅ [Core-20] Défilement horizontal des onglets validé (overflow, molette, boutons et auto-scroll).');
+  });
 });
+
 

@@ -391,6 +391,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const toggleTabBarBtn = document.getElementById("toggleTabBarBtn");
   const readerTabBarRestoreBtn = document.getElementById("readerTabBarRestoreBtn");
   const readerHomeBtn = document.getElementById("readerHomeBtn");
+  const readerTabsScrollArea = document.getElementById("readerTabsScrollArea");
+  const readerTabsScrollLeftBtn = document.getElementById("readerTabsScrollLeftBtn");
+  const readerTabsScrollRightBtn = document.getElementById("readerTabsScrollRightBtn");
   const readerTabsStrip = document.getElementById("readerTabsStrip");
   const readerSidebarToggleBtn = document.getElementById("readerSidebarToggleBtn");
   const readerFitToWidthBtn = document.getElementById("readerFitToWidthBtn");
@@ -5482,6 +5485,7 @@ document.addEventListener("DOMContentLoaded", () => {
         `;
 
         tabEl.addEventListener("click", (e) => {
+          if (hasDraggedTabsDistance) return;
           if (e.target.closest(".reader-tab-close") || e.target.closest(".reader-tab-chevron")) return;
           this.selectTab(tab.id);
         });
@@ -5503,9 +5507,107 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         readerTabsStrip.appendChild(tabEl);
+
+        if (isActive) {
+          requestAnimationFrame(() => {
+            tabEl.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+          });
+        }
+      });
+
+      requestAnimationFrame(() => {
+        updateTabsScrollButtons();
       });
     }
   };
+
+  // Gestion du défilement horizontal de la barre d'onglets (molette, drag, boutons gauche/droite)
+  let isDraggingTabs = false;
+  let dragTabsStartX = 0;
+  let dragTabsScrollLeft = 0;
+  let hasDraggedTabsDistance = false;
+
+  function updateTabsScrollButtons() {
+    if (!readerTabsScrollArea) return;
+    const canScroll = readerTabsScrollArea.scrollWidth > readerTabsScrollArea.clientWidth + 2;
+    if (readerTabsScrollLeftBtn) {
+      readerTabsScrollLeftBtn.style.display = canScroll ? "flex" : "none";
+      readerTabsScrollLeftBtn.disabled = readerTabsScrollArea.scrollLeft <= 2;
+    }
+    if (readerTabsScrollRightBtn) {
+      readerTabsScrollRightBtn.style.display = canScroll ? "flex" : "none";
+      readerTabsScrollRightBtn.disabled = readerTabsScrollArea.scrollLeft + readerTabsScrollArea.clientWidth >= readerTabsScrollArea.scrollWidth - 2;
+    }
+  }
+
+  if (readerTabsScrollArea) {
+    // 1. Défilement molette souris : convertir deltaY en scroll horizontal
+    readerTabsScrollArea.addEventListener("wheel", (e) => {
+      if (readerTabsScrollArea.scrollWidth > readerTabsScrollArea.clientWidth) {
+        const delta = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+        if (delta !== 0) {
+          e.preventDefault();
+          readerTabsScrollArea.scrollLeft += delta;
+          updateTabsScrollButtons();
+        }
+      }
+    }, { passive: false });
+
+    // 2. Défilement par glisser-déposer (drag-to-scroll)
+    readerTabsScrollArea.addEventListener("mousedown", (e) => {
+      if (e.target.closest("button")) return;
+      isDraggingTabs = true;
+      hasDraggedTabsDistance = false;
+      dragTabsStartX = e.pageX - readerTabsScrollArea.offsetLeft;
+      dragTabsScrollLeft = readerTabsScrollArea.scrollLeft;
+    });
+
+    window.addEventListener("mouseup", () => {
+      if (isDraggingTabs) {
+        isDraggingTabs = false;
+        readerTabsScrollArea.classList.remove("dragging");
+      }
+    });
+
+    readerTabsScrollArea.addEventListener("mousemove", (e) => {
+      if (!isDraggingTabs) return;
+      const x = e.pageX - readerTabsScrollArea.offsetLeft;
+      const walk = x - dragTabsStartX;
+      if (Math.abs(walk) > 4) {
+        hasDraggedTabsDistance = true;
+        readerTabsScrollArea.classList.add("dragging");
+        e.preventDefault();
+        readerTabsScrollArea.scrollLeft = dragTabsScrollLeft - walk;
+        updateTabsScrollButtons();
+      }
+    });
+
+    readerTabsScrollArea.addEventListener("scroll", () => {
+      updateTabsScrollButtons();
+    }, { passive: true });
+
+    if (typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(() => {
+        updateTabsScrollButtons();
+      }).observe(readerTabsScrollArea);
+    }
+  }
+
+  if (readerTabsScrollLeftBtn) {
+    readerTabsScrollLeftBtn.addEventListener("click", () => {
+      if (readerTabsScrollArea) {
+        readerTabsScrollArea.scrollBy({ left: -200, behavior: "smooth" });
+      }
+    });
+  }
+
+  if (readerTabsScrollRightBtn) {
+    readerTabsScrollRightBtn.addEventListener("click", () => {
+      if (readerTabsScrollArea) {
+        readerTabsScrollArea.scrollBy({ left: 200, behavior: "smooth" });
+      }
+    });
+  }
 
   // Sauvegarde continue du snapshot d'onglets (après définition de tabManager) :
   // chaque changement structurel + périodicité (la position de lecture avance

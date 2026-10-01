@@ -125,12 +125,26 @@
         </svg>
       </button>
 
+      <!-- Bouton défilement onglets gauche -->
+      <button id="readerTabsScrollLeftBtn" class="reader-tabs-nav-btn" title="Défiler les onglets vers la gauche" aria-label="Défiler vers la gauche" style="display: none;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="15 18 9 12 15 6"></polyline>
+        </svg>
+      </button>
+
       <!-- Bande déroulante des onglets ouverts -->
-      <div class="reader-tabs-scroll-area">
+      <div class="reader-tabs-scroll-area" id="readerTabsScrollArea">
         <div class="reader-tabs-strip" id="readerTabsStrip">
           <!-- Onglets dynamiques générés par app.js -->
         </div>
       </div>
+
+      <!-- Bouton défilement onglets droite -->
+      <button id="readerTabsScrollRightBtn" class="reader-tabs-nav-btn" title="Défiler les onglets vers la droite" aria-label="Défiler vers la droite" style="display: none;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="9 18 15 12 9 6"></polyline>
+        </svg>
+      </button>
 
       <!-- Masquer la barre d'onglets pour gagner de la place en lecture -->
       <button id="toggleTabBarBtn" class="reader-tabbar-toggle" title="Masquer la barre d'onglets (lecture plein écran)" aria-label="Masquer la barre d'onglets">
