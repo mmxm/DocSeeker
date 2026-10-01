@@ -2267,7 +2267,8 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const delOpts = { method: "DELETE" };
       for (const id of idsToDelete) {
-        await apiFetch(`/api/documents/${id}`, delOpts);
+        await apiFetch(`/api/documents/${id}`, delOpts).catch(() => { });
+        if (window.downloadQueueManager) window.downloadQueueManager.removeDocumentFromCache(id).catch(() => { });
         if (window.pdfCacheManager) window.pdfCacheManager.invalidate(id).catch(() => { });
       }
       showToast(`${count} document(s) supprimé(s).`, "info");
@@ -6968,8 +6969,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       const res = await fetch(`/api/documents/${docId}`, { method: "DELETE" });
-      if (res.ok) {
+      if (res.ok || res.status === 404) {
         showToast(`Document "${docTitle}" supprimé.`, "info");
+        if (window.downloadQueueManager) window.downloadQueueManager.removeDocumentFromCache(docId).catch(() => { });
         if (window.pdfCacheManager) window.pdfCacheManager.invalidate(docId).catch(() => { });
         selectedDocIds.delete(docId);
         updateSelectionUI();
@@ -6983,7 +6985,8 @@ document.addEventListener("DOMContentLoaded", () => {
           loadFoldersAndDocuments();
         }
       } else {
-        showToast("Erreur lors de la suppression.", "error");
+        const errData = await res.json().catch(() => ({}));
+        showToast(errData.error || "Erreur lors de la suppression.", "error");
       }
     } catch (err) {
       console.error(err);

@@ -667,3 +667,37 @@ async fn test_upload_and_note_creation_into_current_folder() {
     assert!(physical_note_file.is_file(), "La note Markdown doit être créée physiquement comme fichier direct dans le dossier courant");
     assert!(assets_dir.is_dir(), "Le dossier d'assets .assets/ doit être créé dans le dossier courant");
 }
+
+#[tokio::test]
+async fn test_delete_orphan_document_without_file_on_disk() {
+    let (state, token, _tmp) = setup_test_app();
+    let router = create_api_router(Arc::clone(&state)).with_state(Arc::clone(&state));
+    let cookie = format!("docseeker_session={}", token);
+
+    // 1. Insérer un document fantôme en base dont le fichier n'existe pas du tout sur le disque
+    let doc_id = {
+        let conn = state.db.get().unwrap();
+        conn.execute(
+            "INSERT INTO documents (filename, title, file_size, doc_type, status) VALUES ('inexistant.md', 'Fantôme', 28, 'markdown', 'ready')",
+            [],
+        ).unwrap();
+        conn.last_insert_rowid()
+    };
+
+    // 2. Tenter de le supprimer via DELETE /api/documents/:id
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/documents/{}", doc_id))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap();
+
+    let res = router.clone().oneshot(req).await.unwrap();
+    // Doit réussir (200 OK) et nettoyer la base au lieu d'échouer en 500
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // 3. Vérifier qu'il a bien disparu de la base
+    let conn = state.db.get().unwrap();
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM documents WHERE id = ?1", rusqlite::params![doc_id], |r| r.get(0)).unwrap();
+    assert_eq!(count, 0, "Le document orphelin doit être supprimé de la base SQLite");
+}

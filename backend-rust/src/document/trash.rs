@@ -125,8 +125,22 @@ pub fn soft_delete(conn: &Connection, config: &Config, filename: &str) -> Result
     let trash_dir = &config.trash_dir;
     fs::create_dir_all(trash_dir).map_err(|e| e.to_string())?;
 
-    let src = resolve_file_path(&config.documents_dir, filename)
-        .ok_or_else(|| format!("Fichier introuvable sur le disque : {}", filename))?;
+    let src = match resolve_file_path(&config.documents_dir, filename) {
+        Some(s) => s,
+        None => {
+            // Le fichier n'existe plus physiquement sur le disque : on nettoie simplement la base SQLite
+            let _ = conn.execute(
+                "UPDATE documents SET status = 'trashed', deleted_at = CURRENT_TIMESTAMP WHERE filename = ?1",
+                params![filename],
+            );
+            let _ = conn.execute(
+                "DELETE FROM pages WHERE doc_id = (SELECT id FROM documents WHERE filename = ?1)",
+                params![filename],
+            );
+            info!("[Trash] Document orphelin '{}' marqué comme supprimé (fichier absent du disque)", filename);
+            return Ok(());
+        }
+    };
 
     let trash_filename = to_trash_filename(filename);
     let dest_file = trash_dir.join(&trash_filename);

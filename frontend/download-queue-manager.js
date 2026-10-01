@@ -547,6 +547,9 @@ class DownloadQueueManager {
     if (Array.isArray(this._cachedDocsList)) {
       this._cachedDocsList = this._cachedDocsList.filter(d => Number(d.id) !== id);
     }
+    if (Array.isArray(this._libraryDocsList)) {
+      this._libraryDocsList = this._libraryDocsList.filter(d => Number(d.id) !== id);
+    }
     if (window.pdfCacheManager) {
       await window.pdfCacheManager.invalidate(id).catch(() => { });
     }

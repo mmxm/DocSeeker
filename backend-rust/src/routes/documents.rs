@@ -447,6 +447,16 @@ pub async fn delete_document_handler(
         None => return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Document introuvable"}))).into_response()),
     };
 
+    // Si le fichier physique n'existe plus sur le disque, supprimer directement l'enregistrement orphelin de la base
+    if crate::document::trash::resolve_file_path(&state.config.documents_dir, &fname).is_none() {
+        let _ = conn.execute("DELETE FROM documents WHERE id = ?1", params![doc_id]);
+        let cover_path = state.config.covers_dir.join(format!("{}.webp", doc_id));
+        if cover_path.exists() {
+            let _ = std::fs::remove_file(cover_path);
+        }
+        return Ok(Json(serde_json::json!({"status": "ok", "deleted_id": doc_id, "orphan_cleaned": true})));
+    }
+
     match crate::document::trash::soft_delete(&conn, &state.config, &fname) {
         Ok(()) => {
             Ok(Json(serde_json::json!({"status": "ok", "deleted_id": doc_id, "trashed": true})))
