@@ -11,7 +11,11 @@ export function build_doc_search_sql_wasm(doc_id: bigint, query: string): string
 
 export function build_search_sql_wasm(query: string, folder_id: bigint | null | undefined, limit: number, offset: number): string;
 
+export function build_search_sql_with_folders_wasm(query: string, folder_ids_json: string | null | undefined, limit: number, offset: number): string;
+
 export function build_title_search_sql_wasm(query: string, folder_id: bigint | null | undefined, limit: number, offset: number): string;
+
+export function build_title_search_sql_with_folders_wasm(query: string, folder_ids_json: string | null | undefined, limit: number, offset: number): string;
 
 export function calculate_crop_bounds_wasm(x0: number, y0: number, x1: number, y1: number, page_width: number, page_height: number, target_w?: number | null, target_h?: number | null): string;
 
@@ -60,7 +64,9 @@ export interface InitOutput {
     readonly batch_find_and_process_doc_occurrences_wasm: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: number, i: number, j: number) => [number, number];
     readonly build_doc_search_sql_wasm: (a: bigint, b: number, c: number) => [number, number];
     readonly build_search_sql_wasm: (a: number, b: number, c: number, d: bigint, e: number, f: number) => [number, number];
+    readonly build_search_sql_with_folders_wasm: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly build_title_search_sql_wasm: (a: number, b: number, c: number, d: bigint, e: number, f: number) => [number, number];
+    readonly build_title_search_sql_with_folders_wasm: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly calculate_crop_bounds_wasm: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
     readonly compute_query_hash_wasm: (a: number, b: number) => [number, number];
     readonly find_occurrences_wasm: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: bigint, i: number, j: number) => [number, number];

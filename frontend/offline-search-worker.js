@@ -23,7 +23,9 @@ import initSearchWasm, {
   get_delete_doc_sql,
   get_cached_docs_sql,
   build_search_sql_wasm,
+  build_search_sql_with_folders_wasm,
   build_title_search_sql_wasm,
+  build_title_search_sql_with_folders_wasm,
   build_doc_search_sql_wasm,
   find_occurrences_wasm,
   batch_find_and_process_doc_occurrences_wasm,
@@ -784,9 +786,29 @@ async function executeSearch(queryStr, titlesOnly = false, folderId = null, limi
     };
   }
 
+function getFolderAndSubfolderIds(folderId) {
+  if (!db || !folderId) return null;
+  const fid = Number(folderId);
+  const ids = [];
+  try {
+    db.exec({
+      sql: get_subfolder_ids_sql_wasm(),
+      bind: [fid],
+      callback: (r) => ids.push(Number(r[0]))
+    });
+  } catch (e) {
+    console.warn('[OfflineSearchWorker] Erreur get_subfolder_ids_sql_wasm, fallback:', e);
+    ids.push(fid);
+  }
+  return ids.length > 0 ? ids : [fid];
+}
+
+  const resolvedFolderIds = folderId ? getFolderAndSubfolderIds(folderId) : null;
+  const folderIdsJson = resolvedFolderIds ? JSON.stringify(resolvedFolderIds) : null;
+
   // 1. Recherche dans les titres uniquement
   if (titlesOnly) {
-    const titleSqlData = JSON.parse(build_title_search_sql_wasm(queryStr || '', folderId ? BigInt(folderId) : null, limit, offset));
+    const titleSqlData = JSON.parse(build_title_search_sql_with_folders_wasm(queryStr || '', folderIdsJson, limit, offset));
     if (!titleSqlData.sql) {
       return {
         query: queryStr,
@@ -836,8 +858,8 @@ async function executeSearch(queryStr, titlesOnly = false, folderId = null, limi
     };
   }
 
-  // 2. Recherche complète FTS5 + BM25 : requête générée par Rust (search-core)
-  const searchSqlData = JSON.parse(build_search_sql_wasm(queryStr || '', folderId ? BigInt(folderId) : null, limit, offset));
+  // 2. Recherche complète FTS5 + BM25 avec inclusion récursive des sous-dossiers
+  const searchSqlData = JSON.parse(build_search_sql_with_folders_wasm(queryStr || '', folderIdsJson, limit, offset));
   if (!searchSqlData.sql || !searchSqlData.terms || searchSqlData.terms.length === 0) {
     return {
       query: queryStr,

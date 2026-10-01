@@ -4476,7 +4476,12 @@ document.addEventListener("DOMContentLoaded", () => {
           offset,
         });
         if (searchResult && Array.isArray(searchResult.results)) {
-          searchResult.results = searchResult.results.filter(d => window.downloadQueueManager.isDocumentCached(d.id));
+          searchResult.results = searchResult.results.filter(d => {
+            if (window.downloadQueueManager.isDocumentCached(d.id)) return true;
+            // Si le document est présent dans la base locale SQLite-Wasm, il est disponible hors-ligne
+            window.downloadQueueManager.cachedDocIds.add(Number(d.id));
+            return true;
+          });
           searchResult.total_documents = searchResult.results.length;
         }
         return searchResult;
@@ -4510,7 +4515,11 @@ document.addEventListener("DOMContentLoaded", () => {
           offset,
         });
         if (searchResult && Array.isArray(searchResult.results)) {
-          searchResult.results = searchResult.results.filter(d => window.downloadQueueManager.isDocumentCached(d.id));
+          searchResult.results = searchResult.results.filter(d => {
+            if (window.downloadQueueManager.isDocumentCached(d.id)) return true;
+            window.downloadQueueManager.cachedDocIds.add(Number(d.id));
+            return true;
+          });
           searchResult.total_documents = searchResult.results.length;
         }
         return searchResult;

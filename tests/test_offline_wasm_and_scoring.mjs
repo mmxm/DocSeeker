@@ -6,7 +6,10 @@ import init, {
   initSync,
   get_schema_sql,
   build_search_sql_wasm,
+  build_search_sql_with_folders_wasm,
   build_title_search_sql_wasm,
+  build_title_search_sql_with_folders_wasm,
+  get_subfolder_ids_sql_wasm,
   build_doc_search_sql_wasm,
   calculate_crop_bounds_wasm,
   find_occurrences_wasm,
@@ -417,6 +420,62 @@ const cachedDocs = legacyDb.prepare(`
 assert.equal(cachedDocs.length, 1);
 assert.equal(cachedDocs[0].doc_type, 'pdf');
 console.log("✅ Migration automatique de doc_type et requête getAllCachedDocuments validées avec succès !");
+
+// 6. Test de résolution récursive des sous-dossiers et recherche locale offline
+console.log("\n--- TEST RÉSOLUTION RÉCURSIVE DES DOSSIERS & RECHERCHE HORS-LIGNE ---");
+const subfolderSql = get_subfolder_ids_sql_wasm();
+assert.ok(subfolderSql.includes("WITH RECURSIVE subfolders"), "get_subfolder_ids_sql_wasm doit retourner la CTE récursive");
+
+// Créer une hiérarchie de dossiers de test : Parent(900) -> Enfant(901) -> Petit-enfant(902)
+const folderStmt = clientDb.prepare("INSERT OR REPLACE INTO folders (id, name, parent_id, color) VALUES (?, ?, ?, ?)");
+folderStmt.run(900, "Dossier Parent Racine", null, "#3b82f6");
+folderStmt.run(901, "Sous-dossier Niveau 1", 900, "#3b82f6");
+folderStmt.run(902, "Sous-dossier Niveau 2", 901, "#3b82f6");
+folderStmt.run(903, "Autre Dossier Indépendant", null, "#ef4444");
+
+// Tester la résolution récursive des IDs de dossiers
+const resolvedFolderRows = clientDb.prepare(subfolderSql).all(900);
+const resolvedFolderIds = resolvedFolderRows.map(r => r.id);
+assert.deepEqual(resolvedFolderIds.sort(), [900, 901, 902].sort(), "La CTE récursive doit trouver le parent et tous ses descendants");
+
+// Insérer un document dans le sous-dossier le plus profond (902)
+insertDocStmt.run(
+  9999,
+  "guide_diagnostic_foie.pdf",
+  "Guide Diagnostic Hépatite",
+  "hash_9999",
+  902, // Réside dans le sous-dossier 902
+  1,
+  2048,
+  "2026-01-01",
+  "2026-01-01"
+);
+insertPageStmt.run(9999, 1, "Diagnostic de l'hépatite virale et suivi clinique", "[]");
+
+// Ancien comportement : build_search_sql_wasm avec folder_id = 900 uniquement
+const oldSqlJson = build_search_sql_wasm("hépatite", BigInt(900), 10, 0);
+const oldSqlData = JSON.parse(oldSqlJson);
+const oldResults = clientDb.prepare(oldSqlData.sql).all();
+assert.equal(oldResults.length, 0, "L'ancienne recherche limitée au dossier direct 900 doit rater le document dans 902");
+
+// Nouveau comportement : build_search_sql_with_folders_wasm avec tous les IDs résolus [900, 901, 902]
+const newSqlJson = build_search_sql_with_folders_wasm("hépatite", JSON.stringify(resolvedFolderIds), 10, 0);
+const newSqlData = JSON.parse(newSqlJson);
+assert.ok(newSqlData.sql.includes("d.folder_id IN (900,901,902)") || newSqlData.sql.includes("d.folder_id IN (900, 901, 902)") || newSqlData.sql.includes("folder_id IN"), "Le SQL doit filtrer sur IN (...)");
+
+const newResults = clientDb.prepare(newSqlData.sql).all();
+assert.equal(newResults.length, 1, "La nouvelle recherche récursive doit trouver le document dans le sous-dossier");
+assert.equal(newResults[0].doc_id, 9999);
+assert.equal(newResults[0].title, "Guide Diagnostic Hépatite");
+
+// Test de la recherche par titre avec plusieurs dossiers
+const subfolderTitleSqlJson = build_title_search_sql_with_folders_wasm("Guide Diagnostic", JSON.stringify(resolvedFolderIds), 10, 0);
+const subfolderTitleSqlData = JSON.parse(subfolderTitleSqlJson);
+const subfolderTitleResults = clientDb.prepare(subfolderTitleSqlData.sql).all();
+assert.equal(subfolderTitleResults.length, 1, "La recherche par titre doit également inclure les sous-dossiers");
+assert.equal(subfolderTitleResults[0].id, 9999);
+
+console.log("✅ Résolution récursive des sous-dossiers et filtrage IN (...) validés avec succès !");
 
 console.log("\n===============================================================================");
 console.log(" TOUS LES TESTS DU MOTEUR HORS-LIGNE & SCORING ONT RÉUSSI AVEC SUCCÈS ! (100%)");

@@ -75,6 +75,30 @@ export function build_search_sql_wasm(query, folder_id, limit, offset) {
 
 /**
  * @param {string} query
+ * @param {string | null | undefined} folder_ids_json
+ * @param {number} limit
+ * @param {number} offset
+ * @returns {string}
+ */
+export function build_search_sql_with_folders_wasm(query, folder_ids_json, limit, offset) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(query, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        var ptr1 = isLikeNone(folder_ids_json) ? 0 : passStringToWasm0(folder_ids_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len1 = WASM_VECTOR_LEN;
+        const ret = wasm.build_search_sql_with_folders_wasm(ptr0, len0, ptr1, len1, limit, offset);
+        deferred3_0 = ret[0];
+        deferred3_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * @param {string} query
  * @param {bigint | null | undefined} folder_id
  * @param {number} limit
  * @param {number} offset
@@ -92,6 +116,30 @@ export function build_title_search_sql_wasm(query, folder_id, limit, offset) {
         return getStringFromWasm0(ret[0], ret[1]);
     } finally {
         wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * @param {string} query
+ * @param {string | null | undefined} folder_ids_json
+ * @param {number} limit
+ * @param {number} offset
+ * @returns {string}
+ */
+export function build_title_search_sql_with_folders_wasm(query, folder_ids_json, limit, offset) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(query, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        var ptr1 = isLikeNone(folder_ids_json) ? 0 : passStringToWasm0(folder_ids_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len1 = WASM_VECTOR_LEN;
+        const ret = wasm.build_title_search_sql_with_folders_wasm(ptr0, len0, ptr1, len1, limit, offset);
+        deferred3_0 = ret[0];
+        deferred3_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
     }
 }
 

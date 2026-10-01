@@ -82,8 +82,31 @@ pub fn build_search_sql_wasm(query: &str, folder_id: Option<i64>, limit: usize, 
 }
 
 #[wasm_bindgen]
+pub fn build_search_sql_with_folders_wasm(query: &str, folder_ids_json: Option<String>, limit: usize, offset: usize) -> String {
+    let fids: Option<Vec<i64>> = folder_ids_json.and_then(|j| serde_json::from_str(&j).ok());
+    let result = build_search_query_sql(query, fids.as_deref(), limit, offset);
+    serde_json::json!({
+        "sql": result.sql,
+        "terms": result.terms,
+        "query_hash": result.query_hash,
+    }).to_string()
+}
+
+#[wasm_bindgen]
 pub fn build_title_search_sql_wasm(query: &str, folder_id: Option<i64>, limit: usize, offset: usize) -> String {
     let fids = folder_id.map(|fid| vec![fid]);
+    let (sql, terms) = build_title_search_sql(query, fids.as_deref(), limit, offset);
+    let query_hash = get_query_hash(&terms);
+    serde_json::json!({
+        "sql": sql,
+        "terms": terms,
+        "query_hash": query_hash,
+    }).to_string()
+}
+
+#[wasm_bindgen]
+pub fn build_title_search_sql_with_folders_wasm(query: &str, folder_ids_json: Option<String>, limit: usize, offset: usize) -> String {
+    let fids: Option<Vec<i64>> = folder_ids_json.and_then(|j| serde_json::from_str(&j).ok());
     let (sql, terms) = build_title_search_sql(query, fids.as_deref(), limit, offset);
     let query_hash = get_query_hash(&terms);
     serde_json::json!({
