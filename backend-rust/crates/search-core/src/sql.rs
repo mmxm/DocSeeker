@@ -81,7 +81,7 @@ pub fn build_search_query_sql(
         };
     }
 
-    // Boost titre : termes tokenisés ou phrases sur l'index documents_fts
+    // Boost titre : termes tokenisés ou phrases sur l'index documents_fts ou sous-chaînes GLOB
     let mut title_conds = Vec::new();
     for token in &tokens {
         match token {
@@ -89,10 +89,16 @@ pub fn build_search_query_sql(
                 let norm = normalize_text(w);
                 if !norm.is_empty() {
                     let esc = norm.replace('"', "\"\"");
-                    title_conds.push(format!(
-                        "d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"*')",
-                        esc = esc
-                    ));
+                    let glob = crate::matching::build_glob_pattern(&norm);
+                    if glob.is_empty() {
+                        title_conds.push(format!(
+                            "d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"*')"
+                        ));
+                    } else {
+                        title_conds.push(format!(
+                            "(d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"*') OR d.title GLOB '*{glob}*' OR d.filename GLOB '*{glob}*')"
+                        ));
+                    }
                 }
             }
             crate::matching::SearchToken::Phrase(words) => {
@@ -103,10 +109,21 @@ pub fn build_search_query_sql(
                     .collect();
                 if !norm_words.is_empty() {
                     let esc = norm_words.join(" ").replace('"', "\"\"");
-                    title_conds.push(format!(
-                        "d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"')",
-                        esc = esc
-                    ));
+                    let glob = norm_words
+                        .iter()
+                        .map(|w| crate::matching::build_glob_pattern(w))
+                        .filter(|p| !p.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("*");
+                    if glob.is_empty() {
+                        title_conds.push(format!(
+                            "d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"')"
+                        ));
+                    } else {
+                        title_conds.push(format!(
+                            "(d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"') OR d.title GLOB '*{glob}*' OR d.filename GLOB '*{glob}*')"
+                        ));
+                    }
                 }
             }
         }
@@ -235,9 +252,11 @@ pub fn build_title_search_sql(
         return (String::new(), Vec::new());
     }
 
-    // Recherche sur l'index documents_fts : normalisation (casse + accents)
-    // assurée par le même tokenizer que le contenu (unicode61 remove_diacritics).
-    // Les mots simples sont tokenisés avec préfixe (*), les phrases sont recherchées exactement.
+    // Recherche sur l'index documents_fts ET sous-chaîne GLOB sur title / filename :
+    // - documents_fts MATCH gère la recherche préfixe plein mot rapide et tolérante aux diacritiques.
+    // - title/filename GLOB '*{glob}*' permet de retrouver les sous-mots et mots composés
+    //   (ex: "calcé" dans "268 - ECG - Hypercalcémie" ou "tension" dans "Hypertension"),
+    //   insensible à la casse et aux accents français.
     let where_clause = tokens
         .iter()
         .filter_map(|token| match token {
@@ -247,9 +266,16 @@ pub fn build_title_search_sql(
                     None
                 } else {
                     let esc = norm.replace('"', "\"\"");
-                    Some(format!(
-                        "id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"*')"
-                    ))
+                    let glob = crate::matching::build_glob_pattern(&norm);
+                    if glob.is_empty() {
+                        Some(format!(
+                            "id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"*')"
+                        ))
+                    } else {
+                        Some(format!(
+                            "(id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"*') OR title GLOB '*{glob}*' OR filename GLOB '*{glob}*')"
+                        ))
+                    }
                 }
             }
             crate::matching::SearchToken::Phrase(words) => {
@@ -262,9 +288,21 @@ pub fn build_title_search_sql(
                     None
                 } else {
                     let esc = norm_words.join(" ").replace('"', "\"\"");
-                    Some(format!(
-                        "id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"')"
-                    ))
+                    let glob = norm_words
+                        .iter()
+                        .map(|w| crate::matching::build_glob_pattern(w))
+                        .filter(|p| !p.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("*");
+                    if glob.is_empty() {
+                        Some(format!(
+                            "id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"')"
+                        ))
+                    } else {
+                        Some(format!(
+                            "(id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH '{{title filename}} : \"{esc}\"') OR title GLOB '*{glob}*' OR filename GLOB '*{glob}*')"
+                        ))
+                    }
                 }
             }
         })
@@ -337,6 +375,8 @@ mod tests {
             (1, "pathologie_du_fer.pdf", "219 - Pathologie du fer chez l'adulte et l'enfant Hémochromatose"),
             (2, "Cardiologie_2024.pdf", "Livre de Cardiologie"),
             (3, "pneumologie.pdf", "Traité de PNEUMOLOGIE"),
+            (4, "268_ecg_hypercalcemie.pdf", "268 - ECG - Hypercalcémie"),
+            (5, "268_hypercalcemie_hypocalcemie.pdf", "268 - Hypercalcémie - Hypocalcémie"),
         ] {
             conn.execute(
                 "INSERT INTO documents (id, filename, title, status, created_at, updated_at) VALUES (?1, ?2, ?3, 'ready', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
@@ -375,6 +415,42 @@ mod tests {
         let conn = setup_db();
         let (sql, _) = build_title_search_sql("hemochromatose", None, 10, 0);
         assert_eq!(ids(&conn, &sql), vec![1], "sans accents côté requête");
+    }
+
+    #[test]
+    fn test_title_search_subword_compound_word_accents() {
+        let conn = setup_db();
+        // Recherche du mot-clé "calcé" dans les titres (cas des screens 1 et 2)
+        let (sql, _) = build_title_search_sql("calcé", None, 10, 0);
+        let mut results = ids(&conn, &sql);
+        results.sort();
+        assert_eq!(results, vec![4, 5], "Doit trouver Hypercalcémie et Hypocalcémie avec 'calcé'");
+    }
+
+    #[test]
+    fn test_title_search_subword_compound_word_without_accents() {
+        let conn = setup_db();
+        // Recherche du mot-clé "calce" sans accent dans les titres
+        let (sql, _) = build_title_search_sql("calce", None, 10, 0);
+        let mut results = ids(&conn, &sql);
+        results.sort();
+        assert_eq!(results, vec![4, 5], "Doit trouver Hypercalcémie et Hypocalcémie avec 'calce'");
+    }
+
+    #[test]
+    fn test_title_search_prefix_hypercalce() {
+        let conn = setup_db();
+        let (sql, _) = build_title_search_sql("hypercalcé", None, 10, 0);
+        let mut results = ids(&conn, &sql);
+        results.sort();
+        assert_eq!(results, vec![4, 5], "Doit trouver les 2 docs avec 'hypercalcé'");
+    }
+
+    #[test]
+    fn test_title_search_subword_hypocalce() {
+        let conn = setup_db();
+        let (sql, _) = build_title_search_sql("hypocalcé", None, 10, 0);
+        assert_eq!(ids(&conn, &sql), vec![5], "Doit trouver uniquement le doc 5 avec 'hypocalcé'");
     }
 
     #[test]

@@ -138,7 +138,13 @@ pub fn search_titles(
     for r in rows.flatten() {
         let (id, filename, title, doc_folder_id, total_pages, created_at, updated_at, doc_type) = r;
         let title_norm = normalize_text(&title);
-        let bonus = if norm_terms.iter().any(|t| t == &title_norm) { 100.0 } else { 0.0 };
+        let bonus = if norm_terms.iter().any(|t| t == &title_norm) {
+            200.0
+        } else if norm_terms.iter().all(|t| title_norm.contains(t)) {
+            100.0
+        } else {
+            0.0
+        };
         results.push(DocumentSearchResult {
             id,
             filename,
@@ -403,6 +409,8 @@ mod tests {
             (1, "pathologie_du_fer.pdf", "219 - Pathologie du fer chez l'adulte et l'enfant Hémochromatose"),
             (2, "cardiologie.pdf", "Livre de Cardiologie"),
             (3, "pneumologie.pdf", "Traité de PNEUMOLOGIE"),
+            (4, "268_ecg_hypercalcemie.pdf", "268 - ECG - Hypercalcémie"),
+            (5, "268_hypercalcemie_hypocalcemie.pdf", "268 - Hypercalcémie - Hypocalcémie"),
         ] {
             conn.execute(
                 "INSERT INTO documents (id, filename, title, status, total_pages, created_at, updated_at) VALUES (?1, ?2, ?3, 'ready', 12, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
@@ -411,6 +419,29 @@ mod tests {
             .unwrap();
         }
         conn
+    }
+
+    #[test]
+    fn test_title_search_subword_calce_and_calcemie() {
+        let conn = setup_titles_db();
+        // Recherche avec "calcé" (avec accent) : doit retourner les 2 documents Hypercalcémie / Hypocalcémie
+        let resp_accent = search_titles(&conn, "calcé", None, None, None).unwrap();
+        assert_eq!(resp_accent.total_documents, 2, "Doit trouver les 2 docs avec 'calcé'");
+        let ids_accent: Vec<i64> = resp_accent.results.iter().map(|d| d.id).collect();
+        assert!(ids_accent.contains(&4) && ids_accent.contains(&5));
+
+        // Recherche avec "calce" (sans accent) : doit aussi retourner les 2 documents
+        let resp_no_accent = search_titles(&conn, "calce", None, None, None).unwrap();
+        assert_eq!(resp_no_accent.total_documents, 2, "Doit trouver les 2 docs avec 'calce'");
+
+        // Recherche avec "hypercalcé" : doit retourner les 2 documents
+        let resp_hyper = search_titles(&conn, "hypercalcé", None, None, None).unwrap();
+        assert_eq!(resp_hyper.total_documents, 2, "Doit trouver les 2 docs avec 'hypercalcé'");
+
+        // Recherche avec "hypocalcé" : doit retourner seulement le doc 5
+        let resp_hypo = search_titles(&conn, "hypocalcé", None, None, None).unwrap();
+        assert_eq!(resp_hypo.total_documents, 1, "Doit trouver uniquement doc 5 avec 'hypocalcé'");
+        assert_eq!(resp_hypo.results[0].id, 5);
     }
 
     #[test]

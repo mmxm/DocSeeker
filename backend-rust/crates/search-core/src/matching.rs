@@ -115,6 +115,47 @@ pub fn build_fts5_match_clause(tokens: &[SearchToken]) -> String {
     clauses.join(" AND ")
 }
 
+/// Construit un motif SQLite GLOB insensible à la casse et aux accents français.
+/// Ex: "calce" -> "[cC][aAàáâãäåAÀÁÂÃÄÅ][lL][cC][eéèêëEÉÈÊË]"
+pub fn build_glob_pattern(term: &str) -> String {
+    let norm = normalize_text(term);
+    if norm.is_empty() {
+        return String::new();
+    }
+    let mut pattern = String::with_capacity(norm.len() * 16);
+    for ch in norm.chars() {
+        match ch {
+            'a' => pattern.push_str("[aàáâãäåAÀÁÂÃÄÅ]"),
+            'e' => pattern.push_str("[eéèêëEÉÈÊË]"),
+            'i' => pattern.push_str("[iìíîïIÌÍÎÏ]"),
+            'o' => pattern.push_str("[oòóôõöOÒÓÔÕÖ]"),
+            'u' => pattern.push_str("[uùúûüUÙÚÛÜ]"),
+            'c' => pattern.push_str("[cçCÇ]"),
+            'n' => pattern.push_str("[nñNÑ]"),
+            '\'' => pattern.push_str("''"),
+            '*' | '?' | '[' | ']' => {
+                pattern.push('[');
+                pattern.push(ch);
+                pattern.push(']');
+            }
+            c if c.is_alphabetic() => {
+                pattern.push('[');
+                for lower in c.to_lowercase() {
+                    pattern.push(lower);
+                }
+                for upper in c.to_uppercase() {
+                    pattern.push(upper);
+                }
+                pattern.push(']');
+            }
+            c => {
+                pattern.push(c);
+            }
+        }
+    }
+    pattern
+}
+
 pub fn sanitize_fts_query(query: &str) -> Vec<String> {
     parse_search_query(query)
         .into_iter()

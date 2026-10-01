@@ -3851,7 +3851,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (v.length <= 2) {
               patterns.push(`(?<!\\w)${regexStr}(?!\\w)`);
             } else {
-              patterns.push(`(?<!\\w)${regexStr}`);
+              patterns.push(`${regexStr}`);
             }
           });
         });
