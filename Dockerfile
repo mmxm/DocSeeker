@@ -1,9 +1,12 @@
 # Stage 0 : Minification des assets frontend (JS/CSS) — image Node.js Alpine ultra-légère
 FROM node:20-alpine AS minifier
+# Optimisation CI : npm install -g isole AVANT le COPY frontend/ — l'install
+# reseau de terser/clean-css n'est plus relancee a chaque push qui modifie
+# le frontend (seule la minification l'est).
+RUN npm install -g terser clean-css-cli
 WORKDIR /minify
 COPY frontend/ ./frontend/
-RUN npm install -g terser clean-css-cli && \
-    for f in frontend/app.js frontend/sw.js frontend/crop-worker.js \
+RUN for f in frontend/app.js frontend/sw.js frontend/crop-worker.js \
              frontend/offline-search-worker.js frontend/download-queue-manager.js \
              frontend/pdf-cache.js frontend/worker-setup.js; do \
       if [ -f "$f" ]; then \
