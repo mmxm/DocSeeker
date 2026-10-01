@@ -339,7 +339,7 @@ fn move_doc_physical(
         .unwrap_or(current_fname.clone());
 
     // Calculer le nouveau chemin relatif et le répertoire de destination physique
-    let (new_rel_fname, dest_dir) = match target_folder_id {
+    let (mut new_rel_fname, dest_dir) = match target_folder_id {
         Some(fid) => {
             if let Some(folder_rel) = crate::routes::folders::get_folder_relative_path(conn, fid) {
                 let folder_rel_str = folder_rel.to_string_lossy().to_string();
@@ -353,6 +353,38 @@ fn move_doc_physical(
         None => (base_name.clone(), config.documents_dir.clone()),
     };
 
+    // Gestion des conflits d'unicité de filename en base SQLite
+    let conflicting: Option<(i64, String)> = conn.query_row(
+        "SELECT id, status FROM documents WHERE filename = ?1 AND id != ?2",
+        params![new_rel_fname, doc_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).ok();
+
+    if let Some((conf_id, conf_status)) = conflicting {
+        if conf_status == "trashed" {
+            // Le document en conflit est un déchet en corbeille : supprimer la ligne orpheline pour libérer le nom
+            let _ = conn.execute("DELETE FROM documents WHERE id = ?1", params![conf_id]);
+        } else {
+            // Document actif en conflit : suffixer pour garantir l'unicité
+            let stem = std::path::Path::new(&base_name).file_stem().and_then(|s| s.to_str()).unwrap_or(&base_name);
+            let ext = std::path::Path::new(&base_name).extension().and_then(|s| s.to_str()).unwrap_or("");
+            let unique_base = if ext.is_empty() {
+                format!("{}_{}", stem, doc_id)
+            } else {
+                format!("{}_{}.{}", stem, doc_id, ext)
+            };
+            if let Some(fid) = target_folder_id {
+                if let Some(folder_rel) = crate::routes::folders::get_folder_relative_path(conn, fid) {
+                    new_rel_fname = format!("{}/{}", folder_rel.to_string_lossy(), unique_base);
+                } else {
+                    new_rel_fname = unique_base;
+                }
+            } else {
+                new_rel_fname = unique_base;
+            }
+        }
+    }
+
     let is_md = current_fname.ends_with(".md") || current_fname.ends_with(".markdown");
     if is_md {
         if let Some(src_path) = crate::document::trash::resolve_file_path(&config.documents_dir, &current_fname) {
@@ -360,9 +392,13 @@ fn move_doc_physical(
             let _ = std::fs::create_dir_all(&dest_dir);
             let dest_file_path = dest_dir.join(&base_name);
 
-            // 1. Déplacer le fichier .md
+            // 1. Déplacer le fichier .md (avec fallback copie si rename cross-filesystem échoue)
             if src_path != dest_file_path {
-                let _ = std::fs::rename(&src_path, &dest_file_path);
+                if std::fs::rename(&src_path, &dest_file_path).is_err() {
+                    if std::fs::copy(&src_path, &dest_file_path).is_ok() {
+                        let _ = std::fs::remove_file(&src_path);
+                    }
+                }
             }
 
             // 2. Déplacer le dossier d'assets associé : src_parent/.assets/<stem> -> dest_dir/.assets/<stem>
@@ -374,19 +410,22 @@ fn move_doc_physical(
                     let dest_assets = dest_assets_parent.join(stem);
                     if src_assets != dest_assets {
                         let _ = std::fs::rename(&src_assets, &dest_assets);
-                        // Nettoyer src_parent/.assets si vide
                         let _ = std::fs::remove_dir(src_parent.join(".assets"));
                     }
                 }
             }
         }
     } else {
-        // Déplacer physiquement le fichier sur le disque
+        // Déplacer physiquement le fichier sur le disque (avec fallback cross-device / NAS)
         if let Some(src_path) = crate::pdf::indexer::resolve_pdf_path(&config.documents_dir, &current_fname) {
             let _ = std::fs::create_dir_all(&dest_dir);
             let dest_file_path = dest_dir.join(&base_name);
             if src_path != dest_file_path {
-                let _ = std::fs::rename(&src_path, &dest_file_path);
+                if std::fs::rename(&src_path, &dest_file_path).is_err() {
+                    if std::fs::copy(&src_path, &dest_file_path).is_ok() {
+                        let _ = std::fs::remove_file(&src_path);
+                    }
+                }
             }
         }
     }
@@ -423,11 +462,33 @@ pub async fn batch_move_documents(
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
     })?;
 
+    let mut moved_count = 0;
+    let mut errors = Vec::new();
+
     for id in &payload.doc_ids {
-        let _ = move_doc_physical(&conn, &state.config, *id, payload.folder_id);
+        match move_doc_physical(&conn, &state.config, *id, payload.folder_id) {
+            Ok(()) => moved_count += 1,
+            Err(e) => {
+                tracing::error!("[BatchMove] Échec déplacement doc {}: {}", id, e);
+                errors.push(format!("Doc {}: {}", id, e));
+            }
+        }
     }
 
-    Ok(Json(serde_json::json!({"status": "ok", "moved_count": payload.doc_ids.len()})))
+    if !errors.is_empty() && moved_count == 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("Impossible de déplacer : {}", errors.join("; "))
+            })),
+        ).into_response());
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "moved_count": moved_count,
+        "errors": if errors.is_empty() { None } else { Some(errors) }
+    })))
 }
 
 pub async fn delete_document_handler(

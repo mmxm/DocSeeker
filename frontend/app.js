@@ -5004,7 +5004,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!docIds || docIds.length === 0) return;
 
     try {
-      const res = await fetch(`/api/documents/batch-move`, {
+      const res = await apiFetch(`/api/documents/batch-move`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -5013,9 +5013,13 @@ document.addEventListener("DOMContentLoaded", () => {
         })
       });
 
-      if (!res.ok) throw new Error("Erreur de déplacement");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Erreur de déplacement (HTTP ${res.status})`);
+      }
 
-      const count = docIds.length;
+      const data = await res.json().catch(() => ({}));
+      const count = data.moved_count ?? docIds.length;
       if (window.downloadQueueManager) {
         await window.downloadQueueManager.syncDocFolders(docIds.map(id => ({ id, folder_id: folderId })));
       }
@@ -5030,7 +5034,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     } catch (err) {
       console.error(err);
-      showToast("Erreur lors du déplacement", "error");
+      showToast(err.message || "Erreur lors du déplacement", "error");
     }
   }
 
@@ -5045,7 +5049,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Charger les dossiers frais depuis l'API
     try {
-      const res = await fetch("/api/folders");
+      const res = await apiFetch("/api/folders");
       const data = await res.json();
       allFolders = data.folders || [];
     } catch (e) {
