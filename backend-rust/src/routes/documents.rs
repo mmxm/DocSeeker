@@ -674,7 +674,25 @@ pub async fn upload_document(
     }
 
     let norm_filename: String = uploaded_filename.nfc().collect();
-    let dest_path = state.config.documents_dir.join(&norm_filename);
+    let (dest_path, final_rel_filename) = {
+        let conn = state.db.get().map_err(|_| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
+        })?;
+        match target_folder_id {
+            Some(fid) => {
+                if let Some(folder_rel) = crate::routes::folders::get_folder_relative_path(&conn, fid) {
+                    let folder_dir = state.config.documents_dir.join(&folder_rel);
+                    std::fs::create_dir_all(&folder_dir).ok();
+                    let full_dest = folder_dir.join(&norm_filename);
+                    let rel_fname = format!("{}/{}", folder_rel.to_string_lossy(), norm_filename);
+                    (full_dest, rel_fname)
+                } else {
+                    (state.config.documents_dir.join(&norm_filename), norm_filename.clone())
+                }
+            }
+            None => (state.config.documents_dir.join(&norm_filename), norm_filename.clone()),
+        }
+    };
 
     // Promotion atomique du fichier temporaire (streamé) vers son emplacement définitif
     if let Some(tmp_path) = temp_path.take() {
@@ -699,7 +717,7 @@ pub async fn upload_document(
         });
 
         let existing: Option<i64> = conn
-            .query_row("SELECT id FROM documents WHERE filename = ?1", params![norm_filename], |r| r.get(0))
+            .query_row("SELECT id FROM documents WHERE filename = ?1", params![final_rel_filename], |r| r.get(0))
             .ok();
 
         if let Some(id) = existing {
@@ -711,7 +729,7 @@ pub async fn upload_document(
         } else {
             conn.execute(
                 "INSERT INTO documents (filename, title, file_hash, file_size, status, folder_id) VALUES (?1, ?2, ?3, ?4, 'pending', ?5)",
-                params![norm_filename, clean_title, file_hash, file_size, target_folder_id],
+                params![final_rel_filename, clean_title, file_hash, file_size, target_folder_id],
             ).ok();
             conn.last_insert_rowid()
         }
@@ -723,7 +741,7 @@ pub async fn upload_document(
     Ok(Json(serde_json::json!({
         "status": "queued",
         "doc_id": doc_id,
-        "filename": norm_filename,
+        "filename": final_rel_filename,
         "title": custom_title.unwrap_or(norm_filename)
     })))
 }

@@ -553,3 +553,114 @@ async fn test_markdown_rename_assets_and_soft_delete_handler() {
         .unwrap();
     assert_eq!(doc_pages_count, 0, "Les pages du document doivent être supprimées");
 }
+
+#[tokio::test]
+async fn test_upload_and_note_creation_into_current_folder() {
+    let (state, token, _tmp) = setup_test_app();
+    let router = create_api_router(Arc::clone(&state)).with_state(Arc::clone(&state));
+    let cookie = format!("docseeker_session={}", token);
+
+    // 1. Créer un dossier "Cardiologie"
+    let req_folder = Request::builder()
+        .method("POST")
+        .uri("/api/folders")
+        .header(header::COOKIE, &cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::json!({
+            "name": "Cardiologie"
+        }).to_string()))
+        .unwrap();
+
+    let res_folder = router.clone().oneshot(req_folder).await.unwrap();
+    assert_eq!(res_folder.status(), StatusCode::OK);
+    let body_f = to_bytes(res_folder.into_body(), usize::MAX).await.unwrap();
+    let json_f: serde_json::Value = serde_json::from_slice(&body_f).unwrap();
+    let folder_id = json_f["id"].as_i64().unwrap();
+
+    // 2. Upload d'un document PDF dans "Cardiologie" avec target_folder_id
+    let boundary = "---------------------------974767299852498929531610575";
+    let multipart_body = format!(
+        "--{boundary}\r\n\
+        Content-Disposition: form-data; name=\"folder_id\"\r\n\r\n\
+        {folder_id}\r\n\
+        --{boundary}\r\n\
+        Content-Disposition: form-data; name=\"title\"\r\n\r\n\
+        Guide ECG Clinique\r\n\
+        --{boundary}\r\n\
+        Content-Disposition: form-data; name=\"file\"; filename=\"ecg_guide.pdf\"\r\n\
+        Content-Type: application/pdf\r\n\r\n\
+        %PDF-1.4\n%Fake PDF content for test\n%%EOF\r\n\
+        --{boundary}--\r\n"
+    );
+
+    let req_upload = Request::builder()
+        .method("POST")
+        .uri("/api/upload?sync=false")
+        .header(header::COOKIE, &cookie)
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(multipart_body))
+        .unwrap();
+
+    let res_upload = router.clone().oneshot(req_upload).await.unwrap();
+    assert_eq!(res_upload.status(), StatusCode::OK);
+    let body_u = to_bytes(res_upload.into_body(), usize::MAX).await.unwrap();
+    let json_u: serde_json::Value = serde_json::from_slice(&body_u).unwrap();
+    assert_eq!(json_u["status"], "queued");
+    assert_eq!(json_u["filename"], "Cardiologie/ecg_guide.pdf");
+
+    // Vérifier l'enregistrement en BDD et sur le disque physique
+    let db_conn = state.db.get().unwrap();
+    let (db_folder_id, db_fname): (Option<i64>, String) = db_conn
+        .query_row(
+            "SELECT folder_id, filename FROM documents WHERE id = ?1",
+            rusqlite::params![json_u["doc_id"].as_i64().unwrap()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+
+    assert_eq!(db_folder_id, Some(folder_id), "Le folder_id doit être celui du dossier courant");
+    assert_eq!(db_fname, "Cardiologie/ecg_guide.pdf", "Le filename doit inclure le chemin relatif");
+
+    let physical_file = state.config.documents_dir.join("Cardiologie").join("ecg_guide.pdf");
+    assert!(physical_file.is_file(), "Le fichier doit avoir été créé dans documents_dir/Cardiologie/ecg_guide.pdf");
+
+    // 3. Créer une note Markdown dans "Cardiologie"
+    let req_note = Request::builder()
+        .method("POST")
+        .uri("/api/files")
+        .header(header::COOKIE, &cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::json!({
+            "filename": "Syndrome coronarien.md",
+            "content": "# Syndrome coronarien\n\nNotes cliniques.",
+            "folder_id": folder_id
+        }).to_string()))
+        .unwrap();
+
+    let res_note = router.clone().oneshot(req_note).await.unwrap();
+    assert_eq!(res_note.status(), StatusCode::CREATED);
+    let body_n = to_bytes(res_note.into_body(), usize::MAX).await.unwrap();
+    let json_n: serde_json::Value = serde_json::from_slice(&body_n).unwrap();
+    let note_doc_id = json_n["doc_id"].as_i64().unwrap();
+
+    // Vérifier l'enregistrement de la note en BDD et sur le disque
+    let (note_folder_id, note_fname): (Option<i64>, String) = db_conn
+        .query_row(
+            "SELECT folder_id, filename FROM documents WHERE id = ?1",
+            rusqlite::params![note_doc_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+
+    assert_eq!(note_folder_id, Some(folder_id), "La note doit appartenir au dossier courant");
+    assert_eq!(note_fname, "Cardiologie/Syndrome coronarien.md");
+
+    let physical_note_file = state.config.documents_dir
+        .join("Cardiologie")
+        .join("Syndrome coronarien")
+        .join("Syndrome coronarien.md");
+    assert!(physical_note_file.is_file(), "La note Markdown doit être créée physiquement dans le dossier courant");
+}

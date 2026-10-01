@@ -2547,15 +2547,22 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  let lastFolderIdForFilter = undefined;
   function updateFolderFilterVisibility() {
     if (currentFolderId === null) {
       filterFolderLabel.textContent = "Dans ce dossier";
       filterFolderChip.style.display = "none";
       filterCurrentFolderOnly.checked = false;
       filterFolderChip.classList.remove("active");
+      lastFolderIdForFilter = null;
     } else {
       filterFolderLabel.textContent = `"${currentFolderName}"`;
       filterFolderChip.style.display = "inline-flex";
+      if (lastFolderIdForFilter !== currentFolderId) {
+        filterCurrentFolderOnly.checked = true;
+        filterFolderChip.classList.add("active");
+        lastFolderIdForFilter = currentFolderId;
+      }
     }
   }
 
@@ -3354,6 +3361,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   window.enterFolder = enterFolder;
   window.navigateToFolder = (id, name) => enterFolder({ id, name: name || 'Dossier' });
+  window.loadFoldersAndDocuments = loadFoldersAndDocuments;
+  window.loadDocuments = () => loadFoldersAndDocuments();
+  const loadDocuments = () => loadFoldersAndDocuments();
 
   async function loadFoldersAndDocuments() {
     const currentSeq = ++loadFoldersSeq;
@@ -6877,13 +6887,24 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // =========================================================================
-  // Upload, Dropzone & Doublons Stricts
-  // =========================================================================
+  function updateUploadModalDestination() {
+    const uploadModalTitle = document.getElementById("uploadModalTitle");
+    const uploadDestinationLabel = document.getElementById("uploadDestinationLabel");
+    if (currentFolderId !== null && currentFolderId !== undefined) {
+      if (uploadModalTitle) uploadModalTitle.textContent = `Importer des documents dans "${currentFolderName}"`;
+      if (uploadDestinationLabel) uploadDestinationLabel.textContent = `Destination : ${currentFolderName}`;
+    } else {
+      if (uploadModalTitle) uploadModalTitle.textContent = "Importer des documents PDF";
+      if (uploadDestinationLabel) uploadDestinationLabel.textContent = "Destination : Documents (racine)";
+    }
+  }
+
   openUploadBtn.addEventListener("click", () => {
     if (!navigator.onLine) {
       showToast("L'importation de documents nécessite une connexion réseau active.", "warning");
       return;
     }
+    updateUploadModalDestination();
     uploadModal.style.display = "flex";
     uploadProgressContainer.style.display = "none";
     uploadProgressBar.style.width = "0%";
@@ -6950,6 +6971,7 @@ document.addEventListener("DOMContentLoaded", () => {
           showToast("L'importation de documents nécessite une connexion réseau active.", "warning");
           return;
         }
+        updateUploadModalDestination();
         uploadModal.style.display = "flex";
         handleFilesUpload(e.dataTransfer.files);
       }
@@ -7031,13 +7053,13 @@ document.addEventListener("DOMContentLoaded", () => {
         : `[${i + 1}/${total}] Envoi de ${file.name}...`;
 
       const formData = new FormData();
-      formData.append("file", file);
+      if (currentFolderId !== null && currentFolderId !== undefined) {
+        formData.append("folder_id", currentFolderId);
+      }
       if (total === 1 && docTitleInput && docTitleInput.value.trim()) {
         formData.append("title", docTitleInput.value.trim());
       }
-      if (currentFolderId) {
-        formData.append("folder_id", currentFolderId);
-      }
+      formData.append("file", file);
 
       try {
         const res = await fetch("/api/upload?sync=false", {
@@ -7104,6 +7126,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Démarrer immédiatement le suivi du pipeline et rafraîchir la liste
     if (successCount > 0) {
+      clearFolderDocsCache();
       startPipelinePolling();
       loadFoldersAndDocuments();
     }
@@ -7923,7 +7946,8 @@ document.addEventListener("DOMContentLoaded", () => {
     },
 
     async promptCreateNote() {
-      const title = prompt("Titre de la nouvelle note :", "Nouvelle note");
+      const folderPrompt = currentFolderId !== null && currentFolderId !== undefined ? ` dans "${currentFolderName}"` : "";
+      const title = prompt(`Titre de la nouvelle note${folderPrompt} :`, "Nouvelle note");
       if (!title || !title.trim()) return;
 
       const cleanTitle = title.trim();
@@ -7933,6 +7957,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       const filename = cleanTitle.endsWith(".md") ? cleanTitle : `${cleanTitle}.md`;
       const initialContent = `# ${cleanTitle}\n\n`;
+      const targetFolderId = currentFolderId !== null && currentFolderId !== undefined ? Number(currentFolderId) : null;
 
       // Sauvegarde locale immédiate dans OPFS
       await MarkdownStorage.write(filename, initialContent);
@@ -7941,6 +7966,18 @@ document.addEventListener("DOMContentLoaded", () => {
         await MarkdownStorage.markDirty(filename, "created");
         showToast("Note créée hors-ligne", "info");
         const fakeId = Date.now();
+        if (Array.isArray(currentLoadedDocs)) {
+          currentLoadedDocs.push({
+            id: fakeId,
+            filename: filename,
+            title: cleanTitle,
+            folder_id: targetFolderId,
+            doc_type: "markdown",
+            status: "ready"
+          });
+        }
+        clearFolderDocsCache();
+        loadFoldersAndDocuments();
         openDocumentInSplitView(fakeId, cleanTitle, 1, []);
         this.loadNote(fakeId, filename, cleanTitle, initialContent);
         return;
@@ -7953,7 +7990,7 @@ document.addEventListener("DOMContentLoaded", () => {
           body: JSON.stringify({
             filename: filename,
             content: initialContent,
-            folder_id: currentFolderId ? Number(currentFolderId) : null
+            folder_id: targetFolderId
           })
         });
 
@@ -7972,16 +8009,15 @@ document.addEventListener("DOMContentLoaded", () => {
         await MarkdownStorage.write(finalFname, initialContent);
         showToast("Note créée avec succès", "success");
 
-        if (typeof loadDocuments === "function") {
-          loadDocuments(currentFolderId, false);
-        }
+        clearFolderDocsCache();
+        loadFoldersAndDocuments();
 
         if (Array.isArray(currentLoadedDocs)) {
           currentLoadedDocs.push({
             id: data.doc_id,
             filename: finalFname,
             title: cleanTitle,
-            folder_id: currentFolderId ? Number(currentFolderId) : null,
+            folder_id: targetFolderId,
             doc_type: "markdown",
             status: "ready"
           });
@@ -8001,11 +8037,13 @@ document.addEventListener("DOMContentLoaded", () => {
             id: fakeId,
             filename: filename,
             title: cleanTitle,
-            folder_id: currentFolderId ? Number(currentFolderId) : null,
+            folder_id: targetFolderId,
             doc_type: "markdown",
             status: "ready"
           });
         }
+        clearFolderDocsCache();
+        loadFoldersAndDocuments();
         openDocumentInSplitView(fakeId, cleanTitle, 1, []);
         this.loadNote(fakeId, filename, cleanTitle, initialContent);
       }
