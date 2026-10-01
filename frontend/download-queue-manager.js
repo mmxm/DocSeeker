@@ -376,7 +376,6 @@ class DownloadQueueManager {
   }
 
   getCachedDocsCountForFolder(folderId) {
-    if (!Array.isArray(this._cachedDocsList)) return 0;
     const fid = Number(folderId);
     if (!fid) return 0;
 
@@ -394,7 +393,59 @@ class DownloadQueueManager {
       addDescendants(fid);
     }
 
-    return this._cachedDocsList.filter(d => d.folder_id !== null && d.folder_id !== undefined && targetFolderIds.has(Number(d.folder_id))).length;
+    // Regrouper tous les documents connus (depuis _libraryDocsList et _cachedDocsList)
+    const docsMap = new Map();
+    if (Array.isArray(this._libraryDocsList)) {
+      for (const d of this._libraryDocsList) {
+        if (d && d.id) docsMap.set(Number(d.id), d);
+      }
+    }
+    if (Array.isArray(this._cachedDocsList)) {
+      for (const d of this._cachedDocsList) {
+        if (d && d.id) {
+          const existing = docsMap.get(Number(d.id)) || {};
+          docsMap.set(Number(d.id), { ...existing, ...d });
+        }
+      }
+    }
+
+    let count = 0;
+    for (const [id, doc] of docsMap.entries()) {
+      if (doc.folder_id !== null && doc.folder_id !== undefined && targetFolderIds.has(Number(doc.folder_id))) {
+        if (this.isDocumentCached(id)) {
+          count++;
+        }
+      }
+    }
+    return count;
+  }
+
+  getTotalDocsCountForFolder(folderId) {
+    const fid = Number(folderId);
+    if (!fid) return 0;
+
+    const targetFolderIds = new Set([fid]);
+    if (Array.isArray(this._allFolders)) {
+      const addDescendants = (parentId) => {
+        for (const f of this._allFolders) {
+          if (Number(f.parent_id) === Number(parentId) && !targetFolderIds.has(Number(f.id))) {
+            targetFolderIds.add(Number(f.id));
+            addDescendants(Number(f.id));
+          }
+        }
+      };
+      addDescendants(fid);
+    }
+
+    const docIds = new Set();
+    if (Array.isArray(this._libraryDocsList)) {
+      for (const d of this._libraryDocsList) {
+        if (d && d.folder_id !== null && d.folder_id !== undefined && targetFolderIds.has(Number(d.folder_id))) {
+          docIds.add(Number(d.id));
+        }
+      }
+    }
+    return docIds.size;
   }
 
   async isDocumentFullyCached(docId) {

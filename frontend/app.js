@@ -7415,13 +7415,23 @@ document.addEventListener("DOMContentLoaded", () => {
         `;
       }
     });
+
+    // Mettre à jour l'état visuel des dossiers parents
+    document.querySelectorAll(".folder-card[data-folder-id]").forEach(folderEl => {
+      updateFolderCardCacheUI(folderEl);
+    });
   }
 
   function updateFolderCardCacheUI(folderEl) {
     if (!folderEl || !window.downloadQueueManager) return;
     const folderId = Number(folderEl.getAttribute("data-folder-id"));
-    const totalDocs = Number(folderEl.getAttribute("data-doc-count") || 0);
     if (!folderId) return;
+
+    const attrCount = Number(folderEl.getAttribute("data-doc-count") || 0);
+    const metaCount = typeof window.downloadQueueManager.getTotalDocsCountForFolder === "function"
+      ? window.downloadQueueManager.getTotalDocsCountForFolder(folderId)
+      : 0;
+    const totalDocs = Math.max(attrCount, metaCount);
 
     const cachedCount = window.downloadQueueManager.getCachedDocsCountForFolder(folderId);
     const isComplete = totalDocs > 0 && cachedCount >= totalDocs;
