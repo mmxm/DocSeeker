@@ -818,6 +818,35 @@ pub async fn reindex_all_documents(
     })))
 }
 
+/// POST /api/maintenance/resync-library ou /api/documents/resync-library
+/// Réconcilie l'arborescence et les fichiers avec la base de données sans réindexer les documents existants
+pub async fn resync_library_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let report = {
+        let conn = state.db.get().map_err(|_| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
+        })?;
+        crate::document::scanner::reconcile_database_with_filesystem(&conn, &state.config)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response())?
+    };
+
+    // Mettre en file d'attente les nouveaux documents découverts
+    for id in &report.queued_ids {
+        state.pipeline.enqueue(*id);
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "folders_created": report.folders_created,
+        "folders_deleted": report.folders_deleted,
+        "docs_preserved": report.docs_preserved,
+        "docs_moved": report.docs_moved,
+        "docs_removed": report.docs_removed,
+        "docs_new_queued": report.docs_new_queued,
+    })))
+}
+
 pub async fn sync_documents_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, Response> {

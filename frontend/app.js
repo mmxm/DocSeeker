@@ -1832,6 +1832,49 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // Bouton Resynchroniser la bibliothèque (Non-destructif)
+  const settingsResyncLibraryBtn = document.getElementById("settingsResyncLibraryBtn");
+  if (settingsResyncLibraryBtn) {
+    settingsResyncLibraryBtn.addEventListener("click", async () => {
+      const confirmed = confirm(
+        "Voulez-vous synchroniser l'arborescence et les fichiers ?\n\n" +
+        "• L'arborescence des dossiers sera actualisée d'après le disque.\n" +
+        "• Les documents existants et leur texte indexé seront conservés sans réanalyse.\n" +
+        "• Les fichiers déplacés ou renommés seront automatiquement réconciliés.\n" +
+        "• Seuls les nouveaux fichiers seront mis en file d'attente pour indexation."
+      );
+      if (!confirmed) return;
+
+      settingsResyncLibraryBtn.disabled = true;
+      const originalText = settingsResyncLibraryBtn.textContent;
+      settingsResyncLibraryBtn.textContent = "Synchronisation...";
+
+      try {
+        const res = await fetch("/api/maintenance/resync-library", { method: "POST" });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        const msg = `Bibliothèque synchronisée : ${data.docs_preserved || 0} conservé(s)` +
+          (data.docs_moved ? `, ${data.docs_moved} déplacé(s)` : "") +
+          (data.docs_new_queued ? `, ${data.docs_new_queued} nouveau(x) en cours d'indexation` : "") +
+          (data.docs_removed ? `, ${data.docs_removed} supprimé(s)` : "") +
+          (data.folders_created ? `, ${data.folders_created} dossier(s) créé(s)` : "") +
+          (data.folders_deleted ? `, ${data.folders_deleted} dossier(s) nettoyé(s)` : "");
+
+        showToast(msg, "success", 6000);
+        await loadFoldersAndDocuments();
+      } catch (err) {
+        console.error("Erreur lors de la synchronisation de la bibliothèque :", err);
+        showToast(`Erreur synchronisation : ${err.message || "Erreur serveur"}`, "error", 6000);
+      } finally {
+        settingsResyncLibraryBtn.disabled = false;
+        settingsResyncLibraryBtn.textContent = originalText;
+      }
+    });
+  }
+
   // Bouton Réindexer toute la bibliothèque (serveur)
   const settingsReindexAllBtn = document.getElementById("settingsReindexAllBtn");
   if (settingsReindexAllBtn) {

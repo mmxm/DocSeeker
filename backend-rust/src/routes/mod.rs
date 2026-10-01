@@ -48,6 +48,8 @@ pub fn create_api_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/documents/batch-move", post(documents::batch_move_documents))
         .route("/documents/batch-reindex", post(documents::batch_reindex_documents))
         .route("/documents/reindex-all", post(documents::reindex_all_documents))
+        .route("/documents/resync-library", post(documents::resync_library_handler))
+        .route("/maintenance/resync-library", post(documents::resync_library_handler))
         .route("/documents/:id/reindex", post(documents::reindex_document))
         .route("/documents/:id/download", get(documents::download_document_handler))
         .route("/check-hash/:file_hash", get(documents::check_hash))
