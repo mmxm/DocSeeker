@@ -347,3 +347,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+// Perf CI : commit de mesure incrementalite (2026-10-01)
