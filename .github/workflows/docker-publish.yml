@@ -69,6 +69,13 @@ jobs:
           echo "owner=${OWNER}" >> $GITHUB_OUTPUT
           echo "platform_tag=${PLATFORM_TAG}" >> $GITHUB_OUTPUT
 
+      # Dossier consommé par les cache mounts BuildKit du Dockerfile
+      # (CARGO_HOME/CARGO_TARGET_DIR pointent vers /cache-cargo) : il persiste
+      # les artefacts cargo entre les runs via le cache GHA, pour que la
+      # compilation applicative soit incrémentale (issue de perf CI).
+      - name: Set cache build dir env
+        run: echo "CACHE_BUILD_DIR=/cache-cargo" >> $GITHUB_ENV
+
       - name: Set up QEMU (Pour ARM64)
         uses: docker/setup-qemu-action@v3
 
@@ -95,7 +102,7 @@ jobs:
           tags: |
             ghcr.io/${{ steps.meta.outputs.owner }}/docseeker-app:${{ steps.meta.outputs.platform_tag }}
           cache-from: type=gha,scope=${{ steps.meta.outputs.platform_tag }}
-          cache-to: type=gha,mode=max,scope=${{ steps.meta.outputs.platform_tag }}
+          cache-to: type=gha,mode=max,scope=${{ steps.meta.outputs.platform_tag }}-${{ github.run_id }}
 
   # ---------------------------------------------------------------------------
   # 3. Fusion des manifests multi-architecture (En quelques secondes)
