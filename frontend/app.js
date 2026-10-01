@@ -4171,7 +4171,7 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>
           `;
         });
-      } else if (filterTitlesOnly.checked) {
+      } else if (filterTitlesOnly.checked || !doc.total_occurrences || doc.total_occurrences === 0) {
         vignettesHtml = `<div style="display:flex; align-items:center; color:var(--accent); font-size:12.5px; font-weight:600;">Correspondance dans le titre du document.</div>`;
       } else {
         vignettesHtml = `<div style="color:var(--text-dim); font-size:12.5px; align-self:center;">Aucun extrait visuel.</div>`;
@@ -4769,7 +4769,7 @@ document.addEventListener("DOMContentLoaded", () => {
     resultsContainer.innerHTML = "";
     const rawResults = data.results || [];
 
-    if (filterTitlesOnly.checked) {
+    if (filterTitlesOnly.checked || data.total_occurrences === 0) {
       searchStats.textContent = `${data.total_documents} document${data.total_documents > 1 ? 's' : ''} correspondant${data.total_documents > 1 ? 's' : ''}`;
     } else {
       searchStats.textContent = `${data.total_occurrences} occurrence${data.total_occurrences > 1 ? 's' : ''} dans ${data.total_documents} document${data.total_documents > 1 ? 's' : ''}`;

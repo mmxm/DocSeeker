@@ -512,6 +512,37 @@ assert.equal(mdSearchResults.length, 1);
 assert.equal(mdSearchResults[0].doc_id, mdDocId);
 console.log("✅ Indexation et recherche de note Markdown dans un dossier validées avec succès !");
 
+// 14. Test recherche globale d'une note par son titre (sans cocher 'Titres', 0 occurrence dans le corps)
+console.log("\n--- TEST RECHERCHE GLOBALE PAR TITRE SANS COCHER 'TITRES' (EX: NOTE PAR SON NOM) ---");
+const noteDocId = 7777;
+const noteFilename = "Notes/Ma première note 1.md";
+const noteTitle = "Ma première note 1";
+const noteFolderId = 900;
+const noteContent = "Contenu sans le mot-clé recherché.";
+
+mdInsertStmt.run(noteDocId, noteFilename, noteTitle, noteFolderId, noteContent.length, "2026-02-01");
+insertPageStmt.run(noteDocId, 1, "Contenu sans le mot-clé recherché", "[]");
+
+// Recherche globale "note" SANS cocher Titres (build_search_sql_with_folders_wasm)
+const noteSearchSql = JSON.parse(build_search_sql_with_folders_wasm("note", null, 10, 0));
+const noteSearchRows = clientDb.prepare(noteSearchSql.sql).all();
+assert.ok(noteSearchRows.length > 0, "La recherche globale 'note' DOIT trouver 'Ma première note 1'");
+const matchedNoteRow = noteSearchRows.find(r => r.doc_id === noteDocId);
+assert.ok(matchedNoteRow, "Le document 'Ma première note 1' doit être présent dans les résultats");
+assert.equal(matchedNoteRow.matching_pages_count, 0, "Doit avoir 0 page matchée");
+
+// Traitement via process_search_results_wasm
+const processedNoteResults = JSON.parse(process_search_results_wasm(
+  JSON.stringify(noteSearchRows),
+  JSON.stringify(noteSearchSql.terms),
+  noteSearchSql.query_hash
+));
+const processedNote = processedNoteResults.find(d => d.id === noteDocId);
+assert.ok(processedNote, "La note doit être dans les résultats traités par search_wasm");
+assert.equal(processedNote.total_occurrences, 0, "0 occurrence dans le corps");
+assert.equal(processedNote.title, noteTitle);
+console.log("✅ Recherche globale d'une note par son titre sans cocher 'Titres' validée avec succès !");
+
 console.log("\n===============================================================================");
 console.log(" TOUS LES TESTS DU MOTEUR HORS-LIGNE & SCORING ONT RÉUSSI AVEC SUCCÈS ! (100%)");
 console.log("===============================================================================");

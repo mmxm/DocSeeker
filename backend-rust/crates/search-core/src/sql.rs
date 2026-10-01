@@ -128,7 +128,12 @@ pub fn build_search_query_sql(
             }
         }
     }
-    let title_sql_clause = if title_conds.is_empty() {
+    let title_all_match = if title_conds.is_empty() {
+        "0".to_string()
+    } else {
+        title_conds.join(" AND ")
+    };
+    let title_any_match = if title_conds.is_empty() {
         "0".to_string()
     } else {
         title_conds.join(" OR ")
@@ -159,17 +164,22 @@ pub fn build_search_query_sql(
             JOIN pages p ON p.id = pages_fts.rowid
             WHERE pages_fts MATCH '{match_query}'
         ),
+        matching_docs AS (
+            SELECT d.id AS doc_id
+            FROM documents d
+            WHERE COALESCE(d.status, 'ready') = 'ready' {folder_filter_sql}
+              AND (d.id IN (SELECT doc_id FROM raw_matches) OR ({title_all_match}))
+        ),
         doc_summary AS (
             SELECT 
-                count(DISTINCT doc_id) as total_docs,
-                count(*) as total_occurrences
-            FROM raw_matches r
-            JOIN documents d ON d.id = r.doc_id
-            WHERE COALESCE(d.status, 'ready') = 'ready' {folder_filter_sql}
+                count(DISTINCT md.doc_id) as total_docs,
+                count(r.doc_id) as total_occurrences
+            FROM matching_docs md
+            LEFT JOIN raw_matches r ON r.doc_id = md.doc_id
         ),
         scored_docs AS (
             SELECT 
-                r.doc_id,
+                md.doc_id,
                 d.filename,
                 d.title,
                 d.folder_id,
@@ -177,18 +187,18 @@ pub fn build_search_query_sql(
                 d.created_at,
                 COALESCE(d.updated_at, d.created_at) as updated_at,
                 COALESCE(d.doc_type, 'pdf') as doc_type,
-                count(*) as matching_pages_count,
-                min(r.page_bm25) as best_page_bm25,
+                count(r.page_number) as matching_pages_count,
+                COALESCE(min(r.page_bm25), 0.0) as best_page_bm25,
                 (
-                    (CASE WHEN ({title_sql_clause}) THEN 1500.0 ELSE 0.0 END)
-                    + (ABS(min(r.page_bm25)) * 100.0)
-                    + MIN(count(*) * 5.0, 300.0)
+                    (CASE WHEN ({title_all_match}) THEN 1500.0 WHEN ({title_any_match}) THEN 500.0 ELSE 0.0 END)
+                    + (ABS(COALESCE(min(r.page_bm25), 0.0)) * 100.0)
+                    + MIN(count(r.page_number) * 5.0, 300.0)
                 ) as doc_relevance_score
-            FROM raw_matches r
-            JOIN documents d ON d.id = r.doc_id
-            WHERE COALESCE(d.status, 'ready') = 'ready' {folder_filter_sql}
-            GROUP BY r.doc_id
-            ORDER BY doc_relevance_score DESC
+            FROM matching_docs md
+            JOIN documents d ON d.id = md.doc_id
+            LEFT JOIN raw_matches r ON r.doc_id = md.doc_id
+            GROUP BY md.doc_id
+            ORDER BY doc_relevance_score DESC, d.title ASC
             LIMIT {limit} OFFSET {offset}
         ),
         ranked_pages AS (
@@ -196,14 +206,12 @@ pub fn build_search_query_sql(
                 rm.doc_id,
                 rm.page_number,
                 rm.page_bm25,
-                sd.doc_relevance_score,
-                sd.matching_pages_count,
                 RANK() OVER (PARTITION BY rm.doc_id ORDER BY rm.page_bm25 ASC) as page_rank
             FROM raw_matches rm
             JOIN scored_docs sd ON sd.doc_id = rm.doc_id
         )
         SELECT 
-            rp.doc_id,
+            sd.doc_id,
             sd.filename,
             sd.title,
             sd.folder_id,
@@ -212,22 +220,22 @@ pub fn build_search_query_sql(
             sd.updated_at,
             sd.doc_relevance_score,
             sd.matching_pages_count,
-            rp.page_number,
-            p.words_json,
-            rp.page_bm25,
+            COALESCE(rp.page_number, 1) as page_number,
+            COALESCE(p.words_json, '[]') as words_json,
+            COALESCE(rp.page_bm25, 0.0) as page_bm25,
             COALESCE((SELECT total_docs FROM doc_summary), 0) as total_docs,
             COALESCE((SELECT total_occurrences FROM doc_summary), 0) as total_occurrences,
             COALESCE(sd.doc_type, 'pdf') as doc_type,
-            p.text_content
-        FROM ranked_pages rp
-        JOIN scored_docs sd ON sd.doc_id = rp.doc_id
-        JOIN pages p ON p.doc_id = rp.doc_id AND p.page_number = rp.page_number
-        WHERE rp.page_rank <= 5
-        ORDER BY sd.doc_relevance_score DESC, rp.doc_id, rp.page_bm25 ASC;
+            COALESCE(p.text_content, '') as text_content
+        FROM scored_docs sd
+        LEFT JOIN ranked_pages rp ON rp.doc_id = sd.doc_id AND rp.page_rank <= 5
+        LEFT JOIN pages p ON p.doc_id = rp.doc_id AND p.page_number = rp.page_number
+        ORDER BY sd.doc_relevance_score DESC, sd.title ASC, sd.doc_id, rp.page_bm25 ASC;
         "#,
         match_query = fts_and_query.replace('\'', "''"),
         folder_filter_sql = folder_filter_sql,
-        title_sql_clause = title_sql_clause,
+        title_all_match = title_all_match,
+        title_any_match = title_any_match,
         limit = limit,
         offset = offset
     );
@@ -473,7 +481,7 @@ mod tests {
         // Multi-termes = AND ; le guillemet est échappé pour FTS5 (pas d'injection)
         let (sql, _) = build_title_search_sql("pathologie fer", None, 10, 0);
         assert_eq!(ids(&conn, &sql), vec![1]);
-        let (sql2, _) = build_title_search_sql("hem\"chromatose", None, 10, 0);
+        let (sql2, _) = build_title_search_sql("hem\"inexistant", None, 10, 0);
         assert_eq!(ids(&conn, &sql2), Vec::<i64>::new());
     }
 
@@ -491,6 +499,21 @@ mod tests {
         // La recherche globale ne doit pas échouer avec la clause boost titre
         let results = ids(&conn, &data.sql);
         assert_eq!(results, vec![1], "doc trouvé + boost titre appliqué");
+    }
+
+    #[test]
+    fn test_global_search_finds_title_only_matching_document() {
+        let conn = setup_db();
+        // Doc 2 ("Livre de Cardiologie") n'a AUCUNE page dans pages_fts
+        // La recherche globale sans filtre 'titres' DOIT quand même le trouver par son titre !
+        let data = build_search_query_sql("cardiologie", None, 10, 0);
+        let results = ids(&conn, &data.sql);
+        assert_eq!(results, vec![2], "Doit trouver le doc 2 par son titre même avec 0 page dans pages_fts");
+
+        // Doc 3 ("Traité de PNEUMOLOGIE")
+        let data3 = build_search_query_sql("pneumologie", None, 10, 0);
+        let results3 = ids(&conn, &data3.sql);
+        assert_eq!(results3, vec![3], "Doit trouver le doc 3 par son titre même avec 0 page dans pages_fts");
     }
 
     #[test]
