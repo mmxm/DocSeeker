@@ -268,6 +268,14 @@ class DownloadQueueManager {
     if (!docId) return false;
     const numId = Number(docId);
     if (this.cachedDocIds.has(numId)) return true;
+    if (typeof window !== "undefined" && window.pdfCacheManager && (
+      window.pdfCacheManager.cachedIds?.has(numId) ||
+      window.pdfCacheManager.progressCache?.get(numId)?.status === 'complete' ||
+      (window.pdfCacheManager.progressCache?.get(numId)?.progress || 0) >= 100
+    )) {
+      this.cachedDocIds.add(numId);
+      return true;
+    }
     const doc = this._cachedDocsList?.find(d => Number(d.id) === numId) || this._libraryDocsList?.find(d => Number(d.id) === numId);
     if (doc && ((doc.doc_type === 'markdown') || (doc.filename && (doc.filename.endsWith('.md') || doc.filename.endsWith('.markdown'))))) {
       this.cachedDocIds.add(numId);
@@ -448,6 +456,11 @@ class DownloadQueueManager {
       }
       this._cachedDocsList = verifiedDocs;
       this.cachedDocIds = new Set(verifiedDocs.map(d => Number(d.id)));
+      if (typeof window !== "undefined" && window.pdfCacheManager && window.pdfCacheManager.cachedIds) {
+        for (const cid of window.pdfCacheManager.cachedIds) {
+          this.cachedDocIds.add(Number(cid));
+        }
+      }
       return verifiedDocs;
     }
     return docs;

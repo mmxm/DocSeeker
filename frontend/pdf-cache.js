@@ -87,6 +87,9 @@ class PdfCacheManager {
                     downloadedBytes: f.size,
                     totalBytes: f.size
                   });
+                  if (typeof window !== "undefined" && window.downloadQueueManager) {
+                    window.downloadQueueManager.cachedDocIds.add(id);
+                  }
                 }
               } catch (_) {}
             }
@@ -118,6 +121,9 @@ class PdfCacheManager {
                     downloadedBytes: blob.size,
                     totalBytes: blob.size
                   });
+                  if (typeof window !== "undefined" && window.downloadQueueManager) {
+                    window.downloadQueueManager.cachedDocIds.add(id);
+                  }
                 }
               }
             }
@@ -126,6 +132,13 @@ class PdfCacheManager {
       } catch (e) {
         console.warn("[LocalFilePdfCache] Erreur parcours CacheStorage:", e);
       }
+    }
+
+    if (typeof window !== "undefined" && window.downloadQueueManager) {
+      for (const id of this.cachedIds) {
+        window.downloadQueueManager.cachedDocIds.add(id);
+      }
+      window.downloadQueueManager._notify();
     }
   }
 
@@ -186,7 +199,12 @@ class PdfCacheManager {
     if (!id) return false;
 
     // Cache mémoire ultra-rapide (0 ms)
-    if (this.cachedIds.has(id)) return true;
+    if (this.cachedIds.has(id)) {
+      if (typeof window !== "undefined" && window.downloadQueueManager) {
+        window.downloadQueueManager.cachedDocIds.add(id);
+      }
+      return true;
+    }
 
     await this.init();
 
@@ -198,6 +216,15 @@ class PdfCacheManager {
         if (file.size > 0) {
           this.cachedIds.add(id);
           this.fileSizes.set(id, file.size);
+          this.progressCache.set(id, {
+            status: "complete",
+            progress: 100,
+            downloadedBytes: file.size,
+            totalBytes: file.size
+          });
+          if (typeof window !== "undefined" && window.downloadQueueManager) {
+            window.downloadQueueManager.cachedDocIds.add(id);
+          }
           return true;
         }
       } catch (_) {}
@@ -209,6 +236,16 @@ class PdfCacheManager {
         const res = await this.cacheStorage.match(`/offline/doc_${id}.pdf`);
         if (res) {
           this.cachedIds.add(id);
+          const size = this.fileSizes.get(id) || 1;
+          this.progressCache.set(id, {
+            status: "complete",
+            progress: 100,
+            downloadedBytes: size,
+            totalBytes: size
+          });
+          if (typeof window !== "undefined" && window.downloadQueueManager) {
+            window.downloadQueueManager.cachedDocIds.add(id);
+          }
           return true;
         }
       } catch (_) {}
@@ -228,12 +265,17 @@ class PdfCacheManager {
     const size = this.fileSizes.get(id) || 0;
 
     if (isComplete) {
-      return {
+      const payload = {
         status: "complete",
         progress: 100,
         downloadedBytes: size,
         totalBytes: size
       };
+      this.progressCache.set(id, payload);
+      if (typeof window !== "undefined" && window.downloadQueueManager) {
+        window.downloadQueueManager.cachedDocIds.add(id);
+      }
+      return payload;
     }
 
     const cached = this.progressCache.get(id);

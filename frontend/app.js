@@ -4188,7 +4188,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const numericId = Number(doc.id);
       if (window.pdfCacheManager) {
         window.pdfCacheManager.isComplete(numericId).then(complete => {
-          if (complete && window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(numericId)) {
+          if (complete) {
+            if (window.downloadQueueManager) {
+              window.downloadQueueManager.cachedDocIds.add(numericId);
+            }
             updateDocCardCacheUI(numericId);
           }
         });
@@ -7298,14 +7301,40 @@ document.addEventListener("DOMContentLoaded", () => {
       const isTaskActive = window.downloadQueueManager && window.downloadQueueManager.activeTasks.has(id);
       const isTaskQueued = window.downloadQueueManager && window.downloadQueueManager.queue.includes(id);
       const isPaused = window.downloadQueueManager && window.downloadQueueManager.pausedTasks?.has(id);
-      const isCached = !isPaused && window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(id);
 
       const stats = window.pdfCacheManager ? window.pdfCacheManager.progressCache.get(id) : null;
-      const hasChunks = Boolean(stats && stats.downloadedBytes > 0);
+      const isStatsComplete = Boolean(
+        stats && (
+          stats.status === "complete" ||
+          stats.progress >= 100 ||
+          (stats.totalBytes > 0 && stats.downloadedBytes >= stats.totalBytes)
+        )
+      );
+      const isPcmCached = Boolean(
+        window.pdfCacheManager && (
+          window.pdfCacheManager.cachedIds.has(id) ||
+          isStatsComplete
+        )
+      );
+      const isCached = !isPaused && (
+        (window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(id)) ||
+        isPcmCached
+      );
 
-      if (!hasChunks && window.pdfCacheManager && !isTaskActive && !isTaskQueued && !isCached) {
+      if (isCached && window.downloadQueueManager && !window.downloadQueueManager.cachedDocIds.has(id)) {
+        window.downloadQueueManager.cachedDocIds.add(id);
+      }
+
+      const iconEl = card.querySelector(".goodnotes-row-icon.document");
+      if (iconEl) {
+        iconEl.classList.toggle("cached", Boolean(isCached));
+      }
+
+      const hasChunks = Boolean(stats && stats.downloadedBytes > 0 && !isCached);
+
+      if (!hasChunks && !isCached && window.pdfCacheManager && !isTaskActive && !isTaskQueued) {
         window.pdfCacheManager.getCachedStats(id).then(freshStats => {
-          if (freshStats && freshStats.downloadedBytes > 0) {
+          if (freshStats && (freshStats.status === "complete" || freshStats.progress >= 100 || freshStats.downloadedBytes > 0)) {
             updateDocCardCacheUI(id);
           }
         });
@@ -7341,7 +7370,7 @@ document.addEventListener("DOMContentLoaded", () => {
             <rect class="progress-stop-square" x="9.5" y="9.5" width="7" height="7" rx="1.5" fill="var(--accent)" />
           </svg>
         `;
-      } else if (isCached) {
+      } else if (isCached || isStatsComplete) {
         btn.className = "doc-cache-btn cached";
         btn.title = "Disponible hors-ligne (cliquer pour retirer du cache)";
         btn.innerHTML = `
@@ -7350,6 +7379,16 @@ document.addEventListener("DOMContentLoaded", () => {
           </svg>
         `;
       } else if (hasChunks || isPaused) {
+        if (stats && stats.totalBytes > 0 && stats.downloadedBytes >= stats.totalBytes) {
+          btn.className = "doc-cache-btn cached";
+          btn.title = "Disponible hors-ligne (cliquer pour retirer du cache)";
+          btn.innerHTML = `
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+          `;
+          return;
+        }
         const progress = stats && stats.totalBytes > 0
           ? Math.max(5, Math.min(95, Math.round((stats.downloadedBytes / stats.totalBytes) * 100)))
           : (stats?.progress || 10);

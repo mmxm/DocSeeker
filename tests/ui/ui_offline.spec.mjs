@@ -785,15 +785,14 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
   // O20 : Purge du cache par dossier (removeFolderFromCache & bouton UI)
   // ─────────────────────────────────────────────────────────────────────────
 
-  test('O20 - Purge du cache par dossier (removeFolderFromCache)', async ({ page }) => {
-    // 1. Initialisation et mise en cache des docs du dossier test
-    await page.evaluate(async () => {
-      if (window.downloadQueueManager) {
-        await window.downloadQueueManager.ensureInitialized();
-        // Mettre en cache doc 2
-        await window.downloadQueueManager.ensureDocumentIndexedLocally(2);
-      }
-    });
+  test('O20 - Purge du cache par dossier (removeFolderFromCache)', async ({ page, context }) => {
+    const h = new DocSeekerTestHarness(page, context);
+    await h.authenticate();
+    await h.goto('/');
+
+    // 1. Mettre en cache le doc 2 du dossier 130
+    await h.openFolder(130);
+    await h.ensureDocCached(2, { timeoutMs: 45000 });
 
     // 2. Vérifier que la méthode removeFolderFromCache purge correctement les documents du dossier
     const purged = await page.evaluate(async () => {
@@ -808,6 +807,54 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
 
     expect(purged).toBe(true);
     console.log('✅ [O20] Purge du cache par dossier (removeFolderFromCache) validée avec succès.');
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // O21 : Non-Régression : Document complet en OPFS détecté à 100% (pas 95% partiel)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  test('O21 - Non-Régression : Document complet en OPFS détecté à 100% (pas 95% partiel) dans l\'explorateur', async ({ page, context }) => {
+    const h = new DocSeekerTestHarness(page, context);
+    await h.authenticate();
+    await h.goto('/');
+
+    // 1. Mettre le document 2 entièrement en cache
+    await h.openFolder(130);
+    await h.ensureDocCached(2, { clean: true, timeoutMs: 45000 });
+
+    // 2. Vérifier que window.downloadQueueManager et window.pdfCacheManager considèrent tous deux le doc comme complet
+    const isCachedBoth = await page.evaluate(async () => {
+      const dqm = window.downloadQueueManager?.isDocumentCached(2);
+      const pcm = await window.pdfCacheManager?.isComplete(2);
+      return Boolean(dqm && pcm);
+    });
+    expect(isCachedBoth).toBe(true);
+
+    // 3. Recharger la page pour tester la détection au démarrage depuis OPFS / CacheStorage
+    await page.reload();
+    await h.goto('/');
+    await h.openFolder(130);
+
+    const doc2Card = await h.getDocCard(2);
+    await expect(doc2Card).toBeVisible({ timeout: 10000 });
+
+    // 4. Vérifier que le bouton de cache affiche l'état "cached" (100% complet) et NON le faux état "95% partiel"
+    const cacheBtn = doc2Card.locator('.doc-cache-btn');
+    await expect(cacheBtn).toHaveClass(/cached/, { timeout: 10000 });
+    const btnTitle = await cacheBtn.getAttribute('title');
+    expect(btnTitle).not.toContain('95%');
+    expect(btnTitle).not.toContain('Cache partiel');
+    expect(btnTitle).toContain('Disponible hors-ligne');
+
+    // 5. Ouvrir le document : le badge du viewer doit immédiatement afficher "⚡ En cache"
+    await doc2Card.locator('.doc-title-main').click();
+    await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
+    const badge = page.locator('#viewerCacheBadge');
+    await expect(badge).toBeVisible({ timeout: 10000 });
+    await expect(badge).toHaveClass(/complete/);
+    await expect(badge).toContainText('En cache');
+
+    console.log('✅ [O21] Document complet en OPFS bien détecté à 100% (jamais 95% partiel) dans l\'explorateur et le viewer.');
   });
 });
 
