@@ -369,7 +369,57 @@ if (nephroDoc) {
   console.log(`✅ Parité absolue validée via process_search_results_wasm : Titre p. ${firstVignette.page_number} en 1ère vignette et 25 vignettes générées !`);
 }
 
+// 5. Test spécifique de migration de schéma rétrocompatible (ex: doc_type manquant sur base OPFS client existante)
+console.log("\n--- TEST MIGRATION ET RÉSILIENCE doc_type SUR BASE HÉRITÉE ---");
+const legacyDb = new DatabaseSync(":memory:");
+legacyDb.exec(`
+  CREATE TABLE documents (
+    id INTEGER PRIMARY KEY,
+    filename TEXT NOT NULL,
+    title TEXT,
+    folder_id INTEGER,
+    total_pages INTEGER DEFAULT 0,
+    file_size INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    status TEXT DEFAULT 'ready'
+  );
+  INSERT INTO documents (id, filename, title, folder_id, total_pages, file_size)
+  VALUES (1, 'legacy.pdf', 'Legacy PDF Document', 10, 10, 1024);
+`);
+
+// Simulation de ensureColumn et de la migration
+function ensureColumnNode(db, table, column, colType) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  const exists = cols.some(c => c.name === column);
+  if (!exists) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${colType}`);
+  }
+}
+
+// Vérifier que doc_type est absent initialement
+let tableInfo = legacyDb.prepare("PRAGMA table_info(documents)").all();
+assert.equal(tableInfo.some(c => c.name === "doc_type"), false, "La base legacy ne doit pas avoir doc_type initialement");
+
+// Appliquer la migration comme le fait le worker
+ensureColumnNode(legacyDb, "documents", "doc_type", "TEXT DEFAULT 'pdf'");
+
+// Vérifier que doc_type est maintenant présent
+tableInfo = legacyDb.prepare("PRAGMA table_info(documents)").all();
+assert.equal(tableInfo.some(c => c.name === "doc_type"), true, "doc_type doit exister après la migration");
+
+// Vérifier que la requête getAllCachedDocuments s'exécute sans erreur
+const cachedDocs = legacyDb.prepare(`
+  SELECT id, filename, title, folder_id, total_pages, file_size, created_at, updated_at, COALESCE(doc_type, 'pdf') as doc_type
+  FROM documents WHERE status != 'meta-only' ORDER BY title ASC
+`).all();
+
+assert.equal(cachedDocs.length, 1);
+assert.equal(cachedDocs[0].doc_type, 'pdf');
+console.log("✅ Migration automatique de doc_type et requête getAllCachedDocuments validées avec succès !");
+
 console.log("\n===============================================================================");
 console.log(" TOUS LES TESTS DU MOTEUR HORS-LIGNE & SCORING ONT RÉUSSI AVEC SUCCÈS ! (100%)");
 console.log("===============================================================================");
+
 

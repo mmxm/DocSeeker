@@ -193,6 +193,50 @@ async function repairDatabase() {
   return !!db; // les opérations suivantes retentent sur la base neuve
 }
 
+// Migration idempotente pour ajouter une colonne si elle manque dans une base locale existante
+function ensureColumn(table, column, colType) {
+  if (!db) return;
+  try {
+    let exists = false;
+    db.exec({
+      sql: `PRAGMA table_info(${table})`,
+      callback: (row) => {
+        if (row[1] === column) exists = true;
+      }
+    });
+    if (!exists) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${colType}`);
+      console.log(`[OfflineSearchWorker] Migration : colonne ${column} ajoutée à la table ${table}`);
+    }
+  } catch (e) {
+    console.warn(`[OfflineSearchWorker] Erreur ensureColumn(${table}, ${column}):`, e);
+  }
+}
+
+function applyLocalDbMigrations() {
+  if (!db) return;
+  try {
+    ensureColumn('documents', 'file_hash', 'TEXT');
+    ensureColumn('documents', 'folder_id', 'INTEGER');
+    ensureColumn('documents', 'doc_type', "TEXT DEFAULT 'pdf'");
+    ensureColumn('documents', 'status', "TEXT DEFAULT 'ready'");
+    ensureColumn('documents', 'error_message', 'TEXT');
+    ensureColumn('documents', 'total_pages', 'INTEGER DEFAULT 0');
+    ensureColumn('documents', 'file_size', 'INTEGER DEFAULT 0');
+    ensureColumn('documents', 'created_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP');
+    ensureColumn('documents', 'updated_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP');
+    ensureColumn('documents', 'deleted_at', 'DATETIME');
+
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_documents_doc_type ON documents(doc_type);
+      CREATE INDEX IF NOT EXISTS idx_documents_folder_id ON documents(folder_id);
+      CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
+    `);
+  } catch (e) {
+    console.warn('[OfflineSearchWorker] Erreur applyLocalDbMigrations:', e);
+  }
+}
+
 // Initialisation de la base SQLite locale et du module Wasm partagé
 async function init() {
   if (isReady) return true;
@@ -265,6 +309,9 @@ async function init() {
       // intempestives lors de la resynchronisation des dossiers
       const schemaSql = get_schema_sql();
       db.exec(`PRAGMA foreign_keys = OFF;\n` + schemaSql);
+
+      // Migrations rétrocompatibles pour les colonnes récemment ajoutées
+      applyLocalDbMigrations();
 
       // Sonde d'intégrité : un index FTS5 external-content corrompu échoue dès la
       // première lecture (SQLITE_CORRUPT_VTAB). Mieux vaut réparer maintenant que
@@ -638,8 +685,9 @@ function getAllCachedDocuments() {
   if (!db) return [];
   const docs = [];
   try {
+    ensureColumn('documents', 'doc_type', "TEXT DEFAULT 'pdf'");
     db.exec({
-      sql: `SELECT id, filename, title, folder_id, total_pages, file_size, created_at, updated_at, doc_type FROM documents WHERE status != 'meta-only' ORDER BY title ASC`,
+      sql: `SELECT id, filename, title, folder_id, total_pages, file_size, created_at, updated_at, COALESCE(doc_type, 'pdf') FROM documents WHERE status != 'meta-only' ORDER BY title ASC`,
       callback: (row) => {
         docs.push({
           id: row[0],
@@ -660,6 +708,30 @@ function getAllCachedDocuments() {
     });
   } catch (e) {
     console.error('[OfflineSearchWorker] Erreur getAllCachedDocuments:', e);
+    try {
+      db.exec({
+        sql: `SELECT id, filename, title, folder_id, total_pages, file_size, created_at, updated_at FROM documents WHERE status != 'meta-only' ORDER BY title ASC`,
+        callback: (row) => {
+          docs.push({
+            id: row[0],
+            filename: row[1],
+            title: row[2] || row[1],
+            folder_id: row[3],
+            total_pages: row[4] || 0,
+            file_size: row[5] || 0,
+            created_at: row[6],
+            updated_at: row[7],
+            doc_type: (row[1] && (row[1].endsWith('.md') || row[1].endsWith('.markdown')) ? 'markdown' : 'pdf'),
+            cover_url: `/api/cover/${row[0]}`,
+            status: 'ready',
+            total_occurrences: 0,
+            vignettes: []
+          });
+        }
+      });
+    } catch (fallbackErr) {
+      console.error('[OfflineSearchWorker] Erreur fallback getAllCachedDocuments:', fallbackErr);
+    }
   }
   return docs;
 }
