@@ -7531,7 +7531,16 @@ document.addEventListener("DOMContentLoaded", () => {
     isSyncing: false,
 
     async runSync() {
-      if (this.isSyncing) return;
+      // Si une synchronisation est déjà en vol (ex. déclenchée par l'événement
+      // "online" juste avant un appel explicite), on attend SA fin au lieu de
+      // retourner immédiatement : l'appelant (tests, rétablissement réseau)
+      // doit pouvoir considérer le push des dirty files comme terminé (issue #12).
+      if (this._syncPromise) return this._syncPromise;
+      this._syncPromise = this._doRunSync().finally(() => { this._syncPromise = null; });
+      return this._syncPromise;
+    },
+
+    async _doRunSync() {
       this.isSyncing = true;
       try {
         function toUnixSecs(val) {
