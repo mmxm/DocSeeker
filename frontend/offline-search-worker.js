@@ -452,25 +452,27 @@ function stripMarkdown(md) {
     .trim();
 }
 
-function indexMarkdownDocument({ docId, filename, title, content }) {
+function indexMarkdownDocument({ docId, filename, title, folder_id, content }) {
   if (!db || !filename) return false;
   const cleanText = stripMarkdown(content);
   const now = new Date().toISOString();
   const numericId = Number(docId) || Math.floor(Math.random() * 1000000000);
+  const targetFolderId = (folder_id !== undefined && folder_id !== null) ? Number(folder_id) : null;
 
   db.transaction(() => {
     // 1. Insertion ou mise à jour du document markdown
     db.exec({
-      sql: `INSERT INTO documents (id, filename, title, total_pages, file_size, status, doc_type, created_at, updated_at)
-            VALUES (?1, ?2, ?3, 1, ?4, 'ready', 'markdown', ?5, ?5)
+      sql: `INSERT INTO documents (id, filename, title, folder_id, total_pages, file_size, status, doc_type, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, 1, ?5, 'ready', 'markdown', ?6, ?6)
             ON CONFLICT(id) DO UPDATE SET
               filename = excluded.filename,
               title = excluded.title,
+              folder_id = COALESCE(excluded.folder_id, documents.folder_id),
               file_size = excluded.file_size,
               status = 'ready',
               doc_type = 'markdown',
               updated_at = excluded.updated_at`,
-      bind: [numericId, filename, title || filename, (content || '').length, now]
+      bind: [numericId, filename, title || filename, targetFolderId, (content || '').length, now]
     });
 
     // 2. Nettoyage des anciennes pages pour ce document

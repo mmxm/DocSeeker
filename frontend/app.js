@@ -800,9 +800,10 @@ document.addEventListener("DOMContentLoaded", () => {
               }
             }, 3500);
           }
-          // Rafraîchir les documents sans perdre le focus
+          // Rafraîchir l'arborescence et les documents sans perdre le focus ni le scroll
+          clearFolderDocsCache();
           if (!currentSearchQuery) {
-            loadFoldersAndDocuments();
+            loadFoldersAndDocuments(true);
           }
         } else {
           if (pipelineStatusBadge && !isPipelineActive) {
@@ -1567,6 +1568,43 @@ document.addEventListener("DOMContentLoaded", () => {
   const refreshCachedDocsBtn = document.getElementById("refreshCachedDocsBtn");
   if (refreshCachedDocsBtn) {
     refreshCachedDocsBtn.addEventListener("click", () => refreshDownloadsView());
+  }
+
+  function updateDownloadsBadge(queueCount = 0, activeCount = 0) {
+    if (!navDownloadsBadge) return;
+    const total = (queueCount || 0) + (activeCount || 0);
+    if (total > 0) {
+      navDownloadsBadge.textContent = total;
+      navDownloadsBadge.style.display = "inline-flex";
+    } else {
+      navDownloadsBadge.style.display = "none";
+    }
+  }
+
+  if (window.downloadQueueManager) {
+    window.downloadQueueManager.addListener((state) => {
+      // 1. Mettre à jour le badge Transferts dans la barre latérale
+      updateDownloadsBadge(state.queueCount, state.activeCount);
+
+      // 2. Si la vue transferts est active, la rafraîchir
+      if (viewDownloads && viewDownloads.classList.contains("active")) {
+        refreshDownloadsView();
+      }
+
+      // 3. Mettre à jour l'état visuel du cache sur toutes les cartes affichées
+      if (Array.isArray(currentLoadedDocs)) {
+        currentLoadedDocs.forEach(d => {
+          if (typeof updateDocCardCacheUI === "function") {
+            updateDocCardCacheUI(d.id);
+          }
+        });
+      }
+
+      // 4. Si le filtre hors-ligne est actif, rafraîchir l'arborescence
+      if (filterOfflineOnly && filterOfflineOnly.checked && !isSearchActive && !currentSearchQuery) {
+        loadFoldersAndDocuments(true);
+      }
+    });
   }
 
   // Chargement et affichage des sessions actives
@@ -3365,14 +3403,17 @@ document.addEventListener("DOMContentLoaded", () => {
   window.loadDocuments = () => loadFoldersAndDocuments();
   const loadDocuments = () => loadFoldersAndDocuments();
 
-  async function loadFoldersAndDocuments() {
+  async function loadFoldersAndDocuments(preserveScroll = false) {
     const currentSeq = ++loadFoldersSeq;
     isSearchActive = false;
     currentSearchQuery = "";
     lastSearchResultsData = null;
-    savedGeneralResultsScrollTop = 0;
+    const previousScroll = preserveScroll ? (resultsPane ? resultsPane.scrollTop : savedGeneralResultsScrollTop) : 0;
+    if (!preserveScroll) {
+      savedGeneralResultsScrollTop = 0;
+      resultsContainer.innerHTML = "";
+    }
     foldersSection.style.display = "";
-    resultsContainer.innerHTML = "";
     if (searchStats) searchStats.textContent = "";
     if (clearSearchBtn && (!searchInput || !searchInput.value.trim())) {
       clearSearchBtn.style.display = "none";
@@ -3426,16 +3467,25 @@ document.addEventListener("DOMContentLoaded", () => {
           currentLoadedDocs = knownDocs.filter(d => d.folder_id === null || d.folder_id === undefined);
         }
         renderDocumentLibrary(currentLoadedDocs);
+        if (preserveScroll && resultsPane && previousScroll > 0) {
+          resultsPane.scrollTop = previousScroll;
+          savedGeneralResultsScrollTop = previousScroll;
+        }
         return;
       }
 
-      // Si les dossiers sont déjà en mémoire, afficher immédiatement les dossiers du niveau courant
+      // Si les dossiers sont déjà en mémoire, afficher immédiatement les dossiers du niveau courant (0 ms)
       if (Array.isArray(allFolders) && allFolders.length > 0) {
         const currentFolders = allFolders.filter(f => {
           if (currentFolderId === null) return f.parent_id === null || f.parent_id === undefined;
           return Number(f.parent_id) === Number(currentFolderId);
         });
-        renderFolders(currentFolders);
+        if (filterOfflineOnly && filterOfflineOnly.checked && window.downloadQueueManager) {
+          const visibleFolders = currentFolders.filter(f => window.downloadQueueManager.getCachedDocsCountForFolder(f.id) > 0);
+          renderFolders(visibleFolders);
+        } else {
+          renderFolders(currentFolders);
+        }
       }
 
       // Si les documents du dossier ne sont pas encore affichés, afficher les skeletons progressifs
@@ -3443,10 +3493,8 @@ document.addEventListener("DOMContentLoaded", () => {
         renderFolderLoadingSkeletons(4);
       }
 
-      // Charger tous les dossiers UNIQUEMENT si allFolders est encore vide
-      const foldersPromise = (!allFolders || allFolders.length === 0)
-        ? fetch("/api/folders").then(r => r.ok ? r.json() : null).catch(() => null)
-        : Promise.resolve(null);
+      // Toujours rafraîchir les dossiers depuis le serveur pour garantir l'exactitude des compteurs (doc_count)
+      const foldersPromise = fetch("/api/folders").then(r => r.ok ? r.json() : null).catch(() => null);
 
       // Charger en parallèle les documents du dossier courant
       const docFolderParam = currentFolderId ? currentFolderId : "root";
@@ -3460,7 +3508,12 @@ document.addEventListener("DOMContentLoaded", () => {
           if (currentFolderId === null) return f.parent_id === null || f.parent_id === undefined;
           return Number(f.parent_id) === Number(currentFolderId);
         });
-        renderFolders(currentFolders);
+        if (filterOfflineOnly && filterOfflineOnly.checked && window.downloadQueueManager) {
+          const visibleFolders = currentFolders.filter(f => window.downloadQueueManager.getCachedDocsCountForFolder(f.id) > 0);
+          renderFolders(visibleFolders);
+        } else {
+          renderFolders(currentFolders);
+        }
         if (window.downloadQueueManager) {
           window.downloadQueueManager.syncFolders(allFolders).catch(() => { });
         }
@@ -3520,6 +3573,10 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       renderDocumentLibrary(currentLoadedDocs);
+      if (preserveScroll && resultsPane && previousScroll > 0) {
+        resultsPane.scrollTop = previousScroll;
+        savedGeneralResultsScrollTop = previousScroll;
+      }
 
     } catch (err) {
       console.error("Erreur chargement arborescence:", err);
@@ -5473,6 +5530,11 @@ document.addEventListener("DOMContentLoaded", () => {
       setDocumentZoomLock(false);
       if (clearSearchBtn && searchInput) {
         clearSearchBtn.style.display = searchInput.value.trim() ? "flex" : "none";
+      }
+      // Rafraîchir l'arborescence et les documents au retour à l'accueil si aucune recherche n'est en cours
+      if (!currentSearchQuery) {
+        clearFolderDocsCache();
+        loadFoldersAndDocuments(true);
       }
     },
 
@@ -7966,18 +8028,35 @@ document.addEventListener("DOMContentLoaded", () => {
         await MarkdownStorage.markDirty(filename, "created");
         showToast("Note créée hors-ligne", "info");
         const fakeId = Date.now();
-        if (Array.isArray(currentLoadedDocs)) {
-          currentLoadedDocs.push({
-            id: fakeId,
+        const docMeta = {
+          id: fakeId,
+          filename: filename,
+          title: cleanTitle,
+          folder_id: targetFolderId,
+          doc_type: "markdown",
+          status: "ready"
+        };
+        if (window.downloadQueueManager) {
+          window.downloadQueueManager.cachedDocIds.add(fakeId);
+          if (Array.isArray(window.downloadQueueManager._libraryDocsList)) {
+            window.downloadQueueManager._libraryDocsList.push(docMeta);
+          }
+          if (Array.isArray(window.downloadQueueManager._cachedDocsList)) {
+            window.downloadQueueManager._cachedDocsList.push(docMeta);
+          }
+          window.downloadQueueManager.sendToWorker("INDEX_MARKDOWN_DOC", {
+            docId: fakeId,
             filename: filename,
             title: cleanTitle,
             folder_id: targetFolderId,
-            doc_type: "markdown",
-            status: "ready"
-          });
+            content: initialContent
+          }).catch(() => {});
+        }
+        if (Array.isArray(currentLoadedDocs)) {
+          currentLoadedDocs.push(docMeta);
         }
         clearFolderDocsCache();
-        loadFoldersAndDocuments();
+        await loadFoldersAndDocuments();
         openDocumentInSplitView(fakeId, cleanTitle, 1, []);
         this.loadNote(fakeId, filename, cleanTitle, initialContent);
         return;
@@ -8009,41 +8088,74 @@ document.addEventListener("DOMContentLoaded", () => {
         await MarkdownStorage.write(finalFname, initialContent);
         showToast("Note créée avec succès", "success");
 
-        clearFolderDocsCache();
-        loadFoldersAndDocuments();
+        const numDocId = Number(data.doc_id);
+        const docMeta = {
+          id: numDocId,
+          filename: finalFname,
+          title: cleanTitle,
+          folder_id: targetFolderId,
+          doc_type: "markdown",
+          status: "ready"
+        };
 
-        if (Array.isArray(currentLoadedDocs)) {
-          currentLoadedDocs.push({
-            id: data.doc_id,
+        if (window.downloadQueueManager && numDocId) {
+          window.downloadQueueManager.cachedDocIds.add(numDocId);
+          if (Array.isArray(window.downloadQueueManager._libraryDocsList)) {
+            window.downloadQueueManager._libraryDocsList.push(docMeta);
+          }
+          if (Array.isArray(window.downloadQueueManager._cachedDocsList)) {
+            window.downloadQueueManager._cachedDocsList.push(docMeta);
+          }
+          window.downloadQueueManager.sendToWorker("INDEX_MARKDOWN_DOC", {
+            docId: numDocId,
             filename: finalFname,
             title: cleanTitle,
             folder_id: targetFolderId,
-            doc_type: "markdown",
-            status: "ready"
-          });
+            content: initialContent
+          }).catch(() => {});
         }
 
-        if (data.doc_id) {
-          openDocumentInSplitView(data.doc_id, cleanTitle, 1, []);
-          this.loadNote(data.doc_id, finalFname, cleanTitle, initialContent);
+        clearFolderDocsCache();
+        await loadFoldersAndDocuments();
+
+        if (numDocId) {
+          openDocumentInSplitView(numDocId, cleanTitle, 1, []);
+          this.loadNote(numDocId, finalFname, cleanTitle, initialContent);
         }
       } catch (err) {
         console.error("[Markdown] Erreur création note distante :", err);
         await MarkdownStorage.markDirty(filename, "created");
         showToast("Note enregistrée localement (hors-ligne)", "warning");
         const fakeId = Date.now();
-        if (Array.isArray(currentLoadedDocs)) {
-          currentLoadedDocs.push({
-            id: fakeId,
+        const docMeta = {
+          id: fakeId,
+          filename: filename,
+          title: cleanTitle,
+          folder_id: targetFolderId,
+          doc_type: "markdown",
+          status: "ready"
+        };
+        if (window.downloadQueueManager) {
+          window.downloadQueueManager.cachedDocIds.add(fakeId);
+          if (Array.isArray(window.downloadQueueManager._libraryDocsList)) {
+            window.downloadQueueManager._libraryDocsList.push(docMeta);
+          }
+          if (Array.isArray(window.downloadQueueManager._cachedDocsList)) {
+            window.downloadQueueManager._cachedDocsList.push(docMeta);
+          }
+          window.downloadQueueManager.sendToWorker("INDEX_MARKDOWN_DOC", {
+            docId: fakeId,
             filename: filename,
             title: cleanTitle,
             folder_id: targetFolderId,
-            doc_type: "markdown",
-            status: "ready"
-          });
+            content: initialContent
+          }).catch(() => {});
+        }
+        if (Array.isArray(currentLoadedDocs)) {
+          currentLoadedDocs.push(docMeta);
         }
         clearFolderDocsCache();
-        loadFoldersAndDocuments();
+        await loadFoldersAndDocuments();
         openDocumentInSplitView(fakeId, cleanTitle, 1, []);
         this.loadNote(fakeId, filename, cleanTitle, initialContent);
       }
@@ -8298,10 +8410,19 @@ document.addEventListener("DOMContentLoaded", () => {
           window.downloadQueueManager.cachedDocIds.add(Number(docId));
           if (typeof updateDocCardCacheUI === "function") updateDocCardCacheUI(Number(docId));
         }
+        let knownFolderId = null;
+        if (window.downloadQueueManager) {
+          const doc = window.downloadQueueManager._cachedDocsList?.find(d => Number(d.id) === Number(docId))
+            || window.downloadQueueManager._libraryDocsList?.find(d => Number(d.id) === Number(docId));
+          if (doc && doc.folder_id !== undefined) {
+            knownFolderId = doc.folder_id;
+          }
+        }
         window.downloadQueueManager.sendToWorker("INDEX_MARKDOWN_DOC", {
           docId: docId,
           filename: fname,
           title: title,
+          folder_id: knownFolderId,
           content: markdown
         }).catch(() => {});
       }

@@ -477,6 +477,41 @@ assert.equal(subfolderTitleResults[0].id, 9999);
 
 console.log("✅ Résolution récursive des sous-dossiers et filtrage IN (...) validés avec succès !");
 
+// 13. Test indexation d'une note Markdown avec folder_id dans SQLite client
+console.log("\n--- TEST INDEXATION ET RECHERCHE NOTE MARKDOWN DANS UN DOSSIER ---");
+const mdInsertStmt = clientDb.prepare(`
+  INSERT INTO documents (id, filename, title, folder_id, total_pages, file_size, status, doc_type, created_at, updated_at)
+  VALUES (?1, ?2, ?3, ?4, 1, ?5, 'ready', 'markdown', ?6, ?6)
+  ON CONFLICT(id) DO UPDATE SET
+    filename = excluded.filename,
+    title = excluded.title,
+    folder_id = COALESCE(excluded.folder_id, documents.folder_id),
+    file_size = excluded.file_size,
+    status = 'ready',
+    doc_type = 'markdown',
+    updated_at = excluded.updated_at
+`);
+const mdDocId = 8888;
+const mdFilename = "Cardiologie/HTA_recommandations.md";
+const mdTitle = "HTA recommandations";
+const mdFolderId = 901; // Sous-dossier Hépatologie & Gastro
+const mdContent = "# HTA et Recommandations\n\nPrise en charge de l'hypertension artérielle résistante.";
+
+mdInsertStmt.run(mdDocId, mdFilename, mdTitle, mdFolderId, mdContent.length, "2026-02-01");
+insertPageStmt.run(mdDocId, 1, "Prise en charge de l'hypertension artérielle résistante", "[]");
+
+// Vérifier que le document a bien été enregistré avec doc_type = 'markdown' et folder_id = 901
+const insertedMd = clientDb.prepare("SELECT id, filename, title, folder_id, doc_type FROM documents WHERE id = ?").get(mdDocId);
+assert.equal(insertedMd.doc_type, "markdown");
+assert.equal(insertedMd.folder_id, 901);
+
+// Vérifier la recherche récursive sur le dossier parent 900
+const mdSearchSql = JSON.parse(build_search_sql_with_folders_wasm("hypertension", JSON.stringify(resolvedFolderIds), 10, 0));
+const mdSearchResults = clientDb.prepare(mdSearchSql.sql).all();
+assert.equal(mdSearchResults.length, 1);
+assert.equal(mdSearchResults[0].doc_id, mdDocId);
+console.log("✅ Indexation et recherche de note Markdown dans un dossier validées avec succès !");
+
 console.log("\n===============================================================================");
 console.log(" TOUS LES TESTS DU MOTEUR HORS-LIGNE & SCORING ONT RÉUSSI AVEC SUCCÈS ! (100%)");
 console.log("===============================================================================");

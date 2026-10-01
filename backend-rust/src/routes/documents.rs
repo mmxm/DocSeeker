@@ -26,6 +26,8 @@ pub struct DocumentListItem {
     pub created_at: String,
     pub updated_at: String,
     pub cover_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc_type: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -67,15 +69,15 @@ pub async fn list_documents(
 
     let sql = match query.folder_id.as_deref() {
         Some("root") => {
-            "SELECT id, filename, title, folder_id, COALESCE(status, 'ready'), error_message, total_pages, file_size, created_at, COALESCE(updated_at, created_at) \
+            "SELECT id, filename, title, folder_id, COALESCE(status, 'ready'), error_message, total_pages, file_size, created_at, COALESCE(updated_at, created_at), COALESCE(doc_type, 'pdf') \
              FROM documents WHERE folder_id IS NULL ORDER BY title ASC"
         }
         Some(fid) if fid.parse::<i64>().is_ok() => {
-            "SELECT id, filename, title, folder_id, COALESCE(status, 'ready'), error_message, total_pages, file_size, created_at, COALESCE(updated_at, created_at) \
+            "SELECT id, filename, title, folder_id, COALESCE(status, 'ready'), error_message, total_pages, file_size, created_at, COALESCE(updated_at, created_at), COALESCE(doc_type, 'pdf') \
              FROM documents WHERE folder_id = ?1 ORDER BY title ASC"
         }
         _ => {
-            "SELECT id, filename, title, folder_id, COALESCE(status, 'ready'), error_message, total_pages, file_size, created_at, COALESCE(updated_at, created_at) \
+            "SELECT id, filename, title, folder_id, COALESCE(status, 'ready'), error_message, total_pages, file_size, created_at, COALESCE(updated_at, created_at), COALESCE(doc_type, 'pdf') \
              FROM documents ORDER BY title ASC"
         }
     };
@@ -124,6 +126,7 @@ fn map_doc_row(row: &rusqlite::Row) -> rusqlite::Result<DocumentListItem> {
         created_at: row.get(8)?,
         updated_at: row.get(9)?,
         cover_url: format!("/api/cover/{}", id),
+        doc_type: row.get(10).ok(),
     })
 }
 
