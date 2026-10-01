@@ -273,4 +273,32 @@ fn test_visual_line_grouping_securite_sociale() {
     assert_eq!(occs[0].rect[2], 339.5);
 }
 
+#[test]
+fn test_crop_in_memory_lru_cache_and_deduplication() {
+    use lru::LruCache;
+    use std::num::NonZeroUsize;
+
+    let mut cache: LruCache<String, Vec<u8>> = LruCache::new(NonZeroUsize::new(2).unwrap());
+    let key1 = "crop:1:1:0:hash1:term1".to_string();
+    let key2 = "crop:1:2:0:hash2:term2".to_string();
+    let key3 = "crop:1:3:0:hash3:term3".to_string();
+
+    let bytes1 = vec![1, 2, 3, 4];
+    let bytes2 = vec![5, 6, 7, 8];
+    let bytes3 = vec![9, 10, 11, 12];
+
+    cache.put(key1.clone(), bytes1.clone());
+    cache.put(key2.clone(), bytes2.clone());
+
+    // Vérifier que key1 est en cache
+    assert_eq!(cache.get(&key1), Some(&bytes1));
+
+    // Ajouter key3 : doit évincer le plus ancien (key2 car key1 a été accédé récemment)
+    cache.put(key3.clone(), bytes3.clone());
+
+    assert_eq!(cache.get(&key1), Some(&bytes1));
+    assert_eq!(cache.get(&key3), Some(&bytes3));
+    assert_eq!(cache.get(&key2), None, "key2 aurait dû être évincée du cache LRU");
+}
+
 

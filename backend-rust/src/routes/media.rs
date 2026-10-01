@@ -20,20 +20,21 @@ pub struct CropQueryParams {
     pub terms: Option<String>,
 }
 
-/// Helper pour servir des octets d'image WebP générés à la volée.
-/// `cache_control: no-store` : les vignettes sont toujours fraîches, le navigateur
-/// ne doit jamais resservir une image obsolète (note éditée, image collée ajoutée...).
+/// Helper pour servir des octets d'image WebP générés.
+/// Le cache HTTP 7 jours avec ETag et stale-while-revalidate permet au navigateur
+/// d'afficher instantanément les vignettes déjà vues sans recharger le serveur NAS.
 async fn serve_image_bytes(
     bytes: Vec<u8>,
     etag: String,
     if_none_match: Option<&str>,
 ) -> Response {
+    let cache_control = "public, max-age=604800, stale-while-revalidate=86400";
     if let Some(req_etag) = if_none_match {
         if req_etag == etag {
             return Response::builder()
                 .status(StatusCode::NOT_MODIFIED)
                 .header(header::ETAG, etag)
-                .header(header::CACHE_CONTROL, "no-store")
+                .header(header::CACHE_CONTROL, cache_control)
                 .body(Body::empty())
                 .unwrap_or_else(|_| (StatusCode::NOT_MODIFIED, "").into_response());
         }
@@ -43,7 +44,7 @@ async fn serve_image_bytes(
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "image/webp"),
-            (header::CACHE_CONTROL, "no-store"),
+            (header::CACHE_CONTROL, cache_control),
             (header::ETAG, etag.as_str()),
         ],
         bytes,
@@ -51,13 +52,24 @@ async fn serve_image_bytes(
         .into_response()
 }
 
-/// GET /api/cover/{doc_id} — génération à la volée, AUCUN cache disque.
+/// GET /api/cover/{doc_id} — génération à la volée avec cache.
 pub async fn get_cover(
     State(state): State<Arc<AppState>>,
     Path(doc_id): Path<i64>,
     headers: HeaderMap,
 ) -> Response {
     let if_none_match = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
+    let etag = format!("\"cover-{}\"", doc_id);
+
+    // Vérifier le cache en mémoire pour la couverture sans détenir le verrou à travers await
+    let cache_key = format!("cover:{}", doc_id);
+    let cached_hit = {
+        let mut cache = state.crop_cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.get(&cache_key).cloned()
+    };
+    if let Some(cached_bytes) = cached_hit {
+        return serve_image_bytes(cached_bytes, etag, if_none_match).await;
+    }
 
     // 1. Vérification DB : récupérer le nom, l'état et le type du document
     let (filename, status, doc_type): (Option<String>, Option<String>, Option<String>) = {
@@ -121,7 +133,10 @@ pub async fn get_cover(
 
     match render_res {
         Ok(Ok(bytes)) => {
-            let etag = format!("\"cover-{}\"", doc_id);
+            {
+                let mut cache = state.crop_cache.lock().unwrap_or_else(|e| e.into_inner());
+                cache.put(cache_key, bytes.clone());
+            }
             serve_image_bytes(bytes, etag, if_none_match).await
         },
         Ok(Err(e)) => {
@@ -135,7 +150,7 @@ pub async fn get_cover(
     }
 }
 
-/// GET /api/crop/{doc_id}/{page}/{occ_id} — génération à la volée, AUCUN cache disque.
+/// GET /api/crop/{doc_id}/{page}/{occ_id} — génération optimisée avec cache LRU en mémoire et dédoublonnage.
 pub async fn get_crop(
     State(state): State<Arc<AppState>>,
     Path((doc_id, page, occ_id)): Path<(i64, i64, usize)>,
@@ -146,22 +161,69 @@ pub async fn get_crop(
     let terms = params.terms.unwrap_or_default();
     let if_none_match = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
 
-    // 1. Récupération des données en base avec libération IMMÉDIATE du verrou SQLite
+    let cache_key = format!("crop:{}:{}:{}:{}:{}", doc_id, page, occ_id, query_hash, terms);
+    let etag = format!("\"crop-{}-{}-{}-{}\"", doc_id, page, occ_id, query_hash);
+
+    // 1. Vérification immédiate du cache LRU en mémoire sans tenir le verrou sur await
+    let cached_hit = {
+        let mut cache = state.crop_cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.get(&cache_key).cloned()
+    };
+    if let Some(cached_bytes) = cached_hit {
+        return serve_image_bytes(cached_bytes, etag, if_none_match).await;
+    }
+
+    // 2. Dédoublonnage des requêtes concurrentes identiques en vol
+    let my_notify = {
+        let mut in_flight = state.crop_in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(notify) = in_flight.get(&cache_key) {
+            Some(Arc::clone(notify))
+        } else {
+            let notify = Arc::new(tokio::sync::Notify::new());
+            in_flight.insert(cache_key.clone(), Arc::clone(&notify));
+            None
+        }
+    };
+
+    if let Some(notify) = my_notify {
+        notify.notified().await;
+        let cached_after_wait = {
+            let mut cache = state.crop_cache.lock().unwrap_or_else(|e| e.into_inner());
+            cache.get(&cache_key).cloned()
+        };
+        if let Some(cached_bytes) = cached_after_wait {
+            return serve_image_bytes(cached_bytes, etag, if_none_match).await;
+        }
+    }
+
+    // 3. Récupération des données en base avec libération IMMÉDIATE du verrou SQLite
     let (filename, doc_type) = {
         let conn = match state.db.get() {
             Ok(c) => c,
-            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur DB").into_response(),
+            Err(_) => {
+                let mut in_flight = state.crop_in_flight.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(n) = in_flight.remove(&cache_key) { n.notify_waiters(); }
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur DB").into_response();
+            }
         };
         let mut stmt = match conn.prepare(
             "SELECT filename, COALESCE(doc_type, 'pdf') FROM documents WHERE id = ?1",
         ) {
             Ok(s) => s,
-            Err(_) => return (StatusCode::NOT_FOUND, "Document introuvable").into_response(),
+            Err(_) => {
+                let mut in_flight = state.crop_in_flight.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(n) = in_flight.remove(&cache_key) { n.notify_waiters(); }
+                return (StatusCode::NOT_FOUND, "Document introuvable").into_response();
+            }
         };
 
         match stmt.query_row(params![doc_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
             Ok(val) => val,
-            Err(_) => return (StatusCode::NOT_FOUND, "Document introuvable").into_response(),
+            Err(_) => {
+                let mut in_flight = state.crop_in_flight.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(n) = in_flight.remove(&cache_key) { n.notify_waiters(); }
+                return (StatusCode::NOT_FOUND, "Document introuvable").into_response();
+            }
         }
     };
 
@@ -181,12 +243,26 @@ pub async fn get_crop(
             None => Err("Fichier note introuvable sur disque".to_string()),
         };
 
+        let notify_to_trigger = {
+            let mut in_flight = state.crop_in_flight.lock().unwrap_or_else(|e| e.into_inner());
+            in_flight.remove(&cache_key)
+        };
+
         match md_bytes {
             Ok(bytes) if !bytes.is_empty() => {
-                let etag = format!("\"crop-{}-{}-{}\"", doc_id, page, occ_id);
+                {
+                    let mut cache = state.crop_cache.lock().unwrap_or_else(|e| e.into_inner());
+                    cache.put(cache_key, bytes.clone());
+                }
+                if let Some(notify) = notify_to_trigger {
+                    notify.notify_waiters();
+                }
                 return serve_image_bytes(bytes, etag, if_none_match).await;
             }
             _ => {
+                if let Some(notify) = notify_to_trigger {
+                    notify.notify_waiters();
+                }
                 // Fallback sur la couverture du document si l'extrait n'a pas pu aboutir
                 let cover_state = Arc::clone(&state);
                 let cover_bytes = tokio::task::spawn_blocking(move || {
@@ -202,8 +278,8 @@ pub async fn get_crop(
                 }).await.unwrap_or(None);
 
                 if let Some(bytes) = cover_bytes {
-                    let etag = format!("\"cover-{}\"", doc_id);
-                    return serve_image_bytes(bytes, etag, if_none_match).await;
+                    let cover_etag = format!("\"cover-{}\"", doc_id);
+                    return serve_image_bytes(bytes, cover_etag, if_none_match).await;
                 }
                 return (StatusCode::NOT_FOUND, "Vignette Markdown introuvable").into_response();
             }
@@ -213,26 +289,42 @@ pub async fn get_crop(
     let words_json = {
         let conn = match state.db.get() {
             Ok(c) => c,
-            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur DB").into_response(),
+            Err(_) => {
+                let mut in_flight = state.crop_in_flight.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(n) = in_flight.remove(&cache_key) { n.notify_waiters(); }
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur DB").into_response();
+            }
         };
         let mut stmt = match conn.prepare(
             "SELECT words_json FROM pages WHERE doc_id = ?1 AND page_number = ?2",
         ) {
             Ok(s) => s,
-            Err(_) => return (StatusCode::NOT_FOUND, "Page introuvable").into_response(),
+            Err(_) => {
+                let mut in_flight = state.crop_in_flight.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(n) = in_flight.remove(&cache_key) { n.notify_waiters(); }
+                return (StatusCode::NOT_FOUND, "Page introuvable").into_response();
+            }
         };
 
         match stmt.query_row(params![doc_id, page], |r| r.get::<_, Option<String>>(0)) {
             Ok(Some(w)) => w,
             Ok(None) => "[]".to_string(),
-            Err(_) => return (StatusCode::NOT_FOUND, "Page introuvable").into_response(),
+            Err(_) => {
+                let mut in_flight = state.crop_in_flight.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(n) = in_flight.remove(&cache_key) { n.notify_waiters(); }
+                return (StatusCode::NOT_FOUND, "Page introuvable").into_response();
+            }
         }
     };
 
-    // 2. Acquisition d'un permis de rendu Pdfium dynamique
+    // 4. Acquisition d'un permis de rendu Pdfium dynamique
     let permit = match state.crop_semaphore.clone().acquire_owned().await {
         Ok(p) => p,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur sémaphore").into_response(),
+        Err(_) => {
+            let mut in_flight = state.crop_in_flight.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(n) = in_flight.remove(&cache_key) { n.notify_waiters(); }
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur sémaphore").into_response();
+        }
     };
 
     let state_clone = Arc::clone(&state);
@@ -251,14 +343,30 @@ pub async fn get_crop(
         )
     }).await {
         Ok(res) => res,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur génération vignette").into_response(),
+        Err(_) => {
+            let mut in_flight = state.crop_in_flight.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(n) = in_flight.remove(&cache_key) { n.notify_waiters(); }
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur génération vignette").into_response();
+        }
     };
 
+    // 5. Mise en cache LRU et notification des requêtes en attente
+    let notify_to_trigger = {
+        let mut in_flight = state.crop_in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        in_flight.remove(&cache_key)
+    };
+
+    if let Some(ref bytes) = crop_bytes {
+        let mut cache = state.crop_cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.put(cache_key, bytes.clone());
+    }
+
+    if let Some(notify) = notify_to_trigger {
+        notify.notify_waiters();
+    }
+
     match crop_bytes {
-        Some(bytes) => {
-            let etag = format!("\"crop-{}-{}-{}\"", doc_id, page, occ_id);
-            serve_image_bytes(bytes, etag, if_none_match).await
-        }
+        Some(bytes) => serve_image_bytes(bytes, etag, if_none_match).await,
         None => (StatusCode::NOT_FOUND, "Vignette introuvable").into_response(),
     }
 }

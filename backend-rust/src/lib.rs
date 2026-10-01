@@ -8,6 +8,7 @@ pub mod routes;
 pub mod search;
 pub mod static_files;
 
+use lru::LruCache;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -26,5 +27,6 @@ pub struct AppState {
     pub rate_limiter: Arc<LoginRateLimiter>,
     pub crop_semaphore: Arc<tokio::sync::Semaphore>,
     pub crop_in_flight: Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
+    pub crop_cache: Arc<Mutex<LruCache<String, Vec<u8>>>>,
 }
 

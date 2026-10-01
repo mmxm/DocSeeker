@@ -70,7 +70,7 @@ impl PdfEngine {
 
         Ok(Self {
             pdfium: Arc::new(Mutex::new(pdfium)),
-            page_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(8).unwrap()))),
+            page_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(32).unwrap()))),
         })
     }
 

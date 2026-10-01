@@ -167,6 +167,7 @@ fn setup_test_state() -> (Arc<AppState>, String) {
         rate_limiter: Arc::new(LoginRateLimiter::new()),
         crop_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
         crop_in_flight: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        crop_cache: Arc::new(Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(100).unwrap()))),
     });
 
     // Garder le répertoire temporaire en vie via un leak (éviter la suppression prématurée)
