@@ -974,6 +974,40 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
 
     console.log('✅ [Core-20] Défilement horizontal des onglets validé (overflow, molette, boutons et auto-scroll).');
   });
+
+  // Core-21 : Compacité verticale de la barre d'onglets (style GoodNotes <= 32px)
+  test('Core-21 - Compacité Verticale de la Barre d\'Onglets (Style GoodNotes)', async ({ page }) => {
+    test.setTimeout(30000);
+
+    // 1. Ouvrir un onglet
+    await page.evaluate(() => {
+      window.tabManager.openTab(1, 'Document Test Compacité', 1);
+    });
+
+    const tabBar = page.locator('#readerTopTabBar');
+    await expect(tabBar).toBeVisible({ timeout: 10000 });
+
+    // 2. Vérifier les dimensions compactes de la barre d'onglets (hauteur <= 34px, cible 32px)
+    const barBox = await tabBar.boundingBox();
+    expect(barBox).not.toBeNull();
+    expect(barBox.height).toBeLessThanOrEqual(34);
+    expect(barBox.height).toBeGreaterThanOrEqual(28);
+
+    // 3. Vérifier les dimensions compactes de l'onglet (hauteur <= 26px, cible 24px)
+    const tabItem = page.locator('.reader-tab-item').first();
+    const tabBox = await tabItem.boundingBox();
+    expect(tabBox).not.toBeNull();
+    expect(tabBox.height).toBeLessThanOrEqual(26);
+    expect(tabBox.height).toBeGreaterThanOrEqual(20);
+
+    // 4. Vérifier les dimensions compactes du bouton Home (hauteur <= 26px, cible 24px)
+    const homeBtn = page.locator('.reader-home-btn');
+    const homeBox = await homeBtn.boundingBox();
+    expect(homeBox).not.toBeNull();
+    expect(homeBox.height).toBeLessThanOrEqual(26);
+
+    console.log('✅ [Core-21] Compacité verticale de la barre d\'onglets validée (style GoodNotes <= 32px).');
+  });
 });
 
 
