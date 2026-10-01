@@ -1,13 +1,9 @@
 # Stage 0 : Minification des assets frontend (JS/CSS) — image Node.js Alpine ultra-légère
-#
-# Optimisation CI : `npm install -g` est isolé dans une couche AVANT le COPY
-# frontend/ — l'installation de terser/clean-css (réseau, ~10-20 s) n'est plus
-# relancée à chaque push qui modifie le frontend, seule la minification l'est.
 FROM node:20-alpine AS minifier
-RUN npm install -g terser clean-css-cli
 WORKDIR /minify
 COPY frontend/ ./frontend/
-RUN for f in frontend/app.js frontend/sw.js frontend/crop-worker.js \
+RUN npm install -g terser clean-css-cli && \
+    for f in frontend/app.js frontend/sw.js frontend/crop-worker.js \
              frontend/offline-search-worker.js frontend/download-queue-manager.js \
              frontend/pdf-cache.js frontend/worker-setup.js; do \
       if [ -f "$f" ]; then \
@@ -74,13 +70,6 @@ RUN mkdir -p lib && \
     if [ -f lib/lib/libpdfium.so ]; then cp lib/lib/libpdfium.so lib/libpdfium.so; fi
 
 # 3. Pré-compilation des dépendances tierces (mise en cache Docker pérenne)
-#
-# Optimisation CI : le stockage des artefacts cargo (registre + target) est
-# déplacé vers /cache-cargo, lui-même monté en cache BuildKit GHA (voir
-# docker-publish.yml : CACHE_BUILD_DIR=/cache-cargo, type=gha). La compilation
-# du binaire applicatif (étape 16/16) devient incrémentale : quand un seul
-# fichier de src/ change, seule la crate docseeker-backend recompile (~20-40 s)
-# au lieu d'un build release complet (~1,5 min par plateforme).
 RUN mkdir -p src && echo "fn main() {}" > src/main.rs && \
     ARCH="${TARGETARCH:-$(case $(uname -m) in aarch64|arm64) echo arm64;; *) echo amd64;; esac)}" && \
     case "$ARCH" in \
@@ -88,7 +77,6 @@ RUN mkdir -p src && echo "fn main() {}" > src/main.rs && \
         "arm64"|"aarch64") RUST_TARGET="aarch64-unknown-linux-gnu" ;; \
         *) echo "Architecture non supportée: $ARCH" && exit 1 ;; \
     esac && \
-    CARGO_HOME=/cache-cargo/cargo-home CARGO_TARGET_DIR=/cache-cargo/target-$RUST_TARGET \
     cargo build --release --target "$RUST_TARGET" && \
     rm -rf src target/"$RUST_TARGET"/release/deps/docseeker_backend* target/"$RUST_TARGET"/release/docseeker-backend*
 
@@ -106,9 +94,8 @@ RUN ARCH="${TARGETARCH:-$(case $(uname -m) in aarch64|arm64) echo arm64;; *) ech
         "arm64"|"aarch64") RUST_TARGET="aarch64-unknown-linux-gnu" ;; \
         *) echo "Architecture non supportée: $ARCH" && exit 1 ;; \
     esac && \
-    CARGO_HOME=/cache-cargo/cargo-home CARGO_TARGET_DIR=/cache-cargo/target-$RUST_TARGET \
     cargo build --release --target "$RUST_TARGET" && \
-    cp /cache-cargo/target-$RUST_TARGET/$RUST_TARGET/release/docseeker-backend /build/docseeker-backend
+    cp target/"$RUST_TARGET"/release/docseeker-backend /build/docseeker-backend
 
 # Stage 2 : Image d'exécution ultra-plume Google Distroless (~9 Mo téléchargé, ~55 Mo total sur disque)
 FROM gcr.io/distroless/cc-debian12
