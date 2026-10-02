@@ -139,36 +139,46 @@ pub fn build_search_query_sql(
         title_conds.join(" OR ")
     };
 
-    let folder_filter_sql = if let Some(ids) = folder_ids {
-        if ids.is_empty() {
-            "AND 0".to_string()
-        } else if ids.len() == 1 {
-            format!("AND (d.folder_id = {})", ids[0])
-        } else {
-            let id_strs: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
-            format!("AND (d.folder_id IN ({}))", id_strs.join(","))
+    let (folder_filter_sql, has_folder_filter) = match folder_ids {
+        Some(ids) => {
+            if ids.is_empty() {
+                ("AND 0".to_string(), true)
+            } else if ids.len() == 1 {
+                (format!("AND (d.folder_id = {})", ids[0]), true)
+            } else {
+                let id_strs: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+                (format!("AND (d.folder_id IN ({}))", id_strs.join(",")), true)
+            }
         }
-    } else {
-        String::new()
+        None => (String::new(), false),
     };
 
-
-    let sql = format!(
-        r#"
-        WITH raw_matches AS MATERIALIZED (
+    let sql = if has_folder_filter {
+        format!(
+            r#"
+        WITH scoped_docs AS (
+            SELECT d.id AS doc_id, d.filename, d.title, d.folder_id, d.total_pages, d.created_at,
+                   COALESCE(d.updated_at, d.created_at) as updated_at,
+                   COALESCE(d.doc_type, 'pdf') as doc_type,
+                   ({title_all_match}) as title_all_matched,
+                   ({title_any_match}) as title_any_matched
+            FROM documents d
+            WHERE COALESCE(d.status, 'ready') = 'ready' {folder_filter_sql}
+        ),
+        raw_matches AS (
             SELECT 
                 p.doc_id,
                 p.page_number,
                 bm25(pages_fts) as page_bm25
-            FROM pages_fts
-            JOIN pages p ON p.id = pages_fts.rowid
+            FROM scoped_docs sd
+            JOIN pages p ON p.doc_id = sd.doc_id
+            CROSS JOIN pages_fts ON pages_fts.rowid = p.id
             WHERE pages_fts MATCH '{match_query}'
         ),
         matching_docs AS (
-            SELECT d.id AS doc_id
-            FROM documents d
-            WHERE COALESCE(d.status, 'ready') = 'ready' {folder_filter_sql}
-              AND (d.id IN (SELECT doc_id FROM raw_matches) OR ({title_all_match}))
+            SELECT sd.*
+            FROM scoped_docs sd
+            WHERE sd.title_all_matched OR sd.doc_id IN (SELECT doc_id FROM raw_matches)
         ),
         doc_summary AS (
             SELECT 
@@ -180,25 +190,24 @@ pub fn build_search_query_sql(
         scored_docs AS (
             SELECT 
                 md.doc_id,
-                d.filename,
-                d.title,
-                d.folder_id,
-                d.total_pages,
-                d.created_at,
-                COALESCE(d.updated_at, d.created_at) as updated_at,
-                COALESCE(d.doc_type, 'pdf') as doc_type,
+                md.filename,
+                md.title,
+                md.folder_id,
+                md.total_pages,
+                md.created_at,
+                md.updated_at,
+                md.doc_type,
                 count(r.page_number) as matching_pages_count,
                 COALESCE(min(r.page_bm25), 0.0) as best_page_bm25,
                 (
-                    (CASE WHEN ({title_all_match}) THEN 1500.0 WHEN ({title_any_match}) THEN 500.0 ELSE 0.0 END)
+                    (CASE WHEN md.title_all_matched THEN 1500.0 WHEN md.title_any_matched THEN 500.0 ELSE 0.0 END)
                     + (ABS(COALESCE(min(r.page_bm25), 0.0)) * 100.0)
                     + MIN(count(r.page_number) * 5.0, 300.0)
                 ) as doc_relevance_score
             FROM matching_docs md
-            JOIN documents d ON d.id = md.doc_id
             LEFT JOIN raw_matches r ON r.doc_id = md.doc_id
             GROUP BY md.doc_id
-            ORDER BY doc_relevance_score DESC, d.title ASC
+            ORDER BY doc_relevance_score DESC, md.title ASC
             LIMIT {limit} OFFSET {offset}
         ),
         ranked_pages AS (
@@ -223,22 +232,120 @@ pub fn build_search_query_sql(
             COALESCE(rp.page_number, 1) as page_number,
             COALESCE(p.words_json, '[]') as words_json,
             COALESCE(rp.page_bm25, 0.0) as page_bm25,
-            COALESCE((SELECT total_docs FROM doc_summary), 0) as total_docs,
-            COALESCE((SELECT total_occurrences FROM doc_summary), 0) as total_occurrences,
-            COALESCE(sd.doc_type, 'pdf') as doc_type,
+            ds.total_docs,
+            ds.total_occurrences,
+            sd.doc_type,
             COALESCE(p.text_content, '') as text_content
         FROM scored_docs sd
+        CROSS JOIN doc_summary ds
         LEFT JOIN ranked_pages rp ON rp.doc_id = sd.doc_id AND rp.page_rank <= 5
         LEFT JOIN pages p ON p.doc_id = rp.doc_id AND p.page_number = rp.page_number
         ORDER BY sd.doc_relevance_score DESC, sd.title ASC, sd.doc_id, rp.page_bm25 ASC;
         "#,
-        match_query = fts_and_query.replace('\'', "''"),
-        folder_filter_sql = folder_filter_sql,
-        title_all_match = title_all_match,
-        title_any_match = title_any_match,
-        limit = limit,
-        offset = offset
-    );
+            match_query = fts_and_query.replace('\'', "''"),
+            folder_filter_sql = folder_filter_sql,
+            title_all_match = title_all_match,
+            title_any_match = title_any_match,
+            limit = limit,
+            offset = offset
+        )
+    } else {
+        format!(
+            r#"
+        WITH raw_matches AS MATERIALIZED (
+            SELECT 
+                p.doc_id,
+                p.page_number,
+                bm25(pages_fts) as page_bm25
+            FROM pages_fts
+            JOIN pages p ON p.id = pages_fts.rowid
+            WHERE pages_fts MATCH '{match_query}'
+        ),
+        matching_doc_ids AS (
+            SELECT doc_id FROM raw_matches
+            UNION
+            SELECT d.id AS doc_id FROM documents d WHERE COALESCE(d.status, 'ready') = 'ready' AND ({title_all_match})
+        ),
+        matching_docs AS (
+            SELECT 
+                d.id AS doc_id, d.filename, d.title, d.folder_id, d.total_pages, d.created_at,
+                COALESCE(d.updated_at, d.created_at) as updated_at,
+                COALESCE(d.doc_type, 'pdf') as doc_type,
+                ({title_all_match}) as title_all_matched,
+                ({title_any_match}) as title_any_matched
+            FROM matching_doc_ids m
+            JOIN documents d ON d.id = m.doc_id
+            WHERE COALESCE(d.status, 'ready') = 'ready'
+        ),
+        doc_summary AS (
+            SELECT 
+                count(DISTINCT md.doc_id) as total_docs,
+                count(r.doc_id) as total_occurrences
+            FROM matching_docs md
+            LEFT JOIN raw_matches r ON r.doc_id = md.doc_id
+        ),
+        scored_docs AS (
+            SELECT 
+                md.doc_id,
+                md.filename,
+                md.title,
+                md.folder_id,
+                md.total_pages,
+                md.created_at,
+                md.updated_at,
+                md.doc_type,
+                count(r.page_number) as matching_pages_count,
+                COALESCE(min(r.page_bm25), 0.0) as best_page_bm25,
+                (
+                    (CASE WHEN md.title_all_matched THEN 1500.0 WHEN md.title_any_matched THEN 500.0 ELSE 0.0 END)
+                    + (ABS(COALESCE(min(r.page_bm25), 0.0)) * 100.0)
+                    + MIN(count(r.page_number) * 5.0, 300.0)
+                ) as doc_relevance_score
+            FROM matching_docs md
+            LEFT JOIN raw_matches r ON r.doc_id = md.doc_id
+            GROUP BY md.doc_id
+            ORDER BY doc_relevance_score DESC, md.title ASC
+            LIMIT {limit} OFFSET {offset}
+        ),
+        ranked_pages AS (
+            SELECT 
+                rm.doc_id,
+                rm.page_number,
+                rm.page_bm25,
+                RANK() OVER (PARTITION BY rm.doc_id ORDER BY rm.page_bm25 ASC) as page_rank
+            FROM raw_matches rm
+            JOIN scored_docs sd ON sd.doc_id = rm.doc_id
+        )
+        SELECT 
+            sd.doc_id,
+            sd.filename,
+            sd.title,
+            sd.folder_id,
+            sd.total_pages,
+            sd.created_at,
+            sd.updated_at,
+            sd.doc_relevance_score,
+            sd.matching_pages_count,
+            COALESCE(rp.page_number, 1) as page_number,
+            COALESCE(p.words_json, '[]') as words_json,
+            COALESCE(rp.page_bm25, 0.0) as page_bm25,
+            ds.total_docs,
+            ds.total_occurrences,
+            sd.doc_type,
+            COALESCE(p.text_content, '') as text_content
+        FROM scored_docs sd
+        CROSS JOIN doc_summary ds
+        LEFT JOIN ranked_pages rp ON rp.doc_id = sd.doc_id AND rp.page_rank <= 5
+        LEFT JOIN pages p ON p.doc_id = rp.doc_id AND p.page_number = rp.page_number
+        ORDER BY sd.doc_relevance_score DESC, sd.title ASC, sd.doc_id, rp.page_bm25 ASC;
+        "#,
+            match_query = fts_and_query.replace('\'', "''"),
+            title_all_match = title_all_match,
+            title_any_match = title_any_match,
+            limit = limit,
+            offset = offset
+        )
+    };
 
     SearchQuerySql {
         sql,
@@ -561,5 +668,38 @@ mod tests {
         let rev_phrase_search = build_search_query_sql("\"grossesse normale\"", None, 10, 0);
         let rev_results = ids(&conn, &rev_phrase_search.sql);
         assert!(rev_results.is_empty(), "Phrase inversée ne doit pas matcher 'normale grossesse'");
+    }
+
+    #[test]
+    fn test_scoped_folder_search_performance_and_correctness() {
+        let conn = setup_db();
+        conn.execute("INSERT INTO folders (id, name) VALUES (13, 'Notes')", []).unwrap();
+        conn.execute("INSERT INTO folders (id, name) VALUES (99, 'Autre')", []).unwrap();
+
+        // Créer un document dans le dossier 13 avec le titre "Ma première note 1"
+        conn.execute(
+            "INSERT INTO documents (id, filename, title, folder_id, status, created_at, updated_at) VALUES (77, 'note_1.md', 'Ma première note 1', 13, 'ready', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            [],
+        ).unwrap();
+        // Créer un autre document dans un dossier différent (ex: 99) avec le mot 'note' dans une page
+        conn.execute(
+            "INSERT INTO documents (id, filename, title, folder_id, status, created_at, updated_at) VALUES (88, 'autre.pdf', 'Autre document', 99, 'ready', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO pages (doc_id, page_number, text_content) VALUES (88, 1, 'Ceci est une note médicale dans un autre dossier')",
+            [],
+        ).unwrap();
+
+        // 1. Recherche avec filtre dossier 13 : DOIT trouver le doc 77 et NE PAS trouver le doc 88
+        let scoped_search = build_search_query_sql("note", Some(&[13]), 10, 0);
+        let results = ids(&conn, &scoped_search.sql);
+        assert_eq!(results, vec![77], "Doit trouver uniquement le doc 77 dans le dossier 13");
+
+        // 2. Recherche globale sans filtre de dossier : DOIT trouver les deux docs
+        let global_search = build_search_query_sql("note", None, 10, 0);
+        let mut global_results = ids(&conn, &global_search.sql);
+        global_results.sort();
+        assert_eq!(global_results, vec![77, 88], "Recherche globale doit trouver les 2 docs");
     }
 }
