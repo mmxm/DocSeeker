@@ -2001,6 +2001,43 @@ body.dark-theme .vignette-md-line.vignette-md-key {
   min-width: 0;
 }
 
+/* Flèches de navigation d'arborescence (Précédent / Suivant) */
+.folder-nav-arrows {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+.btn-folder-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.btn-folder-nav:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--accent);
+  border-color: var(--accent-border, #93c5fd);
+}
+
+.btn-folder-nav:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .breadcrumbs-nav {
   display: flex;
   align-items: center;
@@ -3602,7 +3639,7 @@ body.dark-theme .vignette-md-line.vignette-md-key {
   box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
 }
 
-/* 2. Bouton et Volet Latéral Coulissant de Navigation Globale (Accueil) */
+/* 2. Bouton et Volet Latéral de Navigation Globale (Accueil) */
 .btn-sidebar-toggle {
   display: inline-flex;
   align-items: center;
@@ -3623,55 +3660,74 @@ body.dark-theme .vignette-md-line.vignette-md-key {
   color: var(--accent);
 }
 
+.btn-sidebar-toggle.active {
+  background: var(--bg-hover);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .main-sidebar-overlay {
-  position: fixed;
+  position: absolute;
   inset: 0;
-  background: rgba(15, 23, 42, 0.4);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-  z-index: 1200;
+  background: rgba(15, 23, 42, 0.35);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  z-index: 15;
   animation: fadeIn 0.2s ease;
 }
 
+@media (min-width: 769px) {
+  .main-sidebar-overlay {
+    display: none !important;
+  }
+}
+
 .main-sidebar-drawer {
-  position: fixed;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  width: 320px;
-  max-width: 85vw;
-  background: rgba(255, 255, 255, 0.96);
-  backdrop-filter: blur(25px) saturate(180%);
-  -webkit-backdrop-filter: blur(25px) saturate(180%);
-  border-right: 1px solid rgba(0, 0, 0, 0.08);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
-  z-index: 1250;
-  display: flex;
+  width: 280px;
+  min-width: 280px;
+  max-width: 320px;
+  height: 100%;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-color);
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.04);
+  z-index: 20;
+  display: none;
   flex-direction: column;
-  transform: translateX(-100%);
-  visibility: hidden;
-  pointer-events: none;
-  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.28s;
+  flex-shrink: 0;
+  overflow: hidden;
+  animation: slideInLeft 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 body.dark-theme .main-sidebar-drawer {
-  background: rgba(15, 23, 42, 0.96);
-  border-right-color: rgba(255, 255, 255, 0.08);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.45);
+  background: var(--bg-surface);
+  border-right-color: var(--border-color);
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.3);
 }
 
 .main-sidebar-drawer.open {
-  transform: translateX(0);
-  visibility: visible;
-  pointer-events: auto;
+  display: flex !important;
+}
+
+@media (max-width: 768px) {
+  .main-sidebar-drawer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 280px;
+    max-width: 85vw;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+    z-index: 25;
+  }
 }
 
 .main-sidebar-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 16px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
 }
 
 .sidebar-brand-group {
@@ -4385,6 +4441,29 @@ body.dark-theme .main-sidebar-drawer {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
+.reader-tab-item[draggable="true"] {
+  cursor: grab;
+}
+
+.reader-tab-item[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.reader-tab-item.tab-dragging {
+  opacity: 0.35;
+  transform: scale(0.97);
+}
+
+.reader-tab-item.drag-over-left {
+  border-left: 2px solid var(--accent, #2563eb);
+  padding-left: 6px;
+}
+
+.reader-tab-item.drag-over-right {
+  border-right: 2px solid var(--accent, #2563eb);
+  padding-right: 6px;
+}
+
 .reader-tab-title {
   white-space: nowrap;
   overflow: hidden;
@@ -4484,6 +4563,8 @@ body:has(.main-workspace.split-active):not(.home-tab-active) .main-workspace {
 /* Mode Document Ouvert : Masquage du panneau bibliothèque quand un PDF est actif */
 body.doc-open:not(.home-tab-active) .results-pane,
 .app-layout.doc-open:not(.home-tab-active) .results-pane,
+body.doc-open:not(.home-tab-active) .main-sidebar-drawer,
+.app-layout.doc-open:not(.home-tab-active) .main-sidebar-drawer,
 .main-workspace.split-active:not(.home-tab-active) .results-pane,
 body:has(.main-workspace.split-active):not(.home-tab-active) .results-pane {
   display: none !important;

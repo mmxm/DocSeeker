@@ -17,103 +17,7 @@
 <body class="light-theme">
   <div id="app" class="app-layout">
 
-    <!-- Volet Latéral Coulissant de Navigation Globale (Accueil) -->
-    <div id="mainSidebarOverlay" class="main-sidebar-overlay" style="display: none;"></div>
-    <aside id="mainSidebarDrawer" class="main-sidebar-drawer" aria-label="Menu principal">
-      <div class="main-sidebar-header">
-        <div class="sidebar-brand-group">
-          <div class="brand-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-              <polyline points="14 2 14 8 20 8"></polyline>
-              <line x1="16" y1="13" x2="8" y2="13"></line>
-              <line x1="16" y1="17" x2="8" y2="17"></line>
-              <polyline points="10 9 9 9 8 9"></polyline>
-            </svg>
-          </div>
-          <div class="sidebar-brand-text">
-            <h3>DocSeeker</h3>
-            <span class="sidebar-subtitle">Bibliothèque PDF</span>
-          </div>
-        </div>
-        <button id="closeMainSidebarBtn" class="btn btn-icon btn-sm" title="Fermer le menu" aria-label="Fermer le menu">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
-      </div>
 
-      <nav class="main-sidebar-nav">
-        <!-- Onglet 1 : Documents -->
-        <button id="navBtnDocuments" class="sidebar-nav-item active" data-tab="documents">
-          <div class="nav-item-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-            </svg>
-          </div>
-          <div class="nav-item-content">
-            <span class="nav-item-title">Documents</span>
-            <span class="nav-item-desc">Explorateur et arborescence</span>
-          </div>
-        </button>
-
-        <!-- Onglet 2 : Transferts (avec badge réactif) -->
-        <button id="navBtnDownloads" class="sidebar-nav-item" data-tab="downloads">
-          <div class="nav-item-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <circle cx="12" cy="12" r="10"></circle>
-              <polyline points="8 12 12 16 16 12"></polyline>
-              <line x1="12" y1="8" x2="12" y2="16"></line>
-            </svg>
-          </div>
-          <div class="nav-item-content">
-            <span class="nav-item-title">Transferts</span>
-            <span class="nav-item-desc">File d'attente et cache</span>
-          </div>
-          <span id="navDownloadsBadge" class="nav-item-badge" style="display: none;">0</span>
-        </button>
-
-        <!-- Onglet 3 : Réglages -->
-        <button id="navBtnSettings" class="sidebar-nav-item" data-tab="settings">
-          <div class="nav-item-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <circle cx="12" cy="12" r="3"></circle>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-            </svg>
-          </div>
-          <div class="nav-item-content">
-            <span class="nav-item-title">Réglages</span>
-            <span class="nav-item-desc">Serveur, thème et stockage</span>
-          </div>
-        </button>
-
-        <!-- Onglet 4 : Corbeille (Soft-Delete unifié) -->
-        <button id="navBtnTrash" class="sidebar-nav-item" data-tab="trash">
-          <div class="nav-item-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <polyline points="3 6 5 6 21 6"></polyline>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-              <line x1="10" y1="11" x2="10" y2="17"></line>
-              <line x1="14" y1="11" x2="14" y2="17"></line>
-            </svg>
-          </div>
-          <div class="nav-item-content">
-            <span class="nav-item-title">Corbeille</span>
-            <span class="nav-item-desc">Restauration (30 jours)</span>
-          </div>
-          <span id="navTrashBadge" class="nav-item-badge" style="display: none;">0</span>
-        </button>
-      </nav>
-
-      <div class="main-sidebar-footer">
-        <div class="sidebar-network-status" id="sidebarNetworkStatus">
-          <span class="status-dot green"></span>
-          <span id="sidebarNetworkStatusText">Connecté</span>
-        </div>
-        <span id="appVersionBadge" class="app-version-pill" title="Commit / Version"></span>
-      </div>
-    </aside>
 
     <!-- 1. Barre d'onglets supérieure Goodnotes (Multi-Onglets Universels) -->
     <div class="reader-top-tab-bar" id="readerTopTabBar" style="display: none;">
@@ -372,6 +276,104 @@
     <!-- Zone principale scindée (Split View) -->
     <main class="main-workspace" id="workspace">
 
+      <!-- Volet Latéral de Navigation Globale (Accueil) - Positionné sous l'en-tête comme les volets d'onglets -->
+      <div id="mainSidebarOverlay" class="main-sidebar-overlay" style="display: none;"></div>
+      <aside id="mainSidebarDrawer" class="main-sidebar-drawer" aria-label="Menu principal">
+        <div class="main-sidebar-header">
+          <div class="sidebar-brand-group">
+            <div class="brand-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+                <polyline points="10 9 9 9 8 9"></polyline>
+              </svg>
+            </div>
+            <div class="sidebar-brand-text">
+              <h3>DocSeeker</h3>
+              <span class="sidebar-subtitle">Bibliothèque PDF</span>
+            </div>
+          </div>
+          <button id="closeMainSidebarBtn" class="btn btn-icon btn-sm" title="Fermer le menu" aria-label="Fermer le menu">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+
+        <nav class="main-sidebar-nav">
+          <!-- Onglet 1 : Documents -->
+          <button id="navBtnDocuments" class="sidebar-nav-item active" data-tab="documents">
+            <div class="nav-item-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+            </div>
+            <div class="nav-item-content">
+              <span class="nav-item-title">Documents</span>
+              <span class="nav-item-desc">Explorateur et arborescence</span>
+            </div>
+          </button>
+
+          <!-- Onglet 2 : Transferts (avec badge réactif) -->
+          <button id="navBtnDownloads" class="sidebar-nav-item" data-tab="downloads">
+            <div class="nav-item-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="8 12 12 16 16 12"></polyline>
+                <line x1="12" y1="8" x2="12" y2="16"></line>
+              </svg>
+            </div>
+            <div class="nav-item-content">
+              <span class="nav-item-title">Transferts</span>
+              <span class="nav-item-desc">File d'attente et cache</span>
+            </div>
+            <span id="navDownloadsBadge" class="nav-item-badge" style="display: none;">0</span>
+          </button>
+
+          <!-- Onglet 3 : Réglages -->
+          <button id="navBtnSettings" class="sidebar-nav-item" data-tab="settings">
+            <div class="nav-item-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              </svg>
+            </div>
+            <div class="nav-item-content">
+              <span class="nav-item-title">Réglages</span>
+              <span class="nav-item-desc">Serveur, thème et stockage</span>
+            </div>
+          </button>
+
+          <!-- Onglet 4 : Corbeille (Soft-Delete unifié) -->
+          <button id="navBtnTrash" class="sidebar-nav-item" data-tab="trash">
+            <div class="nav-item-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                <line x1="10" y1="11" x2="10" y2="17"></line>
+                <line x1="14" y1="11" x2="14" y2="17"></line>
+              </svg>
+            </div>
+            <div class="nav-item-content">
+              <span class="nav-item-title">Corbeille</span>
+              <span class="nav-item-desc">Restauration (30 jours)</span>
+            </div>
+            <span id="navTrashBadge" class="nav-item-badge" style="display: none;">0</span>
+          </button>
+        </nav>
+
+        <div class="main-sidebar-footer">
+          <div class="sidebar-network-status" id="sidebarNetworkStatus">
+            <span class="status-dot green"></span>
+            <span id="sidebarNetworkStatusText">Connecté</span>
+          </div>
+          <span id="appVersionBadge" class="app-version-pill" title="Commit / Version"></span>
+        </div>
+      </aside>
+
       <!-- VUE PRINCIPALE 1 : Explorateur de Documents -->
       <section class="results-pane main-view-section active" id="resultsPane">
         
@@ -380,6 +382,20 @@
           <!-- Barre d'arborescence et de tri compacte sur une seule ligne -->
           <div class="library-toolbar">
             <div class="breadcrumbs-container">
+              <!-- Navigation historique de dossiers (Précédent / Suivant) -->
+              <div class="folder-nav-arrows" id="folderNavArrows">
+                <button id="folderNavBackBtn" class="btn-folder-nav" title="Dossier précédent" aria-label="Dossier précédent" disabled>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="15 18 9 12 15 6"></polyline>
+                  </svg>
+                </button>
+                <button id="folderNavForwardBtn" class="btn-folder-nav" title="Dossier suivant" aria-label="Dossier suivant" disabled>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="9 18 15 12 9 6"></polyline>
+                  </svg>
+                </button>
+              </div>
+
               <nav id="breadcrumbsNav" class="breadcrumbs-nav" aria-label="Fil d'Ariane">
                 <span class="breadcrumb-item active" data-folder-id="root" title="Racine de la bibliothèque" aria-label="Racine de la bibliothèque">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">

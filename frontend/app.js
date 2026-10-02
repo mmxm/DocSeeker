@@ -82,6 +82,9 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentFolderId = null; // null = racine
   let currentFolderName = "Documents";
   let folderBreadcrumbs = [{ id: null, name: "Documents" }];
+  let folderNavHistory = [{ id: null, name: "Documents" }];
+  let folderNavIndex = 0;
+  let isFolderHistoryNavigating = false;
   let allFolders = [];
   let currentLoadedDocs = [];
   try {
@@ -196,6 +199,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Navigation par dossiers & fil d'Ariane
   const breadcrumbsNav = document.getElementById("breadcrumbsNav");
+  const folderNavBackBtn = document.getElementById("folderNavBackBtn");
+  const folderNavForwardBtn = document.getElementById("folderNavForwardBtn");
   const foldersSection = document.getElementById("foldersSection");
   const foldersContainer = document.getElementById("foldersContainer");
   const syncDocsBtn = document.getElementById("syncDocsBtn");
@@ -1176,10 +1181,15 @@ document.addEventListener("DOMContentLoaded", () => {
   // Volet Latéral Coulissant de Navigation Globale (Accueil) & Vues Dédiées
   // =========================================================================
   function toggleMainSidebar(show) {
-    if (!mainSidebarDrawer || !mainSidebarOverlay) return;
+    if (!mainSidebarDrawer) return;
     const willShow = (show !== undefined) ? show : !mainSidebarDrawer.classList.contains("open");
     mainSidebarDrawer.classList.toggle("open", willShow);
-    mainSidebarOverlay.style.display = willShow ? "block" : "none";
+    if (mainSidebarToggleBtn) {
+      mainSidebarToggleBtn.classList.toggle("active", willShow);
+    }
+    if (mainSidebarOverlay) {
+      mainSidebarOverlay.style.display = (willShow && window.innerWidth <= 768) ? "block" : "none";
+    }
   }
 
   // Masquage de la barre d'onglets (lecture dégagée). État par session :
@@ -1428,7 +1438,9 @@ document.addEventListener("DOMContentLoaded", () => {
       viewTrash.style.display = (tabName === "trash") ? "flex" : "none";
       if (tabName === "trash" && window.TrashManager) window.TrashManager.loadTrash();
     }
-    toggleMainSidebar(false);
+    if (window.innerWidth <= 768) {
+      toggleMainSidebar(false);
+    }
   }
 
   if (navBtnDocuments) navBtnDocuments.addEventListener("click", () => switchMainView("documents"));
@@ -2422,6 +2434,9 @@ document.addEventListener("DOMContentLoaded", () => {
     currentFolderId = null;
     currentFolderName = "Documents";
     folderBreadcrumbs = [{ id: null, name: "Documents" }];
+    folderNavHistory = [{ id: null, name: "Documents" }];
+    folderNavIndex = 0;
+    updateFolderNavButtonsUI();
     updateFolderFilterVisibility();
     closeSplitViewer();
     clearSelection();
@@ -3366,6 +3381,99 @@ document.addEventListener("DOMContentLoaded", () => {
     resultsContainer.appendChild(fragment);
   }
 
+  function getBreadcrumbsPathForFolder(folderId, fallbackName = "Dossier") {
+    if (folderId === null || folderId === undefined) {
+      return [{ id: null, name: "Documents" }];
+    }
+    const chain = [];
+    let curr = (allFolders || []).find(f => Number(f.id) === Number(folderId));
+    if (!curr) {
+      chain.push({ id: folderId, name: fallbackName });
+    } else {
+      while (curr) {
+        chain.unshift({ id: curr.id, name: curr.name });
+        if (curr.parent_id === null || curr.parent_id === undefined) break;
+        curr = (allFolders || []).find(f => Number(f.id) === Number(curr.parent_id));
+      }
+    }
+    chain.unshift({ id: null, name: "Documents" });
+    return chain;
+  }
+
+  function pushFolderNavHistory(id, name) {
+    if (isFolderHistoryNavigating) return;
+    if (folderNavHistory[folderNavIndex] && folderNavHistory[folderNavIndex].id === id) {
+      return;
+    }
+    folderNavHistory = folderNavHistory.slice(0, folderNavIndex + 1);
+    folderNavHistory.push({ id, name: name || (id === null ? "Documents" : "Dossier") });
+    folderNavIndex = folderNavHistory.length - 1;
+    updateFolderNavButtonsUI();
+  }
+
+  function updateFolderNavButtonsUI() {
+    if (folderNavBackBtn) {
+      const canBack = folderNavIndex > 0;
+      folderNavBackBtn.disabled = !canBack;
+    }
+    if (folderNavForwardBtn) {
+      const canForward = folderNavIndex < folderNavHistory.length - 1;
+      folderNavForwardBtn.disabled = !canForward;
+    }
+  }
+
+  function goFolderBack() {
+    if (folderNavIndex <= 0 || isNavigatingFolder) return;
+    folderNavIndex--;
+    const target = folderNavHistory[folderNavIndex];
+    navigateToHistoryFolder(target);
+  }
+
+  function goFolderForward() {
+    if (folderNavIndex >= folderNavHistory.length - 1 || isNavigatingFolder) return;
+    folderNavIndex++;
+    const target = folderNavHistory[folderNavIndex];
+    navigateToHistoryFolder(target);
+  }
+
+  function navigateToHistoryFolder(target) {
+    if (!target) return;
+    isFolderHistoryNavigating = true;
+    currentSearchQuery = "";
+    isSearchActive = false;
+    lastSearchResultsData = null;
+    if (searchInput) searchInput.value = "";
+    if (clearSearchBtn) clearSearchBtn.style.display = "none";
+
+    folderBreadcrumbs = getBreadcrumbsPathForFolder(target.id, target.name);
+    currentFolderId = target.id;
+    currentFolderName = target.name || (target.id === null ? "Documents" : "Dossier");
+    updateFolderFilterVisibility();
+    clearSelection();
+    updateFolderNavButtonsUI();
+
+    if (foldersContainer) foldersContainer.style.pointerEvents = "none";
+
+    if (Array.isArray(allFolders) && allFolders.length > 0) {
+      const subfolders = allFolders.filter(f => {
+        if (currentFolderId === null) return f.parent_id === null || f.parent_id === undefined;
+        return Number(f.parent_id) === Number(currentFolderId);
+      });
+      renderFolders(subfolders);
+    }
+
+    const cachedDocs = getFolderDocsCache(currentFolderId);
+    if (cachedDocs) {
+      currentLoadedDocs = cachedDocs;
+      renderDocumentLibrary(cachedDocs);
+    } else {
+      renderFolderLoadingSkeletons(4);
+    }
+
+    loadFoldersAndDocuments();
+    isFolderHistoryNavigating = false;
+  }
+
   function navigateToCrumb(index) {
     if (isNavigatingFolder) return;
     currentSearchQuery = "";
@@ -3375,6 +3483,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const target = folderBreadcrumbs[index];
     if (!target) return;
     if (currentFolderId === target.id && !isSearchActive) return;
+
+    pushFolderNavHistory(target.id, target.name);
 
     isNavigatingFolder = true;
     if (foldersContainer) foldersContainer.style.pointerEvents = "none";
@@ -3413,14 +3523,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const lastCrumb = folderBreadcrumbs[folderBreadcrumbs.length - 1];
     if (lastCrumb && lastCrumb.id === folder.id) return;
 
+    pushFolderNavHistory(folder.id, folder.name);
+
     isNavigatingFolder = true;
     if (foldersContainer) foldersContainer.style.pointerEvents = "none";
 
     currentFolderId = folder.id;
     currentFolderName = folder.name;
-    if (!lastCrumb || lastCrumb.id !== folder.id) {
-      folderBreadcrumbs.push({ id: folder.id, name: folder.name });
-    }
+    folderBreadcrumbs = getBreadcrumbsPathForFolder(folder.id, folder.name);
     updateFolderFilterVisibility();
     clearSelection();
 
@@ -3446,6 +3556,10 @@ document.addEventListener("DOMContentLoaded", () => {
   window.loadFoldersAndDocuments = loadFoldersAndDocuments;
   window.loadDocuments = () => loadFoldersAndDocuments();
   const loadDocuments = () => loadFoldersAndDocuments();
+  window.goFolderBack = goFolderBack;
+  window.goFolderForward = goFolderForward;
+  window.getFolderNavHistory = () => folderNavHistory;
+  window.getFolderNavIndex = () => folderNavIndex;
 
   async function loadFoldersAndDocuments(preserveScroll = false) {
     const currentSeq = ++loadFoldersSeq;
@@ -3464,6 +3578,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     showGeneralResultsView();
     renderBreadcrumbs();
+    updateFolderNavButtonsUI();
     updateFolderFilterVisibility();
     updatePasteButtonUI();
 
@@ -4853,6 +4968,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  if (folderNavBackBtn) {
+    folderNavBackBtn.addEventListener("click", () => goFolderBack());
+  }
+  if (folderNavForwardBtn) {
+    folderNavForwardBtn.addEventListener("click", () => goFolderForward());
+  }
+
   // =========================================================================
   // Synchronisation Automatique / Scan
   // =========================================================================
@@ -5606,6 +5728,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const tabEl = document.createElement("div");
         tabEl.className = `reader-tab-item ${isActive ? 'active' : ''}`;
         tabEl.setAttribute("data-tab-id", tab.id);
+        tabEl.setAttribute("draggable", "true");
         tabEl.innerHTML = `
           <span class="reader-tab-title" title="${escapeHtml(tab.title)}">${escapeHtml(tab.title)}</span>
           <button class="reader-tab-chevron" title="Détails du document" data-tab-id="${tab.id}">
@@ -5616,8 +5739,82 @@ document.addEventListener("DOMContentLoaded", () => {
           <button class="reader-tab-close" title="Fermer l'onglet" data-tab-id="${tab.id}">&times;</button>
         `;
 
+        // Réorganisation des onglets par Glisser-Déposer (HTML5 Drag & Drop)
+        tabEl.addEventListener("dragstart", (e) => {
+          if (e.target.closest(".reader-tab-close") || e.target.closest(".reader-tab-chevron")) {
+            e.preventDefault();
+            return;
+          }
+          window._tabDragSourceId = tab.id;
+          tabEl.classList.add("tab-dragging");
+          e.dataTransfer.setData("text/plain", String(tab.id));
+          e.dataTransfer.effectAllowed = "move";
+        });
+
+        tabEl.addEventListener("dragend", () => {
+          window._tabDragSourceId = null;
+          tabEl.classList.remove("tab-dragging");
+          if (readerTabsStrip) {
+            readerTabsStrip.querySelectorAll(".reader-tab-item").forEach(el => {
+              el.classList.remove("drag-over-left", "drag-over-right");
+            });
+          }
+        });
+
+        tabEl.addEventListener("dragover", (e) => {
+          const sourceId = window._tabDragSourceId;
+          if (!sourceId || sourceId === tab.id) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          const rect = tabEl.getBoundingClientRect();
+          const midpoint = rect.left + rect.width / 2;
+          if (e.clientX < midpoint) {
+            tabEl.classList.add("drag-over-left");
+            tabEl.classList.remove("drag-over-right");
+          } else {
+            tabEl.classList.add("drag-over-right");
+            tabEl.classList.remove("drag-over-left");
+          }
+        });
+
+        tabEl.addEventListener("dragleave", (e) => {
+          if (!tabEl.contains(e.relatedTarget)) {
+            tabEl.classList.remove("drag-over-left", "drag-over-right");
+          }
+        });
+
+        tabEl.addEventListener("drop", (e) => {
+          const sourceId = window._tabDragSourceId || e.dataTransfer.getData("text/plain");
+          if (!sourceId || sourceId === tab.id) return;
+          e.preventDefault();
+          e.stopPropagation();
+
+          tabEl.classList.remove("drag-over-left", "drag-over-right");
+          window._tabDragSourceId = null;
+
+          const sourceIdx = this.openTabs.findIndex(t => t.id === sourceId);
+          const targetIdx = this.openTabs.findIndex(t => t.id === tab.id);
+          if (sourceIdx === -1 || targetIdx === -1) return;
+
+          const rect = tabEl.getBoundingClientRect();
+          const midpoint = rect.left + rect.width / 2;
+          const dropAfter = e.clientX >= midpoint;
+
+          const [movedTab] = this.openTabs.splice(sourceIdx, 1);
+          let newTargetIdx = this.openTabs.findIndex(t => t.id === tab.id);
+          if (dropAfter) {
+            newTargetIdx++;
+          }
+          this.openTabs.splice(newTargetIdx, 0, movedTab);
+
+          this.renderTabsUI();
+          if (typeof persistOpenTabs === "function") {
+            persistOpenTabs();
+          }
+        });
+
         tabEl.addEventListener("click", (e) => {
-          if (hasDraggedTabsDistance) return;
+          if (hasDraggedTabsDistance || window._tabDragSourceId) return;
           if (e.target.closest(".reader-tab-close") || e.target.closest(".reader-tab-chevron")) return;
           this.selectTab(tab.id);
         });
@@ -5672,6 +5869,32 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  if (readerTabsStrip) {
+    readerTabsStrip.addEventListener("dragover", (e) => {
+      if (!window._tabDragSourceId) return;
+      if (e.target === readerTabsStrip) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+      }
+    });
+
+    readerTabsStrip.addEventListener("drop", (e) => {
+      const sourceId = window._tabDragSourceId;
+      if (!sourceId) return;
+      if (e.target === readerTabsStrip) {
+        e.preventDefault();
+        window._tabDragSourceId = null;
+        const sourceIdx = tabManager.openTabs.findIndex(t => t.id === sourceId);
+        if (sourceIdx !== -1 && sourceIdx !== tabManager.openTabs.length - 1) {
+          const [movedTab] = tabManager.openTabs.splice(sourceIdx, 1);
+          tabManager.openTabs.push(movedTab);
+          tabManager.renderTabsUI();
+          if (typeof persistOpenTabs === "function") persistOpenTabs();
+        }
+      }
+    });
+  }
+
   if (readerTabsScrollArea) {
     // 1. Défilement molette souris : convertir deltaY en scroll horizontal
     readerTabsScrollArea.addEventListener("wheel", (e) => {
@@ -5687,7 +5910,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // 2. Défilement par glisser-déposer (drag-to-scroll)
     readerTabsScrollArea.addEventListener("mousedown", (e) => {
-      if (e.target.closest("button")) return;
+      if (e.target.closest("button") || e.target.closest(".reader-tab-item") || e.target.closest(".reader-home-btn")) return;
       isDraggingTabs = true;
       hasDraggedTabsDistance = false;
       dragTabsStartX = e.pageX - readerTabsScrollArea.offsetLeft;
