@@ -2544,6 +2544,21 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!viewerContainer || viewerContainer.__autoHideHooked) return;
       viewerContainer.__autoHideHooked = true;
 
+      // Synchronisation temps réel de la page via l'eventBus PDF.js
+      if (win.PDFViewerApplication?.eventBus && !win.__pageChangingHooked) {
+        win.__pageChangingHooked = true;
+        win.PDFViewerApplication.eventBus._on("pagechanging", (evt) => {
+          const p = evt.pageNumber;
+          if (typeof p === "number" && p > 0) {
+            if (viewerPageBadge) viewerPageBadge.textContent = `Page ${p}`;
+            if (typeof tabManager !== 'undefined' && tabManager.activeTabId) {
+              const curTab = tabManager.openTabs.find(t => t.id === tabManager.activeTabId);
+              if (curTab) curTab.page = p;
+            }
+          }
+        });
+      }
+
       viewerContainer.addEventListener("scroll", () => {
         const st = viewerContainer.scrollTop;
         if (typeof tabManager !== 'undefined' && tabManager.activeTabId) {
@@ -2551,6 +2566,11 @@ document.addEventListener("DOMContentLoaded", () => {
           if (curTab) {
             curTab.scrollTop = st;
             curTab.scrollLeft = viewerContainer.scrollLeft;
+            const p = win.PDFViewerApplication?.page;
+            if (typeof p === "number" && p > 0) {
+              curTab.page = p;
+              if (viewerPageBadge) viewerPageBadge.textContent = `Page ${p}`;
+            }
           }
         }
         if (window.innerWidth > 900) {
@@ -2616,6 +2636,7 @@ document.addEventListener("DOMContentLoaded", () => {
         win.PDFViewerApplication.close();
       }
     } catch (e) { }
+    if (pdfFrame) pdfFrame._loadedDocId = null;
     if (window._currentPdfBlobUrl) {
       try { URL.revokeObjectURL(window._currentPdfBlobUrl); } catch (e) { }
       window._currentPdfBlobUrl = null;
@@ -5502,10 +5523,17 @@ document.addEventListener("DOMContentLoaded", () => {
       } catch (e) { }
       if (currentActiveOccurrences && currentActiveOccurrences[currentActiveOccurrenceIndex]) {
         const activeOcc = currentActiveOccurrences[currentActiveOccurrenceIndex];
-        currentTab.page = activeOcc.page_number;
-        currentTab.rect = (activeOcc.highlight_rects && activeOcc.highlight_rects.length > 0) ? activeOcc.highlight_rects[0] : activeOcc.rect;
-        currentTab.yRatio = activeOcc.y_ratio || 0;
-        currentTab.occId = activeOcc.occ_id;
+        // Ne conserver les coordonnées d'occurrence QUE si l'utilisateur est toujours sur cette page.
+        // S'il a navigué ou scrollé ailleurs, sa progression de lecture prime et ne doit jamais être écrasée.
+        if (Number(activeOcc.page_number) === Number(currentTab.page)) {
+          currentTab.rect = (activeOcc.highlight_rects && activeOcc.highlight_rects.length > 0) ? activeOcc.highlight_rects[0] : activeOcc.rect;
+          currentTab.yRatio = activeOcc.y_ratio || 0;
+          currentTab.occId = activeOcc.occ_id;
+        } else {
+          currentTab.rect = null;
+          currentTab.yRatio = 0;
+          currentTab.occId = null;
+        }
       }
     },
 
@@ -5637,24 +5665,13 @@ document.addEventListener("DOMContentLoaded", () => {
     },
 
     returnToHome() {
-      currentViewerLoadSeq++;
-      try {
-        const win = pdfFrame?.contentWindow;
-        if (win && win.PDFViewerApplication && typeof win.PDFViewerApplication.close === 'function') {
-          if (win.PDFViewerApplication.findController) {
-            try {
-              win.PDFViewerApplication.findController.setDocument(null);
-              if (win.PDFViewerApplication.findBar) win.PDFViewerApplication.findBar.reset();
-            } catch (e) { }
-          }
-          win.PDFViewerApplication.close();
-        }
-      } catch (e) { }
-
+      // 1. Sauvegarder la position exacte de lecture (page, scrollTop) AVANT toute modification d'état
       this.saveCurrentTabState();
       // Geler l'état de l'onglet courant AVANT de détacher activeTabId,
       // sinon saveCurrentTabState ne trouve plus l'onglet.
       const frozenTab = getActiveTab();
+
+      currentViewerLoadSeq++;
       this.activeTabId = 'home';
       this.renderTabsUI();
 
@@ -6112,7 +6129,9 @@ document.addEventListener("DOMContentLoaded", () => {
     if (maxKnownPages > 0 && targetPage > maxKnownPages) {
       targetPage = maxKnownPages;
     }
-    const isSameDoc = (Number(currentActiveDocId) === numericDocId);
+    const isViewerAlive = Boolean(pdfFrame?.contentWindow?.PDFViewerApplication?.pdfDocument);
+    const lastLoadedId = (typeof pdfFrame?._loadedDocId !== 'undefined') ? pdfFrame._loadedDocId : (isViewerAlive ? Number(currentActiveDocId) : null);
+    const isSameDoc = isViewerAlive && (Number(lastLoadedId) === numericDocId);
     if (!isSameDoc && currentActiveDocId && window.pdfCacheManager) {
       window.pdfCacheManager.pauseDownload(currentActiveDocId);
     }
@@ -6620,7 +6639,10 @@ document.addEventListener("DOMContentLoaded", () => {
                           (docTitle && (docTitle.endsWith('.md') || docTitle.endsWith('.markdown')));
 
     if (isMarkdownDoc) {
-      if (pdfFrame) pdfFrame.style.display = "none";
+      if (pdfFrame) {
+        pdfFrame.style.display = "none";
+        pdfFrame._loadedDocId = null;
+      }
       const mdContainer = document.getElementById("markdownEditorContainer");
       if (mdContainer) mdContainer.style.display = "flex";
 
@@ -6646,7 +6668,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (isSameDoc && pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
-      goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio);
+      goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio, targetScrollTop);
       hookIframePinchZoomIsolation();
       hookIframeScrollAutoHide();
       if (window.pdfCacheManager) {
@@ -6753,7 +6775,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
                 const maxPages = app.pagesCount || (app.pdfDocument ? app.pdfDocument.numPages : 0);
                 const safePage = (maxPages > 0 && targetPage > maxPages) ? maxPages : Math.max(1, targetPage || 1);
-                if (app.page !== safePage) {
+                if ((targetScrollTop === null || targetScrollTop === undefined) && app.page !== safePage) {
                   app.page = safePage;
                 }
               } catch (e) { }
@@ -6777,6 +6799,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (thisLoadSeq !== currentViewerLoadSeq) return;
             await app.open({ url: pdfTargetUrl });
             if (thisLoadSeq !== currentViewerLoadSeq) return;
+            if (pdfFrame) pdfFrame._loadedDocId = numericDocId;
 
             // Sécurité si pagesinit s'est déjà produit ou pour assurer le cadrage exact
             setTimeout(() => {
@@ -6787,7 +6810,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
                 const maxPages = app.pagesCount || (app.pdfDocument ? app.pdfDocument.numPages : 0);
                 const safePage = (maxPages > 0 && targetPage > maxPages) ? maxPages : Math.max(1, targetPage || 1);
-                if (app.page !== safePage) {
+                if ((targetScrollTop === null || targetScrollTop === undefined) && app.page !== safePage) {
                   app.page = safePage;
                 }
               } catch (e) { }
@@ -6829,6 +6852,7 @@ document.addEventListener("DOMContentLoaded", () => {
           pdfFrame.src = viewerUrl;
           pdfFrame.onload = () => {
             if (thisLoadSeq !== currentViewerLoadSeq || Number(currentActiveDocId) !== numericDocId) return;
+            if (pdfFrame) pdfFrame._loadedDocId = numericDocId;
             try {
               if (pdfFrame.contentWindow) {
                 pdfFrame.contentWindow._suppressPdfJsFindScroll = true;
@@ -7073,7 +7097,20 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (pageNumber < 1) pageNumber = 1;
 
-        if (app.page !== pageNumber) {
+        // Restauration robuste et prioritaire de la position de scroll enregistrée
+        if (targetScrollTop !== null && targetScrollTop !== undefined && targetScrollTop >= 0) {
+          if (container) {
+            container.scrollTop = targetScrollTop;
+          }
+          // En cas de layout progressif des pages PDF.js, réitérer pour garantir l'atterrissage exact
+          [30, 80, 160, 320, 600].forEach(delay => {
+            setTimeout(() => {
+              if (container && Math.abs(container.scrollTop - targetScrollTop) > 5) {
+                container.scrollTop = targetScrollTop;
+              }
+            }, delay);
+          });
+        } else if (app.page !== pageNumber) {
           try {
             app.page = pageNumber;
           } catch (pageErr) {
@@ -7083,11 +7120,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const alignOccurrence = () => {
           const pageDiv = docViewer.querySelector(`.page[data-page-number="${pageNumber}"]`);
-          if (!pageDiv || !container) return;
+          if (!container) return;
 
           docViewer.querySelectorAll(".active-occ-overlay").forEach(el => el.remove());
 
-          // Si un scroll précis était mémorisé pour cet onglet, le restaurer directement au pixel près
           if (targetScrollTop !== null && targetScrollTop !== undefined && targetScrollTop >= 0) {
             container.scrollTop = targetScrollTop;
           }
@@ -7101,7 +7137,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
           // Si pas de recherche ou pas de coordonnées valides : NE PAS afficher de cadre bleu
           if (!hasActiveSearch || !rect || !Array.isArray(rect) || rect.length !== 4) {
-            if (targetScrollTop === null || targetScrollTop === undefined) {
+            if ((targetScrollTop === null || targetScrollTop === undefined) && pageDiv) {
               if (yRatio && yRatio > 0) {
                 const top = pageDiv.clientHeight * yRatio;
                 const calcScroll = pageDiv.offsetTop + top - (container.clientHeight / 2);
@@ -7113,6 +7149,8 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             return;
           }
+
+          if (!pageDiv) return;
 
           let left = 20, top = 100, width = 120, height = 24;
 
