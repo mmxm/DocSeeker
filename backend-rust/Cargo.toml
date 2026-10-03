@@ -41,6 +41,7 @@ rayon = "1.10"
 ab_glyph = "0.2.32"
 imageproc = "0.27.0"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+base64 = "0.22"
 
 [profile.release]
 opt-level = 3

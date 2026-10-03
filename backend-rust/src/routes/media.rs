@@ -2,10 +2,10 @@ use axum::{
     body::Body,
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Json, Response},
 };
 use rusqlite::params;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::io::SeekFrom;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -515,4 +515,140 @@ pub async fn get_pdf(
         .header(header::HeaderName::from_static("x-accel-buffering"), "no")
         .body(body)
         .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Erreur réponse").into_response())
+}
+
+// =========================================================================
+// POST /api/crops/batch — Batch de vignettes pour un document
+// Réduit N×M requêtes HTTP individuelles à M requêtes (une par document).
+// =========================================================================
+
+#[derive(Deserialize)]
+pub struct BatchCropItem {
+    pub doc_id: i64,
+    pub page: i64,
+    pub occ_id: usize,
+    pub h: Option<String>,
+    pub terms: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct BatchCropPayload {
+    pub crops: Vec<BatchCropItem>,
+}
+
+#[derive(Serialize)]
+pub struct BatchCropResult {
+    /// Clé = "doc_id:page:occ_id" — valeur = data URL WebP ou null si échec
+    pub results: std::collections::HashMap<String, Option<String>>,
+}
+
+/// POST /api/crops/batch
+/// Accepte une liste de { doc_id, page, occ_id, h, terms } et retourne une
+/// map occ_key → "data:image/webp;base64,..." pour chaque vignette générée.
+pub async fn get_crops_batch(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<BatchCropPayload>,
+) -> Result<Json<BatchCropResult>, Response> {
+    use std::collections::HashMap;
+
+    let mut results: HashMap<String, Option<String>> = HashMap::new();
+
+    for item in payload.crops {
+        let key = format!("{}:{}:{}", item.doc_id, item.page, item.occ_id);
+        let cache_key = format!(
+            "crop:{}:{}:{}:{}:{}",
+            item.doc_id,
+            item.page,
+            item.occ_id,
+            item.h.as_deref().unwrap_or(""),
+            item.terms.as_deref().unwrap_or("")
+        );
+
+        // 1. Vérifier le cache LRU en mémoire
+        let cached = {
+            let mut cache = state.crop_cache.lock().unwrap_or_else(|e| e.into_inner());
+            cache.get(&cache_key).map(|b| {
+                use base64::Engine;
+                format!(
+                    "data:image/webp;base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(b)
+                )
+            })
+        };
+
+        if let Some(data_url) = cached {
+            results.insert(key, Some(data_url));
+            continue;
+        }
+
+        // 2. Charger words_json + filename depuis SQLite
+        let (filename, words_json) = {
+            let conn = match state.db.get() {
+                Ok(c) => c,
+                Err(_) => { results.insert(key, None); continue; }
+            };
+            let fname: Option<String> = conn.query_row(
+                "SELECT filename FROM documents WHERE id = ?1",
+                params![item.doc_id],
+                |r| r.get(0),
+            ).ok().flatten();
+            let wj: Option<String> = conn.query_row(
+                "SELECT words_json FROM pages WHERE doc_id = ?1 AND page_number = ?2",
+                params![item.doc_id, item.page],
+                |r| r.get(0),
+            ).ok().flatten();
+            (fname, wj.unwrap_or_else(|| "[]".to_string()))
+        };
+
+        let fname = match filename {
+            Some(f) => f,
+            None => { results.insert(key, None); continue; }
+        };
+
+        let query_hash = item.h.clone().unwrap_or_default();
+        let terms_str = item.terms.clone().unwrap_or_default();
+        let occ_id = item.occ_id;
+        let page = item.page;
+        let doc_id = item.doc_id;
+
+        // 3. Acquérir le sémaphore Pdfium et générer la vignette
+        let permit = match state.crop_semaphore.clone().acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => { results.insert(key, None); continue; }
+        };
+
+        let state_clone = Arc::clone(&state);
+        let crop_bytes = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            generate_crops_for_page(
+                &state_clone.pdf_engine,
+                &state_clone.config,
+                doc_id,
+                page,
+                occ_id,
+                &query_hash,
+                &terms_str,
+                &words_json,
+                &fname,
+            )
+        }).await.unwrap_or(None);
+
+        // 4. Mettre en cache et encoder en base64
+        if let Some(ref bytes) = crop_bytes {
+            let mut cache = state.crop_cache.lock().unwrap_or_else(|e| e.into_inner());
+            cache.put(cache_key, bytes.clone());
+        }
+
+        let data_url = crop_bytes.map(|bytes| {
+            use base64::Engine;
+            format!(
+                "data:image/webp;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(&bytes)
+            )
+        });
+
+        results.insert(key, data_url);
+    }
+
+    Ok(Json(BatchCropResult { results }))
 }

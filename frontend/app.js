@@ -454,6 +454,9 @@ document.addEventListener("DOMContentLoaded", () => {
       this.pendingDebounce = new Map(); // img element -> timerId
       this.inFlightFetches = new Map(); // img element -> AbortController
       this._blobUrls = new Set();       // blob: URLs créées (pour révocation à clear())
+      // Batch crops : { docId -> { batchTimer, items: [{img, key, vEl, params}] } }
+      this._batchQueues = new Map();
+      this._batchDelayMs = 80; // fenêtre d'accumulation avant envoi du batch
       this.observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
           const img = entry.target;
@@ -556,6 +559,96 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
+    // ------------------------------------------------------------------
+    // Batch crops en ligne : accumule les requêtes sur une fenêtre de
+    // 80ms puis les envoie en un seul POST /api/crops/batch par doc_id.
+    // ------------------------------------------------------------------
+    _enqueueBatch(docId, img, vEl, params) {
+      if (!this._batchQueues.has(docId)) {
+        this._batchQueues.set(docId, { timer: null, items: [] });
+      }
+      const q = this._batchQueues.get(docId);
+      q.items.push({ img, vEl, params });
+      if (q.timer) clearTimeout(q.timer);
+      q.timer = setTimeout(() => this._flushBatch(docId), this._batchDelayMs);
+    }
+
+    async _flushBatch(docId) {
+      const q = this._batchQueues.get(docId);
+      if (!q || q.items.length === 0) { this._batchQueues.delete(docId); return; }
+      const items = q.items.splice(0);
+      q.timer = null;
+      if (q.items.length === 0) this._batchQueues.delete(docId);
+
+      // Filtrer les images déjà chargées ou annulées
+      const active = items.filter(({ img }) => img.dataset.loaded !== "true" && !img._wasCancelled);
+      if (active.length === 0) return;
+
+      const crops = active.map(({ params }) => params);
+      try {
+        const res = await fetch('/api/crops/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ crops })
+        });
+        if (!res.ok) throw new Error(`batch HTTP ${res.status}`);
+        const data = await res.json();
+
+        for (const { img, vEl, params } of active) {
+          if (img._wasCancelled || img.dataset.loaded === "true") continue;
+          const key = `${params.doc_id}:${params.page}:${params.occ_id}`;
+          const dataUrl = data.results && data.results[key];
+          if (dataUrl) {
+            if (img._blobUrl) { URL.revokeObjectURL(img._blobUrl); this._blobUrls.delete(img._blobUrl); }
+            img.src = dataUrl;
+            img.dataset.loaded = "true";
+            img.style.opacity = "1";
+            try { this.observer.unobserve(img); } catch (_) {}
+          } else {
+            // Fallback individuel si la vignette n'est pas dans la réponse
+            this._fetchIndividual(img, img.getAttribute("data-src"), vEl);
+          }
+        }
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          // Fallback : chaque crop individuellement
+          for (const { img, vEl } of active) {
+            if (!img._wasCancelled && img.dataset.loaded !== "true") {
+              this._fetchIndividual(img, img.getAttribute("data-src"), vEl);
+            }
+          }
+        }
+      }
+    }
+
+    _fetchIndividual(img, srcUrl, vEl) {
+      if (!srcUrl || img.dataset.loaded === "true" || img._wasCancelled) return;
+      const controller = new AbortController();
+      this.inFlightFetches.set(img, controller);
+      fetch(srcUrl, { signal: controller.signal })
+        .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.blob(); })
+        .then(blob => {
+          this.inFlightFetches.delete(img);
+          if (img._wasCancelled) { img.dataset.loaded = "false"; return; }
+          if (img._blobUrl) { URL.revokeObjectURL(img._blobUrl); this._blobUrls.delete(img._blobUrl); }
+          const blobUrl = URL.createObjectURL(blob);
+          img._blobUrl = blobUrl;
+          this._blobUrls.add(blobUrl);
+          img.src = blobUrl;
+          img.dataset.loaded = "true";
+          img.style.opacity = "1";
+          try { this.observer.unobserve(img); } catch (_) {}
+        })
+        .catch(err => {
+          this.inFlightFetches.delete(img);
+          if (err.name !== 'AbortError' && !img._wasCancelled) {
+            this.applySnippetFallback(img, vEl);
+          } else {
+            img.dataset.loaded = "false";
+          }
+        });
+    }
+
     loadImg(img) {
       const srcUrl = img.getAttribute("data-src");
       if (!srcUrl || img.dataset.loaded === "true") return;
@@ -644,6 +737,22 @@ document.addEventListener("DOMContentLoaded", () => {
         if (renderOfflineCrop()) return;
       }
 
+      // Crops PDF en ligne : regrouper par doc_id pour envoi en batch (réduit N×M → M requêtes)
+      if (!isOfflineMode && !isMarkdownDoc && srcUrl.startsWith('/api/crop/') && effectiveDocId) {
+        const cropMatch = srcUrl.match(/\/api\/crop\/(\d+)\/(\d+)\/(\d+)/);
+        if (cropMatch) {
+          const params = {
+            doc_id: Number(cropMatch[1]),
+            page: Number(cropMatch[2]),
+            occ_id: Number(cropMatch[3]),
+            h: new URL(srcUrl, window.location.origin).searchParams.get('h') || undefined,
+            terms: new URL(srcUrl, window.location.origin).searchParams.get('terms') || undefined,
+          };
+          this._enqueueBatch(effectiveDocId, img, vEl, params);
+          return;
+        }
+      }
+
       // Requête réseau en ligne avec annulation AbortController au défilement
       const controller = new AbortController();
       this.inFlightFetches.set(img, controller);
@@ -725,6 +834,12 @@ document.addEventListener("DOMContentLoaded", () => {
         clearTimeout(timer);
       }
       this.pendingDebounce.clear();
+      // Vider les batch queues en attente
+      for (const [, q] of this._batchQueues.entries()) {
+        if (q.timer) clearTimeout(q.timer);
+        for (const { img } of q.items) { img._wasCancelled = true; }
+      }
+      this._batchQueues.clear();
       if (this.inFlightFetches) {
         for (const [, ctrl] of this.inFlightFetches.entries()) {
           try { ctrl.abort(); } catch (e) { }
