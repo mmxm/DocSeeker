@@ -249,7 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let crop_permits = num_cpus.clamp(2, 8);
     let crop_semaphore = Arc::new(tokio::sync::Semaphore::new(crop_permits));
     let crop_in_flight = Arc::new(Mutex::new(std::collections::HashMap::new()));
-    let crop_cache = Arc::new(Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(2000).unwrap())));
+    let crop_cache = Arc::new(docseeker_backend::ShardedCropCache::new());
     let search_cache = Arc::new(Mutex::new(std::collections::HashMap::<String, docseeker_backend::SearchCacheEntry>::new()));
 
     let state = Arc::new(AppState {

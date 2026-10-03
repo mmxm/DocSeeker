@@ -63,11 +63,7 @@ pub async fn get_cover(
 
     // Vérifier le cache en mémoire pour la couverture sans détenir le verrou à travers await
     let cache_key = format!("cover:{}", doc_id);
-    let cached_hit = {
-        let mut cache = state.crop_cache.lock().unwrap_or_else(|e| e.into_inner());
-        cache.get(&cache_key).cloned()
-    };
-    if let Some(cached_bytes) = cached_hit {
+    if let Some(cached_bytes) = state.crop_cache.get(&cache_key) {
         return serve_image_bytes(cached_bytes, etag, if_none_match).await;
     }
 
@@ -133,10 +129,7 @@ pub async fn get_cover(
 
     match render_res {
         Ok(Ok(bytes)) => {
-            {
-                let mut cache = state.crop_cache.lock().unwrap_or_else(|e| e.into_inner());
-                cache.put(cache_key, bytes.clone());
-            }
+            state.crop_cache.put(cache_key, bytes.clone());
             serve_image_bytes(bytes, etag, if_none_match).await
         },
         Ok(Err(e)) => {
@@ -164,12 +157,8 @@ pub async fn get_crop(
     let cache_key = format!("crop:{}:{}:{}:{}:{}", doc_id, page, occ_id, query_hash, terms);
     let etag = format!("\"crop-{}-{}-{}-{}\"", doc_id, page, occ_id, query_hash);
 
-    // 1. Vérification immédiate du cache LRU en mémoire sans tenir le verrou sur await
-    let cached_hit = {
-        let mut cache = state.crop_cache.lock().unwrap_or_else(|e| e.into_inner());
-        cache.get(&cache_key).cloned()
-    };
-    if let Some(cached_bytes) = cached_hit {
+    // 1. Vérification immédiate du cache shardé en mémoire
+    if let Some(cached_bytes) = state.crop_cache.get(&cache_key) {
         return serve_image_bytes(cached_bytes, etag, if_none_match).await;
     }
 
@@ -187,11 +176,7 @@ pub async fn get_crop(
 
     if let Some(notify) = my_notify {
         notify.notified().await;
-        let cached_after_wait = {
-            let mut cache = state.crop_cache.lock().unwrap_or_else(|e| e.into_inner());
-            cache.get(&cache_key).cloned()
-        };
-        if let Some(cached_bytes) = cached_after_wait {
+        if let Some(cached_bytes) = state.crop_cache.get(&cache_key) {
             return serve_image_bytes(cached_bytes, etag, if_none_match).await;
         }
     }
@@ -250,10 +235,7 @@ pub async fn get_crop(
 
         match md_bytes {
             Ok(bytes) if !bytes.is_empty() => {
-                {
-                    let mut cache = state.crop_cache.lock().unwrap_or_else(|e| e.into_inner());
-                    cache.put(cache_key, bytes.clone());
-                }
+                state.crop_cache.put(cache_key, bytes.clone());
                 if let Some(notify) = notify_to_trigger {
                     notify.notify_waiters();
                 }
@@ -357,8 +339,7 @@ pub async fn get_crop(
     };
 
     if let Some(ref bytes) = crop_bytes {
-        let mut cache = state.crop_cache.lock().unwrap_or_else(|e| e.into_inner());
-        cache.put(cache_key, bytes.clone());
+        state.crop_cache.put(cache_key, bytes.clone());
     }
 
     if let Some(notify) = notify_to_trigger {
@@ -564,17 +545,14 @@ pub async fn get_crops_batch(
             item.terms.as_deref().unwrap_or("")
         );
 
-        // 1. Vérifier le cache LRU en mémoire
-        let cached = {
-            let mut cache = state.crop_cache.lock().unwrap_or_else(|e| e.into_inner());
-            cache.get(&cache_key).map(|b| {
-                use base64::Engine;
-                format!(
-                    "data:image/webp;base64,{}",
-                    base64::engine::general_purpose::STANDARD.encode(b)
-                )
-            })
-        };
+        // 1. Vérifier le cache shardé en mémoire
+        let cached = state.crop_cache.get(&cache_key).map(|b| {
+            use base64::Engine;
+            format!(
+                "data:image/webp;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(&b)
+            )
+        });
 
         if let Some(data_url) = cached {
             results.insert(key, Some(data_url));
@@ -635,8 +613,7 @@ pub async fn get_crops_batch(
 
         // 4. Mettre en cache et encoder en base64
         if let Some(ref bytes) = crop_bytes {
-            let mut cache = state.crop_cache.lock().unwrap_or_else(|e| e.into_inner());
-            cache.put(cache_key, bytes.clone());
+            state.crop_cache.put(cache_key, bytes.clone());
         }
 
         let data_url = crop_bytes.map(|bytes| {
