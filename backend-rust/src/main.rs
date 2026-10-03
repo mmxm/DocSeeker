@@ -330,7 +330,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_router = create_api_router(Arc::clone(&state));
 
     let compression_predicate = tower_http::compression::predicate::DefaultPredicate::new()
-        .and(tower_http::compression::predicate::NotForContentType::const_new("application/pdf"));
+        .and(tower_http::compression::predicate::NotForContentType::const_new("application/pdf"))
+        // Les images WebP/JPEG/PNG sont déjà compressées : re-compresser coûte du CPU pour rien
+        .and(tower_http::compression::predicate::NotForContentType::const_new("image/webp"))
+        .and(tower_http::compression::predicate::NotForContentType::const_new("image/jpeg"))
+        .and(tower_http::compression::predicate::NotForContentType::const_new("image/png"))
+        .and(tower_http::compression::predicate::NotForContentType::const_new("image/"));
     let compression = tower_http::compression::CompressionLayer::new().compress_when(compression_predicate);
 
     let app = Router::new()
