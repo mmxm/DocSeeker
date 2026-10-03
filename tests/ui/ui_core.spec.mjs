@@ -151,7 +151,7 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
     // Le badge de cache de dossier a été supprimé (redondant) : la carte ne doit plus l'afficher
     await expect(martingaleFolder.locator('.folder-cache-badge')).toHaveCount(0);
 
-    await martingaleFolder.click();
+    await h.openFolder(130);
     const doc1Card = page.locator('.doc-card[data-doc-id="1"]');
     await expect(doc1Card).toBeVisible({ timeout: 6000 });
     await expect(doc1Card.locator('.doc-cache-btn')).toHaveClass(/cached/);
@@ -688,7 +688,10 @@ test.describe('DocSeeker - Tests Cœur UI', () => {
     // (poll : le dispatch « find » suit la restauration de quelques centaines de ms)
     await expect
       .poll(() => page.evaluate(() => {
-        try { return document.getElementById('pdfFrame').contentWindow.PDFViewerApplication.findController?.state?.query?.[0] || null; } catch { return null; }
+        try {
+          const q = document.getElementById('pdfFrame').contentWindow.PDFViewerApplication.findController?.state?.query;
+          return Array.isArray(q) ? q[0] : q;
+        } catch { return null; }
       }), { timeout: 15000 })
       .toBe('grossesse');
 

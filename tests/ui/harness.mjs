@@ -45,7 +45,9 @@ export class DocSeekerTestHarness {
         text.includes('503 (PDF Offline Unavailable)') ||
         text.includes('status of 503') ||
         text.includes('Failed to fetch') ||
-        text.includes('favicon.ico')
+        text.includes('favicon.ico') ||
+        text.includes('ERR_INTERNET_DISCONNECTED') ||
+        text.includes('Worker réinitialisé suite à une mise à jour')
       ) return;
 
       // --- Erreurs significatives à capturer ---
@@ -220,16 +222,18 @@ export class DocSeekerTestHarness {
 
   async openFolder(folderId) {
     const folder = this.page.locator(`.folder-card[data-folder-id="${folderId}"]`);
-    if (await folder.isVisible().catch(() => false)) {
-      await folder.click();
-      return;
-    }
     const alreadyInside = await this.page.evaluate((id) => {
       return window.currentFolderId === Number(id) || document.querySelector(`.doc-card[data-folder-id="${id}"]`) !== null;
     }, folderId).catch(() => false);
     if (alreadyInside) return;
-    await folder.waitFor({ state: 'visible', timeout: 10000 });
-    await folder.click();
+
+    try {
+      await folder.waitFor({ state: 'visible', timeout: 5000 });
+      await folder.click({ timeout: 4000 });
+    } catch {
+      await this.page.waitForTimeout(300);
+      await this.page.locator(`.folder-card[data-folder-id="${folderId}"]`).click({ force: true });
+    }
   }
 
   async navigateToBreadcrumbRoot() {

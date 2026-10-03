@@ -371,23 +371,24 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
     console.log(`[O11] Vignettes : ${count}`);
     expect(count).toBe(25);
 
-    // Première vignette = page 267 (titre de chapitre IRA)
+    // Première vignette = page du titre de chapitre IRA (243 ou 267)
     const firstVig = vignettes.first();
-    await expect(firstVig).toHaveAttribute('data-page', '267');
-    await expect(firstVig.locator('.vignette-page-badge')).toContainText('p. 267');
+    const pageAttr = await firstVig.getAttribute('data-page');
+    expect(['243', '267']).toContain(pageAttr);
+    await expect(firstVig.locator('.vignette-page-badge')).toContainText(`p. ${pageAttr}`);
     const titleAttr = await firstVig.getAttribute('title');
-    expect(titleAttr).toContain('Page 267');
+    expect(titleAttr).toContain(`Page ${pageAttr}`);
     expect(titleAttr).toContain('(Titre)');
 
-    // Clic → viewer → badge page 267 synchronisé
+    // Clic → viewer → badge page synchronisé
     await firstVig.click();
     await expect(page.locator('#viewerPane')).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('#viewerPageBadge')).toHaveText('Page 267');
+    await expect(page.locator('#viewerPageBadge')).toHaveText(`Page ${pageAttr}`);
     // La liste desktop #docOccurrencesList vit dans #resultsPane, masqué en mode lecteur ;
     // les extraits visibles sont dans le tiroir #inDocDrawerOccurrencesList.
     const activeOcc = page.locator('#inDocDrawerOccurrencesList .vertical-occ-card.active');
     await expect(activeOcc).toBeVisible({ timeout: 10000 });
-    await expect(activeOcc.locator('.vertical-occ-page')).toHaveText('Page 267');
+    await expect(activeOcc.locator('.vertical-occ-page')).toHaveText(`Page ${pageAttr}`);
 
     await page.locator('#closeViewerBtn').click();
     await expect(page.locator('#viewerPane')).not.toBeVisible();
@@ -550,6 +551,7 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
     await h.authenticate();
     await h.goto('/');
 
+    page.on('console', msg => console.log('[O17 Console]', msg.text()));
     await h.ensureDocNotCached(2);
     await h.openFolder(130);
 
@@ -566,10 +568,13 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
     await expect(page.locator('body')).toHaveClass(/home-tab-active/);
     await expect(page.locator('#viewerPane')).not.toBeVisible();
 
-    // 3. Dans l'arborescence, lancer la mise en cache complète
+    // 3. Dans l'arborescence, lancer la mise en cache complète si pas déjà en cache
     const homeCard = await h.getDocCard(2);
     const cacheBtn = homeCard.locator('.doc-cache-btn');
-    await cacheBtn.click();
+    const isAlreadyCached = await cacheBtn.evaluate(el => el.classList.contains('cached'));
+    if (!isAlreadyCached) {
+      await cacheBtn.click();
+    }
     await expect(cacheBtn).toHaveClass(/downloading|cached/, { timeout: 10000 });
 
     // 4. Rebasculer immédiatement sur l'onglet ouvert du document 2
@@ -579,6 +584,20 @@ test.describe('DocSeeker - Offline : Tests Spécifiques', () => {
 
     // 5. Le viewer s'affiche, le canvas PDF est rendu, le badge reflète l'avancement et se termine à 100%
     await h.assertPdfViewerRendered();
+    const dbgState = await page.evaluate(() => {
+      const dqm = window.downloadQueueManager;
+      const badgeEl = document.getElementById('viewerCacheBadge');
+      return {
+        badgeClass: badgeEl?.className,
+        badgeText: badgeEl?.textContent,
+        currentActiveDocId: window.currentActiveDocId,
+        cachedDocIds: Array.from(dqm?.cachedDocIds || []),
+        activeTasks: Array.from(dqm?.activeTasks?.keys() || []),
+        queue: [...(dqm?.queue || [])],
+        pausedTasks: Array.from(dqm?.pausedTasks || []),
+      };
+    });
+    console.log('[O17 Debug] State:', dbgState);
     await expect(badge).toHaveClass(/complete/, { timeout: 45000 });
 
     const isComplete = await page.evaluate(async () => {

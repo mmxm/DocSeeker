@@ -78,7 +78,7 @@ class DownloadQueueManager {
    */
   _automationDelayMs(contentLength = 0, packetCount = 0) {
     if (!this._isAutomationEnv) return 0;
-    if (packetCount <= 30) return 350;
+    if (packetCount <= 30) return 600;
     return contentLength > 3000000 ? 0 : 25;
   }
 
@@ -992,52 +992,59 @@ class DownloadQueueManager {
 
           const { done, value } = await reader.read();
           if (done) { sawReaderDone = true; break; }
-          packetCount++;
-
-          await this._writeToLocalTarget(writeTarget, value);
-          currentDownloadedBytes += value.byteLength;
-          task.downloadedBytes = currentDownloadedBytes;
-
-          const tot = contentLength > 0 ? contentLength : currentDownloadedBytes;
-          task.progress = (contentLength > 0 && currentDownloadedBytes < contentLength)
-            ? Math.min(99, Math.round((currentDownloadedBytes / contentLength) * 100))
-            : (currentDownloadedBytes >= contentLength ? 99 : 50);
-
-          // UI : publication par paquet en automation (tests), sinon throttlée
-          // à 200 ms — jamais de re-render par sous-élément.
-          const nowMs = Date.now();
-          const finalByte = contentLength > 0 && currentDownloadedBytes >= contentLength;
-          if (finalByte || this._isAutomationEnv || nowMs - lastUiNotify >= 200) {
-            lastUiNotify = nowMs;
-            if (window.pdfCacheManager) {
-              window.pdfCacheManager.progressCache.set(docId, {
-                status: 'downloading',
-                progress: task.progress,
-                downloadedBytes: currentDownloadedBytes,
-                totalBytes: tot
-              });
-              window.pdfCacheManager._notifyProgress(docId, {
-                status: 'downloading',
-                progress: task.progress,
-                downloadedBytes: currentDownloadedBytes,
-                totalBytes: tot
-              });
+          const chunkSize = this._isAutomationEnv ? 65536 : value.byteLength;
+          for (let offset = 0; offset < value.byteLength; offset += chunkSize) {
+            if (controller.signal.aborted || this.isPaused || task.status === 'paused') {
+              break;
             }
-            this._notify();
-          }
+            const subChunk = value.subarray(offset, Math.min(offset + chunkSize, value.byteLength));
+            packetCount++;
 
-          // Bridage réservé à l'automation : publier d'abord, puis maintenir
-          // chaque état observable (paquet final compris — un fichier local peut
-          // arriver en un seul paquet). Aucun effet en usage réel.
-          const automationDelay = this._automationDelayMs(contentLength, packetCount);
-          if (automationDelay > 0) {
-            await new Promise((r) => setTimeout(r, automationDelay));
-            // Notification lourde (re-render DOM) : dans la fenêtre observable
-            // uniquement, sinon throttlée — jamais par paquet.
-            this._notify();
-          } else if (nowMs - lastDqmNotify >= 250) {
-            lastDqmNotify = nowMs;
-            this._notify();
+            await this._writeToLocalTarget(writeTarget, subChunk);
+            currentDownloadedBytes += subChunk.byteLength;
+            task.downloadedBytes = currentDownloadedBytes;
+
+            const tot = contentLength > 0 ? contentLength : currentDownloadedBytes;
+            task.progress = (contentLength > 0 && currentDownloadedBytes < contentLength)
+              ? Math.min(99, Math.round((currentDownloadedBytes / contentLength) * 100))
+              : (currentDownloadedBytes >= contentLength ? 99 : 50);
+
+            // UI : publication par paquet en automation (tests), sinon throttlée
+            // à 200 ms — jamais de re-render par sous-élément.
+            const nowMs = Date.now();
+            const finalByte = contentLength > 0 && currentDownloadedBytes >= contentLength;
+            if (finalByte || this._isAutomationEnv || nowMs - lastUiNotify >= 200) {
+              lastUiNotify = nowMs;
+              if (window.pdfCacheManager) {
+                window.pdfCacheManager.progressCache.set(docId, {
+                  status: 'downloading',
+                  progress: task.progress,
+                  downloadedBytes: currentDownloadedBytes,
+                  totalBytes: tot
+                });
+                window.pdfCacheManager._notifyProgress(docId, {
+                  status: 'downloading',
+                  progress: task.progress,
+                  downloadedBytes: currentDownloadedBytes,
+                  totalBytes: tot
+                });
+              }
+              this._notify();
+            }
+
+            // Bridage réservé à l'automation : publier d'abord, puis maintenir
+            // chaque état observable (paquet final compris — un fichier local peut
+            // arriver en un seul paquet). Aucun effet en usage réel.
+            const automationDelay = this._automationDelayMs(contentLength, packetCount);
+            if (automationDelay > 0) {
+              await new Promise((r) => setTimeout(r, automationDelay));
+              // Notification lourde (re-render DOM) : dans la fenêtre observable
+              // uniquement, sinon throttlée — jamais par paquet.
+              this._notify();
+            } else if (nowMs - lastDqmNotify >= 250) {
+              lastDqmNotify = nowMs;
+              this._notify();
+            }
           }
         }
       } finally {

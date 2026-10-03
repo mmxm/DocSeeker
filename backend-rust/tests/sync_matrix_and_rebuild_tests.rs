@@ -77,7 +77,8 @@ fn setup_test_app() -> (Arc<AppState>, String, tempfile::TempDir) {
         rate_limiter: Arc::new(LoginRateLimiter::new()),
         crop_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
         crop_in_flight: Arc::new(Mutex::new(std::collections::HashMap::new())),
-        crop_cache: Arc::new(Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(100).unwrap()))),
+        crop_cache: Arc::new(docseeker_backend::ShardedCropCache::new()),
+        search_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
     });
 
     (state, session_token.to_string(), tmp_dir)

@@ -4845,10 +4845,8 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         if (searchResult && Array.isArray(searchResult.results)) {
           searchResult.results = searchResult.results.filter(d => {
-            if (window.downloadQueueManager.isDocumentCached(d.id)) return true;
-            // Si le document est présent dans la base locale SQLite-Wasm, il est disponible hors-ligne
-            window.downloadQueueManager.cachedDocIds.add(Number(d.id));
-            return true;
+            if (d.doc_type === 'markdown') return true;
+            return window.downloadQueueManager.isDocumentCached(d.id);
           });
           searchResult.total_documents = searchResult.results.length;
         }
@@ -4884,9 +4882,8 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         if (searchResult && Array.isArray(searchResult.results)) {
           searchResult.results = searchResult.results.filter(d => {
-            if (window.downloadQueueManager.isDocumentCached(d.id)) return true;
-            window.downloadQueueManager.cachedDocIds.add(Number(d.id));
-            return true;
+            if (d.doc_type === 'markdown') return true;
+            return window.downloadQueueManager.isDocumentCached(d.id);
           });
           searchResult.total_documents = searchResult.results.length;
         }
@@ -6391,7 +6388,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     const isViewerAlive = Boolean(pdfFrame?.contentWindow?.PDFViewerApplication?.pdfDocument);
     const lastLoadedId = (typeof pdfFrame?._loadedDocId !== 'undefined') ? pdfFrame._loadedDocId : (isViewerAlive ? Number(currentActiveDocId) : null);
-    const isSameDoc = isViewerAlive && (Number(lastLoadedId) === numericDocId);
+    const wasComplete = Boolean(pdfFrame?._loadedWasComplete);
+    const nowComplete = Boolean((window.pdfCacheManager && window.pdfCacheManager.cachedIds.has(numericDocId)) || (window.downloadQueueManager && window.downloadQueueManager.cachedDocIds.has(numericDocId)));
+    const cacheTransition = !wasComplete && nowComplete;
+    const isSameDoc = isViewerAlive && (Number(lastLoadedId) === numericDocId) && !cacheTransition;
     if (!isSameDoc && currentActiveDocId && window.pdfCacheManager) {
       window.pdfCacheManager.pauseDownload(currentActiveDocId);
     }
@@ -6736,14 +6736,12 @@ document.addEventListener("DOMContentLoaded", () => {
     if (window.pdfCacheManager) {
       window.pdfCacheManager.getProgress(numericDocId).then(p => {
         if (thisLoadSeq !== currentViewerLoadSeq || Number(currentActiveDocId) !== numericDocId || !p) return;
-        // Garde anti-course : si l'état live de la file a bougé pendant la lecture
-        // disque (tâche active, en file, ou pause demandée), il est plus récent que
-        // cette réponse : ne pas écraser le badge avec un état périmé.
         const dqmNow = window.downloadQueueManager;
-        if (dqmNow && (dqmNow.activeTasks.has(numericDocId) || dqmNow.queue.includes(numericDocId) || dqmNow.pausedTasks?.has(numericDocId))) {
-          return;
+        let effStatus = p.status;
+        if (dqmNow && (dqmNow.activeTasks.has(numericDocId) || dqmNow.queue.includes(numericDocId))) {
+          if (effStatus !== 'complete' && p.progress < 100) effStatus = 'downloading';
         }
-        updateCacheUI(p.status, p.progress, p.downloadedBytes, p.totalBytes);
+        updateCacheUI(effStatus, p.progress, p.downloadedBytes, p.totalBytes);
       }).catch(() => { });
 
 
@@ -6867,6 +6865,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
 
     if (isSameDoc && pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
+      const app = pdfFrame?.contentWindow?.PDFViewerApplication;
+      if (app && app.pdfViewer) {
+        try {
+          app.pdfViewer.update();
+          if (typeof app.pdfViewer.forceRendering === "function") app.pdfViewer.forceRendering();
+        } catch (_) {}
+      }
       goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio, targetScrollTop);
       hookIframePinchZoomIsolation();
       hookIframeScrollAutoHide();
@@ -6880,12 +6885,13 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       (async () => {
         let pdfTargetUrl = buildPdfUrl(numericDocId);
+        let isCompleteInCache = false;
 
         if (window.pdfCacheManager) {
-          const complete = await window.pdfCacheManager.isComplete(numericDocId);
+          isCompleteInCache = Boolean(await window.pdfCacheManager.isComplete(numericDocId));
           if (thisLoadSeq !== currentViewerLoadSeq) return;
 
-          if (complete) {
+          if (isCompleteInCache) {
             updateCacheUI("complete", 100);
             try {
               const localBlobUrl = await window.pdfCacheManager.getBlobUrl(numericDocId);
@@ -7030,7 +7036,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
             await app.open({ url: pdfTargetUrl });
             if (thisLoadSeq !== currentViewerLoadSeq) return;
-            if (pdfFrame) pdfFrame._loadedDocId = numericDocId;
+            if (pdfFrame) {
+              pdfFrame._loadedDocId = numericDocId;
+              pdfFrame._loadedWasComplete = isCompleteInCache;
+            }
 
             // Sécurité si pagesinit s'est déjà produit ou pour assurer le cadrage exact
             setTimeout(() => {
@@ -7112,7 +7121,10 @@ document.addEventListener("DOMContentLoaded", () => {
           pdfFrame.src = viewerUrl;
           pdfFrame.onload = () => {
             if (thisLoadSeq !== currentViewerLoadSeq || Number(currentActiveDocId) !== numericDocId) return;
-            if (pdfFrame) pdfFrame._loadedDocId = numericDocId;
+            if (pdfFrame) {
+              pdfFrame._loadedDocId = numericDocId;
+              pdfFrame._loadedWasComplete = isCompleteInCache;
+            }
             try {
               if (pdfFrame.contentWindow) {
                 pdfFrame.contentWindow._suppressPdfJsFindScroll = true;
@@ -8137,6 +8149,8 @@ document.addEventListener("DOMContentLoaded", () => {
         } else if (isPaused) {
           const stats = window.pdfCacheManager?.progressCache.get(Number(currentActiveDocId));
           currentViewerUpdateCacheUI("paused", stats?.progress || 0, stats?.downloadedBytes || 0, stats?.totalBytes || 0);
+        } else if (state.cachedDocIds && state.cachedDocIds.includes(Number(currentActiveDocId))) {
+          currentViewerUpdateCacheUI("complete", 100);
         }
       }
       document.querySelectorAll(".doc-card[data-doc-id], .doc-card[data-id]").forEach(card => {

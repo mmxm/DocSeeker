@@ -11,6 +11,7 @@ export default async function globalSetup() {
     execSync(
       `sqlite3 data/db.sqlite "` +
         `INSERT OR IGNORE INTO folders (id, name, color) VALUES (130, 'Martingale', '#3b82f6');` +
+        `UPDATE folders SET id = 130 WHERE name = 'Martingale';` +
         `UPDATE documents SET folder_id = 130 WHERE id IN (1, 2, 3, 10, 577);"`,
       { stdio: 'ignore' }
     );
