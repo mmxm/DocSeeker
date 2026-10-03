@@ -70,7 +70,9 @@ impl PdfEngine {
 
         Ok(Self {
             pdfium: Arc::new(Mutex::new(pdfium)),
-            page_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(32).unwrap()))),
+            // 150 pages en cache : couvre 15 docs × 5 pages/doc + marge pour le scroll infini
+            // (était 32, saturé dès la première recherche retournant >32 pages distinctes)
+            page_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(150).unwrap()))),
         })
     }
 
