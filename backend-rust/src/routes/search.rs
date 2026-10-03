@@ -34,13 +34,14 @@ pub async fn search_handler(
     let titles_only = params.titles_only.unwrap_or(false);
     let limit = params.limit.unwrap_or(15);
     let offset = params.offset.unwrap_or(0);
+    let folder_id = params.folder_id;
 
     // Clé de cache : combinaison unique de tous les paramètres de recherche
     let cache_key = format!(
         "{}|{}|{}|{}|{}",
         query_str,
         titles_only,
-        params.folder_id.map_or(-1, |id| id),
+        folder_id.map_or(-1, |id| id),
         limit,
         offset
     );
@@ -48,7 +49,6 @@ pub async fn search_handler(
     // 1. Vérifier le cache TTL (sans tenir le verrou pendant la requête SQL)
     {
         let mut cache = state.search_cache.lock().unwrap_or_else(|e| e.into_inner());
-        // Purge des entrées expirées à chaque accès
         let ttl = std::time::Duration::from_secs(crate::SEARCH_CACHE_TTL_SECS);
         cache.retain(|_, (_, ts)| ts.elapsed() < ttl);
         if let Some((cached_response, _)) = cache.get(&cache_key) {
@@ -56,16 +56,19 @@ pub async fn search_handler(
         }
     }
 
-    let search_res = {
-        let conn = state.db.get().map_err(|_| {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
-        })?;
+    // 2. Exécuter la CTE SQLite dans un thread bloquant dédié
+    //    pour ne pas monopoliser un thread du runtime Tokio async.
+    let db = state.db.clone();
+    let search_res = tokio::task::spawn_blocking(move || {
+        let conn = db.get().map_err(|e| e.to_string())?;
+        search_documents(&conn, &query_str, titles_only, folder_id, Some(limit), Some(offset))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response())?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response())?;
 
-        search_documents(&conn, &query_str, titles_only, params.folder_id, Some(limit), Some(offset))
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response())?
-    };
-
-    // 2. Stocker le résultat dans le cache
+    // 3. Stocker le résultat dans le cache
     {
         let mut cache = state.search_cache.lock().unwrap_or_else(|e| e.into_inner());
         cache.insert(cache_key, (search_res.clone(), std::time::Instant::now()));
@@ -79,13 +82,20 @@ pub async fn doc_search_handler(
     Query(params): Query<DocSearchQueryParams>,
 ) -> Result<Json<serde_json::Value>, Response> {
     let query_str = params.q.unwrap_or_default();
+    let doc_id = params.doc_id;
+    let offset = params.offset;
+    let limit = params.limit;
 
-    let conn = state.db.get().map_err(|_| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
-    })?;
-
-    let search_res = search_within_document(&conn, params.doc_id, &query_str, params.offset, params.limit)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response())?;
+    // Exécuter la recherche interne au document dans un thread bloquant dédié
+    let db = state.db.clone();
+    let search_res = tokio::task::spawn_blocking(move || {
+        let conn = db.get().map_err(|e| e.to_string())?;
+        search_within_document(&conn, doc_id, &query_str, offset, limit)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response())?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))).into_response())?;
 
     Ok(Json(serde_json::to_value(search_res).unwrap_or_default()))
 }
