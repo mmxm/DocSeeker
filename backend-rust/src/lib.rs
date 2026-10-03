@@ -77,6 +77,7 @@ pub struct AppState {
     pub pipeline: Arc<IndexingPipeline>,
     pub rate_limiter: Arc<LoginRateLimiter>,
     pub crop_semaphore: Arc<tokio::sync::Semaphore>,
+    pub cover_semaphore: Arc<tokio::sync::Semaphore>,
     pub crop_in_flight: Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
     /// Cache de vignettes shardé : 16 LruCache pour réduire la contention Mutex
     pub crop_cache: Arc<ShardedCropCache>,

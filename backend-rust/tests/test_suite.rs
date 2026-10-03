@@ -28,6 +28,37 @@ fn test_unicode_normalization_accents_and_ligatures() {
 }
 
 #[test]
+fn test_cropbox_coordinate_alignment() {
+    let p = std::path::Path::new("../data/documents/URG de Garde 5E 2020.pdf");
+    if !p.exists() { return; }
+    let engine = docseeker_backend::pdf::engine::PdfEngine::new().unwrap();
+    let mut page_136_words: Vec<serde_json::Value> = Vec::new();
+    let _ = engine.extract_pages_streaming(p, |page_num, _, words| {
+        if page_num == 136 {
+            page_136_words = serde_json::from_str(&words).unwrap_or_default();
+        }
+        Ok(())
+    });
+
+    assert!(!page_136_words.is_empty(), "Page 136 should contain words");
+    // Find "NFS" occurrence on page 136
+    let nfs_words: Vec<&serde_json::Value> = page_136_words
+        .iter()
+        .filter(|w| w.get(4).and_then(|t| t.as_str()).map(|t| t.starts_with("NFS")).unwrap_or(false))
+        .collect();
+    assert!(!nfs_words.is_empty(), "Should find NFS on page 136");
+    for w in &nfs_words {
+        let x0 = w.get(0).unwrap().as_f64().unwrap();
+        let y0 = w.get(1).unwrap().as_f64().unwrap();
+        let x1 = w.get(2).unwrap().as_f64().unwrap();
+        let y1 = w.get(3).unwrap().as_f64().unwrap();
+        // Coordonnées dans les limites de la page (pw ~368, ph ~510)
+        assert!(x0 >= 0.0 && x1 <= 370.0, "x coordinates out of page: {}..{}", x0, x1);
+        assert!(y0 >= 0.0 && y1 <= 515.0, "y coordinates out of page: {}..{}", y0, y1);
+    }
+}
+
+#[test]
 fn test_fts5_diacritic_and_prefix_matching() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(r#"

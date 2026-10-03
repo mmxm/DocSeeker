@@ -248,6 +248,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(2);
     let crop_permits = num_cpus.clamp(2, 8);
     let crop_semaphore = Arc::new(tokio::sync::Semaphore::new(crop_permits));
+    // Sémaphore dédié aux couvertures (2 permis) : garantit que le défilement vertical
+    // et l'affichage des couvertures ne sont JAMAIS affamés par des vagues de batch crops.
+    let cover_semaphore = Arc::new(tokio::sync::Semaphore::new(2));
     let crop_in_flight = Arc::new(Mutex::new(std::collections::HashMap::new()));
     let crop_cache = Arc::new(docseeker_backend::ShardedCropCache::new());
     let search_cache = Arc::new(Mutex::new(std::collections::HashMap::<String, docseeker_backend::SearchCacheEntry>::new()));
@@ -259,6 +262,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pipeline,
         rate_limiter,
         crop_semaphore,
+        cover_semaphore,
         crop_in_flight,
         crop_cache,
         search_cache,

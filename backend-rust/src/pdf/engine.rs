@@ -113,6 +113,38 @@ impl PdfEngine {
                 let page_number = (page_idx + 1) as i64;
                 let page_height = page.height().value as f64;
 
+                // Spécification PDF ISO 32000-1 (section 14.11.2) :
+                // Les segments de texte sont rapportés dans le repère MediaBox, tandis que le rendu
+                // (Pdfium et PDF.js) s'effectue dans la boîte visible CropBox (ou son intersection avec MediaBox).
+                // On calcule l'origine (c_min_x, c_max_y) de la zone visible pour aligner exactement
+                // les coordonnées extraites avec l'image rendue à l'écran.
+                let mb_opt = page.boundaries().media().ok().map(|m| {
+                    let b = &m.bounds;
+                    let l = b.left().value as f64;
+                    let r = b.right().value as f64;
+                    let btm = b.bottom().value as f64;
+                    let tp = b.top().value as f64;
+                    (l.min(r), btm.min(tp), l.max(r), btm.max(tp))
+                });
+                let cb_opt = page.boundaries().crop().ok().map(|c| {
+                    let b = &c.bounds;
+                    let l = b.left().value as f64;
+                    let r = b.right().value as f64;
+                    let btm = b.bottom().value as f64;
+                    let tp = b.top().value as f64;
+                    (l.min(r), btm.min(tp), l.max(r), btm.max(tp))
+                });
+                let (c_min_x, c_max_y) = match (mb_opt, cb_opt) {
+                    (Some(mb), Some(cb)) => {
+                        let box_left = mb.0.max(cb.0);
+                        let box_top = mb.3.min(cb.3);
+                        (box_left, box_top)
+                    }
+                    (Some(mb), None) => (mb.0, mb.3),
+                    (None, Some(cb)) => (cb.0, cb.3),
+                    (None, None) => (0.0, page_height),
+                };
+
                 let (text_content, words_list) = if let Ok(text_page) = page.text() {
                     let full_text = text_page.all();
                     let mut words_list = Vec::new();
@@ -120,14 +152,18 @@ impl PdfEngine {
                     for (seg_idx, seg) in text_page.segments().iter().enumerate() {
                         let seg_text = seg.text();
                         let bounds = seg.bounds();
-                        let left = bounds.left().value as f64;
-                        let right = bounds.right().value as f64;
-                        let top = bounds.top().value as f64;
-                        let bottom = bounds.bottom().value as f64;
+                        let raw_left = bounds.left().value as f64;
+                        let raw_right = bounds.right().value as f64;
+                        let raw_top = bounds.top().value as f64;
+                        let raw_bottom = bounds.bottom().value as f64;
 
-                        // Conversion coordonnées PDF (bas-gauche) en coordonnées écran (haut-gauche)
-                        let y0 = (page_height - top).max(0.0);
-                        let y1 = (page_height - bottom).max(0.0);
+                        // Coordonnées X décalées dans le repère de la zone visible
+                        let left = (raw_left - c_min_x).max(0.0);
+                        let right = (raw_right - c_min_x).max(0.0);
+
+                        // Conversion coordonnées PDF Y (bas-gauche) en coordonnées écran (haut-gauche dans CropBox)
+                        let y0 = (c_max_y - raw_top).max(0.0);
+                        let y1 = (c_max_y - raw_bottom).max(0.0);
                         let (y_min, y_max) = if y0 < y1 { (y0, y1) } else { (y1, y0) };
 
                         let words_in_seg: Vec<&str> = seg_text.split_whitespace().collect();

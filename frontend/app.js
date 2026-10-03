@@ -585,11 +585,17 @@ document.addEventListener("DOMContentLoaded", () => {
       if (active.length === 0) return;
 
       const crops = active.map(({ params }) => params);
+      const controller = new AbortController();
+      for (const { img } of active) {
+        this.inFlightFetches.set(img, controller);
+      }
+
       try {
         const res = await fetch('/api/crops/batch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ crops })
+          body: JSON.stringify({ crops }),
+          signal: controller.signal
         });
         if (!res.ok) throw new Error(`batch HTTP ${res.status}`);
         const data = await res.json();
@@ -616,6 +622,12 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!img._wasCancelled && img.dataset.loaded !== "true") {
               this._fetchIndividual(img, img.getAttribute("data-src"), vEl);
             }
+          }
+        }
+      } finally {
+        for (const { img } of active) {
+          if (this.inFlightFetches.get(img) === controller) {
+            this.inFlightFetches.delete(img);
           }
         }
       }

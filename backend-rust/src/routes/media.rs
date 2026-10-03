@@ -67,6 +67,13 @@ pub async fn get_cover(
         return serve_image_bytes(cached_bytes, etag, if_none_match).await;
     }
 
+    // Vérifier le cache persistant sur disque (0ms, sans solliciter Pdfium ni le sémaphore)
+    let cover_disk_path = state.config.covers_dir.join(format!("{}.webp", doc_id));
+    if let Ok(bytes) = tokio::fs::read(&cover_disk_path).await {
+        state.crop_cache.put(cache_key, bytes.clone());
+        return serve_image_bytes(bytes, etag, if_none_match).await;
+    }
+
     // 1. Vérification DB : récupérer le nom, l'état et le type du document
     let (filename, status, doc_type): (Option<String>, Option<String>, Option<String>) = {
         let conn = match state.db.get() {
@@ -110,8 +117,8 @@ pub async fn get_cover(
         }
     }
 
-    // 2. Concurrence bornée via le sémaphore pour préserver les ressources CPU
-    let _permit = match state.crop_semaphore.clone().acquire_owned().await {
+    // 2. Concurrence dédiée via cover_semaphore pour ne JAMAIS être bloqué par les batch crops
+    let _permit = match state.cover_semaphore.clone().acquire_owned().await {
         Ok(p) => p,
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur sémaphore").into_response(),
     };
@@ -130,6 +137,12 @@ pub async fn get_cover(
     match render_res {
         Ok(Ok(bytes)) => {
             state.crop_cache.put(cache_key, bytes.clone());
+            // Persistance asynchrone sur disque pour les prochaines requêtes instantanées (0ms)
+            let disk_file = cover_disk_path;
+            let bytes_save = bytes.clone();
+            tokio::spawn(async move {
+                let _ = tokio::fs::write(disk_file, bytes_save).await;
+            });
             serve_image_bytes(bytes, etag, if_none_match).await
         },
         Ok(Err(e)) => {
@@ -533,7 +546,9 @@ pub async fn get_crops_batch(
     use std::collections::HashMap;
 
     let mut results: HashMap<String, Option<String>> = HashMap::new();
+    let mut missing_items = Vec::new();
 
+    // 1. Filtrer immédiatement les vignettes en cache mémoire (0ms, sans verrou ni sémaphore)
     for item in payload.crops {
         let key = format!("{}:{}:{}", item.doc_id, item.page, item.occ_id);
         let cache_key = format!(
@@ -545,85 +560,107 @@ pub async fn get_crops_batch(
             item.terms.as_deref().unwrap_or("")
         );
 
-        // 1. Vérifier le cache shardé en mémoire
-        let cached = state.crop_cache.get(&cache_key).map(|b| {
+        if let Some(cached_bytes) = state.crop_cache.get(&cache_key) {
             use base64::Engine;
-            format!(
+            let data_url = format!(
                 "data:image/webp;base64,{}",
-                base64::engine::general_purpose::STANDARD.encode(&b)
-            )
-        });
-
-        if let Some(data_url) = cached {
+                base64::engine::general_purpose::STANDARD.encode(&cached_bytes)
+            );
             results.insert(key, Some(data_url));
-            continue;
+        } else {
+            missing_items.push((key, cache_key, item));
         }
+    }
 
-        // 2. Charger words_json + filename depuis SQLite
-        let (filename, words_json) = {
-            let conn = match state.db.get() {
-                Ok(c) => c,
-                Err(_) => { results.insert(key, None); continue; }
+    if missing_items.is_empty() {
+        return Ok(Json(BatchCropResult { results }));
+    }
+
+    // 2. Charger les métadonnées SQLite par doc_id / page de façon groupée
+    let mut doc_filenames: HashMap<i64, Option<String>> = HashMap::new();
+    let mut page_words: HashMap<(i64, i64), String> = HashMap::new();
+
+    {
+        if let Ok(conn) = state.db.get() {
+            for (_, _, item) in &missing_items {
+                if !doc_filenames.contains_key(&item.doc_id) {
+                    let fname: Option<String> = conn.query_row(
+                        "SELECT filename FROM documents WHERE id = ?1",
+                        params![item.doc_id],
+                        |r| r.get(0),
+                    ).ok().flatten();
+                    doc_filenames.insert(item.doc_id, fname);
+                }
+                let page_key = (item.doc_id, item.page);
+                if !page_words.contains_key(&page_key) {
+                    let wj: Option<String> = conn.query_row(
+                        "SELECT words_json FROM pages WHERE doc_id = ?1 AND page_number = ?2",
+                        params![item.doc_id, item.page],
+                        |r| r.get(0),
+                    ).ok().flatten();
+                    page_words.insert(page_key, wj.unwrap_or_else(|| "[]".to_string()));
+                }
+            }
+        }
+    }
+
+    // 3. Traiter les vignettes manquantes en parallèle selon les permis disponibles
+    let futures = missing_items.into_iter().map(|(key, cache_key, item)| {
+        let state = Arc::clone(&state);
+        let fname_opt = doc_filenames.get(&item.doc_id).cloned().flatten();
+        let words_json = page_words.get(&(item.doc_id, item.page)).cloned().unwrap_or_else(|| "[]".to_string());
+
+        async move {
+            let fname = match fname_opt {
+                Some(f) => f,
+                None => return (key, None),
             };
-            let fname: Option<String> = conn.query_row(
-                "SELECT filename FROM documents WHERE id = ?1",
-                params![item.doc_id],
-                |r| r.get(0),
-            ).ok().flatten();
-            let wj: Option<String> = conn.query_row(
-                "SELECT words_json FROM pages WHERE doc_id = ?1 AND page_number = ?2",
-                params![item.doc_id, item.page],
-                |r| r.get(0),
-            ).ok().flatten();
-            (fname, wj.unwrap_or_else(|| "[]".to_string()))
-        };
 
-        let fname = match filename {
-            Some(f) => f,
-            None => { results.insert(key, None); continue; }
-        };
+            let query_hash = item.h.clone().unwrap_or_default();
+            let terms_str = item.terms.clone().unwrap_or_default();
+            let occ_id = item.occ_id;
+            let page = item.page;
+            let doc_id = item.doc_id;
 
-        let query_hash = item.h.clone().unwrap_or_default();
-        let terms_str = item.terms.clone().unwrap_or_default();
-        let occ_id = item.occ_id;
-        let page = item.page;
-        let doc_id = item.doc_id;
+            let permit = match state.crop_semaphore.clone().acquire_owned().await {
+                Ok(p) => p,
+                Err(_) => return (key, None),
+            };
 
-        // 3. Acquérir le sémaphore Pdfium et générer la vignette
-        let permit = match state.crop_semaphore.clone().acquire_owned().await {
-            Ok(p) => p,
-            Err(_) => { results.insert(key, None); continue; }
-        };
+            let state_clone = Arc::clone(&state);
+            let crop_bytes = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                generate_crops_for_page(
+                    &state_clone.pdf_engine,
+                    &state_clone.config,
+                    doc_id,
+                    page,
+                    occ_id,
+                    &query_hash,
+                    &terms_str,
+                    &words_json,
+                    &fname,
+                )
+            }).await.unwrap_or(None);
 
-        let state_clone = Arc::clone(&state);
-        let crop_bytes = tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            generate_crops_for_page(
-                &state_clone.pdf_engine,
-                &state_clone.config,
-                doc_id,
-                page,
-                occ_id,
-                &query_hash,
-                &terms_str,
-                &words_json,
-                &fname,
-            )
-        }).await.unwrap_or(None);
+            if let Some(ref bytes) = crop_bytes {
+                state.crop_cache.put(cache_key, bytes.clone());
+            }
 
-        // 4. Mettre en cache et encoder en base64
-        if let Some(ref bytes) = crop_bytes {
-            state.crop_cache.put(cache_key, bytes.clone());
+            let data_url = crop_bytes.map(|bytes| {
+                use base64::Engine;
+                format!(
+                    "data:image/webp;base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(&bytes)
+                )
+            });
+
+            (key, data_url)
         }
+    });
 
-        let data_url = crop_bytes.map(|bytes| {
-            use base64::Engine;
-            format!(
-                "data:image/webp;base64,{}",
-                base64::engine::general_purpose::STANDARD.encode(&bytes)
-            )
-        });
-
+    let rendered_items = futures_util::future::join_all(futures).await;
+    for (key, data_url) in rendered_items {
         results.insert(key, data_url);
     }
 

@@ -159,7 +159,32 @@ pub fn init_db(db_path: &Path) -> Result<()> {
     conn.execute_batch("
         CREATE INDEX IF NOT EXISTS idx_documents_doc_type ON documents(doc_type);
         CREATE INDEX IF NOT EXISTS idx_documents_deleted_at ON documents(deleted_at);
+        CREATE TABLE IF NOT EXISTS _system_migrations (name TEXT PRIMARY KEY);
     ")?;
+
+    // Migration 2026-10-03 : Recalcul de words_json pour les PDF à CropBox non alignée sur MediaBox
+    let cropbox_migrated: bool = conn
+        .query_row(
+            "SELECT count(*) FROM _system_migrations WHERE name = 'cropbox_offset_fix_v1'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|c| c > 0)
+        .unwrap_or(false);
+
+    if !cropbox_migrated {
+        let affected = conn.execute(
+            "UPDATE documents SET status = 'pending' WHERE filename IN (
+                'URG de Garde 5E 2020.pdf',
+                'Gériatrie - 5E 2021.pdf',
+                'Méd Travail & Légale - 3E 2025.pdf',
+                'Anatomie et cytologie - 4E 2023.pdf'
+            )",
+            [],
+        ).unwrap_or(0);
+        info!("[Migration] {} document(s) reprogrammé(s) pour réindexation des coordonnées CropBox.", affected);
+        let _ = conn.execute("INSERT OR REPLACE INTO _system_migrations (name) VALUES ('cropbox_offset_fix_v1')", []);
+    }
 
     info!("Base de données SQLite initialisée avec succès : {:?}", db_path);
     Ok(())
