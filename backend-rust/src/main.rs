@@ -250,6 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let crop_semaphore = Arc::new(tokio::sync::Semaphore::new(crop_permits));
     let crop_in_flight = Arc::new(Mutex::new(std::collections::HashMap::new()));
     let crop_cache = Arc::new(Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(2000).unwrap())));
+    let search_cache = Arc::new(Mutex::new(std::collections::HashMap::<String, docseeker_backend::SearchCacheEntry>::new()));
 
     let state = Arc::new(AppState {
         config: config.clone(),
@@ -260,6 +261,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         crop_semaphore,
         crop_in_flight,
         crop_cache,
+        search_cache,
     });
 
     // Synchronisation initiale des fichiers PDF en tâche de fond (démarrage serveur immédiat sans bloquer le healthcheck)

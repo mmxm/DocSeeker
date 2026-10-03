@@ -35,6 +35,27 @@ pub async fn search_handler(
     let limit = params.limit.unwrap_or(15);
     let offset = params.offset.unwrap_or(0);
 
+    // Clé de cache : combinaison unique de tous les paramètres de recherche
+    let cache_key = format!(
+        "{}|{}|{}|{}|{}",
+        query_str,
+        titles_only,
+        params.folder_id.map_or(-1, |id| id),
+        limit,
+        offset
+    );
+
+    // 1. Vérifier le cache TTL (sans tenir le verrou pendant la requête SQL)
+    {
+        let mut cache = state.search_cache.lock().unwrap_or_else(|e| e.into_inner());
+        // Purge des entrées expirées à chaque accès
+        let ttl = std::time::Duration::from_secs(crate::SEARCH_CACHE_TTL_SECS);
+        cache.retain(|_, (_, ts)| ts.elapsed() < ttl);
+        if let Some((cached_response, _)) = cache.get(&cache_key) {
+            return Ok(Json(serde_json::to_value(cached_response).unwrap_or_default()));
+        }
+    }
+
     let search_res = {
         let conn = state.db.get().map_err(|_| {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "DB lock error"}))).into_response()
@@ -43,6 +64,12 @@ pub async fn search_handler(
         search_documents(&conn, &query_str, titles_only, params.folder_id, Some(limit), Some(offset))
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response())?
     };
+
+    // 2. Stocker le résultat dans le cache
+    {
+        let mut cache = state.search_cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.insert(cache_key, (search_res.clone(), std::time::Instant::now()));
+    }
 
     Ok(Json(serde_json::to_value(search_res).unwrap_or_default()))
 }

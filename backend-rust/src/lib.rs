@@ -19,6 +19,11 @@ pub use pipeline::IndexingPipeline;
 pub use auth::rate_limit::LoginRateLimiter;
 pub use search::types::SearchResponse;
 
+/// Entrée du cache de résultats de recherche : (résultats, instant d'insertion)
+pub type SearchCacheEntry = (SearchResponse, std::time::Instant);
+
+pub const SEARCH_CACHE_TTL_SECS: u64 = 60;
+
 pub struct AppState {
     pub config: Config,
     pub db: DbPool,
@@ -28,5 +33,7 @@ pub struct AppState {
     pub crop_semaphore: Arc<tokio::sync::Semaphore>,
     pub crop_in_flight: Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
     pub crop_cache: Arc<Mutex<LruCache<String, Vec<u8>>>>,
+    /// Cache applicatif des résultats de recherche : clé = query_hash + offset + limit + filtre
+    pub search_cache: Arc<Mutex<HashMap<String, SearchCacheEntry>>>,
 }
 
