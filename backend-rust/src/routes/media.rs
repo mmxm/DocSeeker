@@ -378,18 +378,26 @@ pub async fn get_pdf(
     Path(doc_id): Path<i64>,
     headers: HeaderMap,
 ) -> Response {
-    let filename: Option<String> = {
+    let (filename, doc_type): (Option<String>, Option<String>) = {
         let conn = match state.db.get() {
             Ok(c) => c,
             Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Erreur DB").into_response(),
         };
-        conn.query_row("SELECT filename FROM documents WHERE id = ?1", params![doc_id], |r| r.get(0)).ok()
+        conn.query_row(
+            "SELECT filename, COALESCE(doc_type, 'pdf') FROM documents WHERE id = ?1",
+            params![doc_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).ok().unwrap_or((None, None))
     };
 
     let fname = match filename {
         Some(f) => f,
         None => return (StatusCode::NOT_FOUND, "Document introuvable en base").into_response(),
     };
+
+    if doc_type.as_deref() == Some("markdown") || fname.ends_with(".md") || fname.ends_with(".markdown") {
+        return (StatusCode::BAD_REQUEST, "Ce document est une note Markdown, non un fichier PDF").into_response();
+    }
 
     let pdf_path = match crate::pdf::indexer::resolve_pdf_path(&state.config.documents_dir, &fname) {
         Some(p) => p,

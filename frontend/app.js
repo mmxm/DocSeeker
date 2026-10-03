@@ -1155,7 +1155,7 @@ document.addEventListener("DOMContentLoaded", () => {
         updateOccurrenceStepperUI();
         const targetRect = (occ.highlight_rects && occ.highlight_rects.length > 0) ? occ.highlight_rects[0] : occ.rect;
         // Héritage EXPLICITE de la recherche globale au moment du clic (résultat de recherche)
-        openDocumentInSplitView(docId, docTitle, occ.page_number, occurrences, targetRect, occ.y_ratio || 0, occ.occ_id, currentSearchQuery || null);
+        openDocumentInSplitView(docId, docTitle, occ.page_number, occurrences, targetRect, occ.y_ratio || 0, occ.occ_id, currentSearchQuery || null, isMd, matchedDocForDrawer?.filename || activeTabForDrawer?.filename || null);
       });
       drawerOccurrencesList.appendChild(item);
       const img = item.querySelector(".dynamic-crop");
@@ -1260,6 +1260,8 @@ document.addEventListener("DOMContentLoaded", () => {
         id: t.id,
         docId: t.docId,
         title: t.title,
+        isMarkdown: Boolean(t.isMarkdown),
+        filename: t.filename || null,
         page: t.page || 1,
         scrollTop: t.scrollTop ?? null,
         scrollLeft: t.scrollLeft ?? null,
@@ -1343,10 +1345,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const restored = [];
     for (const st of snap.tabs) {
       if (!st || !Number.isFinite(Number(st.docId))) continue;
+      const isMd = Boolean(st.isMarkdown || (st.filename && (st.filename.endsWith('.md') || st.filename.endsWith('.markdown'))) || (st.title && (st.title.endsWith('.md') || st.title.endsWith('.markdown'))));
+      const mdFn = st.filename || (isMd ? (st.title?.endsWith('.md') ? st.title : `${st.title}.md`) : null);
       restored.push({
         id: st.id || `tab_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         docId: Number(st.docId),
         title: st.title || `Document #${st.docId}`,
+        isMarkdown: isMd,
+        filename: mdFn,
         page: st.page || 1,
         rect: null,
         yRatio: 0,
@@ -4553,7 +4559,7 @@ document.addEventListener("DOMContentLoaded", () => {
         let rect = null;
         try { rect = JSON.parse(vEl.getAttribute("data-rect") || "[]"); } catch (e) { }
         // Héritage EXPLICITE de la recherche globale au moment du clic (vignette de résultat)
-        openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], rect, yRatio, occId, currentSearchQuery || null);
+        openDocumentInSplitView(doc.id, doc.title, dPage, doc.occurrences_by_page || doc.vignettes || [], rect, yRatio, occId, currentSearchQuery || null, isMd, doc.filename || null);
       });
 
       // Scroll infini horizontal : chargement transparent des occurrences suivantes au scroll vers la droite
@@ -4676,7 +4682,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const yRatio = firstOcc ? firstOcc.y_ratio : 0;
       const firstOccId = firstOcc ? firstOcc.occ_id : null;
       // Héritage EXPLICITE de la recherche globale au moment du clic (couverture/titre de résultat)
-      openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], firstRect, yRatio, firstOccId, currentSearchQuery || null);
+      openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], firstRect, yRatio, firstOccId, currentSearchQuery || null, isMd, doc.filename || null);
     };
 
     if (!isSearch) {
@@ -5508,6 +5514,16 @@ document.addEventListener("DOMContentLoaded", () => {
     saveCurrentTabState() {
       const currentTab = this.openTabs.find(t => t.id === this.activeTabId);
       if (!currentTab) return;
+      if (currentTab.isMarkdown) {
+        currentTab.page = 1;
+        const mdContainer = document.getElementById("markdownEditorContainer");
+        const scrollContainer = mdContainer?.querySelector(".milkdown-scroll-container") || mdContainer;
+        if (scrollContainer) {
+          currentTab.scrollTop = scrollContainer.scrollTop;
+          currentTab.scrollLeft = scrollContainer.scrollLeft;
+        }
+        return;
+      }
       currentTab.page = getCurrentViewerPage();
       currentTab.activeOccurrenceIndex = currentActiveOccurrenceIndex;
       if (inDocSearchDrawer) {
@@ -5537,7 +5553,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     },
 
-    openTab(docId, docTitle, targetPage = 1, occurrences = [], targetRect = null, targetYRatio = 0, targetOccId = null, searchQuery = null) {
+    openTab(docId, docTitle, targetPage = 1, occurrences = [], targetRect = null, targetYRatio = 0, targetOccId = null, searchQuery = null, isMarkdown = null, filename = null) {
       const numericDocId = Number(docId);
       this.saveCurrentTabState();
       // Quitter le mode accueil
@@ -5546,9 +5562,46 @@ document.addEventListener("DOMContentLoaded", () => {
       const appEl = document.getElementById("app");
       if (appEl) appEl.classList.remove("home-tab-active");
 
+      // Détection fiable Markdown
+      let isMd = false;
+      let mdFilename = filename || null;
+      if (isMarkdown === true) {
+        isMd = true;
+      } else if (isMarkdown === false) {
+        isMd = false;
+      } else {
+        const matchedDoc = Array.isArray(currentLoadedDocs) ? currentLoadedDocs.find(d => Number(d.id) === numericDocId) : null;
+        const queueDoc = window.downloadQueueManager?._cachedDocsList?.find(d => Number(d.id) === numericDocId)
+          || window.downloadQueueManager?._libraryDocsList?.find(d => Number(d.id) === numericDocId);
+        const docMeta = matchedDoc || queueDoc;
+        if (docMeta) {
+          if (docMeta.doc_type === 'markdown') isMd = true;
+          if (docMeta.filename && (docMeta.filename.endsWith('.md') || docMeta.filename.endsWith('.markdown'))) {
+            isMd = true;
+            if (!mdFilename) mdFilename = docMeta.filename;
+          }
+        }
+        if (!isMd && window.MarkdownManager && Number(window.MarkdownManager.currentDocId) === numericDocId) {
+          isMd = true;
+          if (!mdFilename && window.MarkdownManager.currentFilename) {
+            mdFilename = window.MarkdownManager.currentFilename;
+          }
+        }
+        if (!isMd && docTitle && (docTitle.endsWith('.md') || docTitle.endsWith('.markdown'))) {
+          isMd = true;
+        }
+      }
+      if (isMd && !mdFilename) {
+        mdFilename = (docTitle && (docTitle.endsWith('.md') || docTitle.endsWith('.markdown'))) ? docTitle : `${docTitle}.md`;
+      }
+
       let existingTab = this.openTabs.find(t => Number(t.docId) === numericDocId);
       if (existingTab) {
         this.activeTabId = existingTab.id;
+        if (isMd) {
+          existingTab.isMarkdown = true;
+          if (mdFilename) existingTab.filename = mdFilename;
+        }
         existingTab.page = targetPage;
         existingTab.rect = targetRect;
         existingTab.yRatio = targetYRatio;
@@ -5572,6 +5625,8 @@ document.addEventListener("DOMContentLoaded", () => {
           id: `tab_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
           docId: numericDocId,
           title: docTitle || `Document #${numericDocId}`,
+          isMarkdown: isMd,
+          filename: mdFilename,
           page: targetPage,
           rect: targetRect,
           yRatio: targetYRatio,
@@ -6108,8 +6163,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0, targetOccId = null, searchQuery = null) {
-    tabManager.openTab(docId, docTitle, targetPage, occurrences, targetRect, targetYRatio, targetOccId, searchQuery);
+  function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0, targetOccId = null, searchQuery = null, isMarkdown = null, filename = null) {
+    tabManager.openTab(docId, docTitle, targetPage, occurrences, targetRect, targetYRatio, targetOccId, searchQuery, isMarkdown, filename);
   }
   tabManager.renderTabs = tabManager.renderTabsUI.bind(tabManager);
   window.tabManager = tabManager;
@@ -6124,6 +6179,96 @@ document.addEventListener("DOMContentLoaded", () => {
       ? tabManager.openTabs.find(t => Number(t.docId) === numericDocId)
       : null;
     const matchedDoc = Array.isArray(currentLoadedDocs) ? currentLoadedDocs.find(d => Number(d.id) === numericDocId) : null;
+    const queueDoc = window.downloadQueueManager?._cachedDocsList?.find(d => Number(d.id) === numericDocId)
+      || window.downloadQueueManager?._libraryDocsList?.find(d => Number(d.id) === numericDocId);
+    const docMeta = matchedDoc || queueDoc;
+
+    // Détection Markdown ultra-robuste
+    let isMarkdownDoc = Boolean(
+      (targetTab && (targetTab.isMarkdown || (targetTab.filename && (targetTab.filename.endsWith('.md') || targetTab.filename.endsWith('.markdown'))))) ||
+      (docMeta && (docMeta.doc_type === 'markdown' || (docMeta.filename && (docMeta.filename.endsWith('.md') || docMeta.filename.endsWith('.markdown'))))) ||
+      (docTitle && (docTitle.endsWith('.md') || docTitle.endsWith('.markdown'))) ||
+      (window.MarkdownManager && Number(window.MarkdownManager.currentDocId) === numericDocId)
+    );
+
+    if (isMarkdownDoc && targetTab) {
+      targetTab.isMarkdown = true;
+      if (!targetTab.filename) {
+        targetTab.filename = (docMeta && docMeta.filename)
+          || (docTitle && (docTitle.endsWith('.md') || docTitle.endsWith('.markdown')) ? docTitle : `${docTitle}.md`);
+      }
+    }
+
+    currentActiveDocId = numericDocId;
+    window.currentActiveDocId = numericDocId;
+    currentActiveDocTitle = docTitle;
+    const effectiveSearchQuery = (targetTab && targetTab.searchQuery) || "";
+
+    // Support de l'historique de navigation pour le bouton retour mobile
+    if (!workspace.classList.contains("split-active")) {
+      window.history.pushState({ view: "split" }, "");
+    }
+
+    workspace.classList.add("split-active");
+    if (mainSidebarDrawer) mainSidebarDrawer.classList.remove("open");
+    if (mainSidebarOverlay) mainSidebarOverlay.style.display = "none";
+
+    document.body.classList.remove("home-tab-active");
+    document.documentElement.classList.remove("home-tab-active");
+    const appEl = document.getElementById("app");
+    if (appEl) {
+      appEl.classList.remove("home-tab-active");
+      appEl.classList.add("doc-open");
+    }
+    document.documentElement.classList.add("doc-open");
+    document.body.classList.add("doc-open");
+    setDocumentZoomLock(true);
+
+    if (viewerPane) {
+      viewerPane.classList.remove("header-hidden");
+      viewerPane.style.display = "";
+    }
+    if (resultsPane) {
+      resultsPane.style.display = "none";
+    }
+
+    if (isMarkdownDoc) {
+      if (pdfFrame) {
+        pdfFrame.style.display = "none";
+        pdfFrame._loadedDocId = null;
+      }
+      const mdContainer = document.getElementById("markdownEditorContainer");
+      if (mdContainer) mdContainer.style.display = "flex";
+      if (viewerPageBadge) viewerPageBadge.style.display = "none";
+      const viewerCacheBadge = document.getElementById("viewerCacheBadge");
+      if (viewerCacheBadge) viewerCacheBadge.style.display = "none";
+      if (viewerDocTitle) viewerDocTitle.textContent = docTitle || "Note Markdown";
+
+      const filename = (targetTab && targetTab.filename)
+        || (docMeta && docMeta.filename)
+        || (docTitle && (docTitle.endsWith('.md') || docTitle.endsWith('.markdown')) ? docTitle : `${docTitle}.md`);
+
+      if (window.MarkdownManager) {
+        window.MarkdownManager.loadNote(numericDocId, filename, docTitle, null, targetScrollTop);
+      }
+      if (window.downloadQueueManager) {
+        window.downloadQueueManager.cachedDocIds.add(numericDocId);
+      }
+      updateDocCardCacheUI(numericDocId);
+      if (effectiveSearchQuery) {
+        setTimeout(() => {
+          performDocSearch(effectiveSearchQuery, false);
+        }, 350);
+      }
+      return;
+    }
+
+    // --- Branche PDF ci-dessous ---
+    if (pdfFrame) pdfFrame.style.display = "block";
+    const mdContainer = document.getElementById("markdownEditorContainer");
+    if (mdContainer) mdContainer.style.display = "none";
+    if (viewerPageBadge) viewerPageBadge.style.display = "";
+
     const maxKnownPages = (matchedDoc && matchedDoc.total_pages > 0) ? matchedDoc.total_pages : (targetTab && targetTab.totalPages > 0 ? targetTab.totalPages : 0);
     targetPage = parseInt(targetPage, 10) || 1;
     if (maxKnownPages > 0 && targetPage > maxKnownPages) {
@@ -6135,10 +6280,6 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!isSameDoc && currentActiveDocId && window.pdfCacheManager) {
       window.pdfCacheManager.pauseDownload(currentActiveDocId);
     }
-    currentActiveDocId = numericDocId;
-    window.currentActiveDocId = numericDocId;
-    currentActiveDocTitle = docTitle;
-    const effectiveSearchQuery = (targetTab && targetTab.searchQuery) || "";
 
     // Le streaming HTTP 206 et le cache natif HTTP du navigateur gèrent le chargement et la mise en cache de manière optimale sans collision réseau.
     if (window.pdfCacheManager) {
@@ -6165,15 +6306,6 @@ document.addEventListener("DOMContentLoaded", () => {
       }, 1500);
     }
 
-    // Support de l'historique de navigation pour le bouton retour mobile
-    if (!workspace.classList.contains("split-active")) {
-      window.history.pushState({ view: "split" }, "");
-    }
-
-    workspace.classList.add("split-active");
-    if (mainSidebarDrawer) mainSidebarDrawer.classList.remove("open");
-    if (mainSidebarOverlay) mainSidebarOverlay.style.display = "none";
-
     // Volet latéral des résultats in-doc : restaurer ou initialiser l'état selon l'onglet cible
     let shouldShowDrawer = false;
     if (targetTab && typeof targetTab.drawerOpen === 'boolean') {
@@ -6194,23 +6326,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (readerSidebarToggleBtn) {
       readerSidebarToggleBtn.classList.toggle("active", shouldShowDrawer);
     }
-    document.body.classList.remove("home-tab-active");
-    document.documentElement.classList.remove("home-tab-active");
-    const appEl = document.getElementById("app");
-    if (appEl) appEl.classList.remove("home-tab-active");
 
-    if (viewerPane) {
-      viewerPane.classList.remove("header-hidden");
-      viewerPane.style.display = "";
-    }
-    if (resultsPane) {
-      resultsPane.style.display = "none";
-    }
     lastViewerScrollTop = 0;
-    document.documentElement.classList.add("doc-open");
-    document.body.classList.add("doc-open");
-    if (appEl) appEl.classList.add("doc-open");
-    setDocumentZoomLock(true);
 
     // CANAL 1 : synchroniser les champs avec la recherche de l'ONGLET cible
     syncDocSearchInputs(effectiveSearchQuery);
@@ -6350,7 +6467,7 @@ document.addEventListener("DOMContentLoaded", () => {
     viewerPageBadge.textContent = `Page ${targetPage}`;
 
     const viewerCacheBadge = document.getElementById("viewerCacheBadge");
-    const updateCacheUI = (status, progress, downloadedBytes = 0, totalBytes = 0) => {
+    function updateCacheUI(status, progress, downloadedBytes = 0, totalBytes = 0) {
       if (!viewerCacheBadge) return;
       // Si le document est déjà validé 100% en cache, interdire la régression vers "downloading" (due à la lecture locale des chunks par PDF.js)
       if (viewerCacheBadge.classList.contains("complete") && status === "downloading") {
@@ -6633,39 +6750,6 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    // Dispatch selon le type de document (Markdown vs PDF)
-    const isMarkdownDoc = (matchedDoc && matchedDoc.doc_type === 'markdown') ||
-                          (matchedDoc && matchedDoc.filename && (matchedDoc.filename.endsWith('.md') || matchedDoc.filename.endsWith('.markdown'))) ||
-                          (docTitle && (docTitle.endsWith('.md') || docTitle.endsWith('.markdown')));
-
-    if (isMarkdownDoc) {
-      if (pdfFrame) {
-        pdfFrame.style.display = "none";
-        pdfFrame._loadedDocId = null;
-      }
-      const mdContainer = document.getElementById("markdownEditorContainer");
-      if (mdContainer) mdContainer.style.display = "flex";
-
-      const filename = matchedDoc ? matchedDoc.filename : (docTitle.endsWith('.md') ? docTitle : `${docTitle}.md`);
-      if (window.MarkdownManager) {
-        window.MarkdownManager.loadNote(numericDocId, filename, docTitle);
-      }
-      if (window.downloadQueueManager) {
-        window.downloadQueueManager.cachedDocIds.add(numericDocId);
-      }
-      updateCacheUI("complete", 100);
-      updateDocCardCacheUI(numericDocId);
-      if (effectiveSearchQuery) {
-        setTimeout(() => {
-          performDocSearch(effectiveSearchQuery, false);
-        }, 350);
-      }
-      return;
-    } else {
-      if (pdfFrame) pdfFrame.style.display = "block";
-      const mdContainer = document.getElementById("markdownEditorContainer");
-      if (mdContainer) mdContainer.style.display = "none";
-    }
 
     if (isSameDoc && pdfFrame.contentWindow && pdfFrame.contentWindow.PDFViewerApplication) {
       goToPageAndScrollToOccurrence(targetPage, targetRect, targetYRatio, targetScrollTop);
@@ -6797,6 +6881,38 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             if (thisLoadSeq !== currentViewerLoadSeq) return;
+
+            // Double-check de sécurité si docMeta était absent : vérifier l'API distante pour ne jamais donner du Markdown à PDF.js
+            if (!docMeta) {
+              try {
+                const statusRes = await fetch(`/api/documents/${numericDocId}/status`).catch(() => null);
+                if (statusRes && statusRes.ok) {
+                  const statusData = await statusRes.json().catch(() => null);
+                  if (statusData && (statusData.doc_type === 'markdown' || (statusData.filename && (statusData.filename.endsWith('.md') || statusData.filename.endsWith('.markdown'))))) {
+                    if (targetTab) {
+                      targetTab.isMarkdown = true;
+                      targetTab.filename = statusData.filename;
+                    }
+                    if (pdfFrame) {
+                      pdfFrame.style.display = "none";
+                      pdfFrame._loadedDocId = null;
+                    }
+                    const mdC = document.getElementById("markdownEditorContainer");
+                    if (mdC) mdC.style.display = "flex";
+                    if (viewerPageBadge) viewerPageBadge.style.display = "none";
+                    const vcb = document.getElementById("viewerCacheBadge");
+                    if (vcb) vcb.style.display = "none";
+                    if (viewerDocTitle) viewerDocTitle.textContent = statusData.title || docTitle || "Note Markdown";
+                    if (window.MarkdownManager) {
+                      window.MarkdownManager.loadNote(numericDocId, statusData.filename, statusData.title || docTitle, null, targetScrollTop);
+                    }
+                    updateDocCardCacheUI(numericDocId);
+                    return;
+                  }
+                }
+              } catch (e) { }
+            }
+
             await app.open({ url: pdfTargetUrl });
             if (thisLoadSeq !== currentViewerLoadSeq) return;
             if (pdfFrame) pdfFrame._loadedDocId = numericDocId;
@@ -6824,6 +6940,35 @@ document.addEventListener("DOMContentLoaded", () => {
             console.warn("[DocSeeker] Réouverture à chaud échouée, repli vers rechargement complet :", warmErr);
             const errStr = String(warmErr?.message || warmErr || '');
             if (errStr.includes("Invalid") || errStr.includes("corrupt") || errStr.includes("Root") || warmErr?.name === 'InvalidPDFException') {
+              // Vérifier si ce n'est pas en réalité une note Markdown avant de recharger l'iframe
+              try {
+                const checkRes = await fetch(`/api/documents/${numericDocId}/status`).catch(() => null);
+                if (checkRes && checkRes.ok) {
+                  const checkData = await checkRes.json().catch(() => null);
+                  if (checkData && (checkData.doc_type === 'markdown' || (checkData.filename && (checkData.filename.endsWith('.md') || checkData.filename.endsWith('.markdown'))))) {
+                    if (targetTab) {
+                      targetTab.isMarkdown = true;
+                      targetTab.filename = checkData.filename;
+                    }
+                    if (pdfFrame) {
+                      pdfFrame.style.display = "none";
+                      pdfFrame._loadedDocId = null;
+                    }
+                    const mdC = document.getElementById("markdownEditorContainer");
+                    if (mdC) mdC.style.display = "flex";
+                    if (viewerPageBadge) viewerPageBadge.style.display = "none";
+                    const vcb = document.getElementById("viewerCacheBadge");
+                    if (vcb) vcb.style.display = "none";
+                    if (viewerDocTitle) viewerDocTitle.textContent = checkData.title || docTitle;
+                    if (window.MarkdownManager) {
+                      window.MarkdownManager.loadNote(numericDocId, checkData.filename, checkData.title || docTitle, null, targetScrollTop);
+                    }
+                    updateDocCardCacheUI(numericDocId);
+                    return;
+                  }
+                }
+              } catch (e) { }
+
               if (window.pdfCacheManager) {
                 await window.pdfCacheManager.invalidate(numericDocId).catch(() => { });
               }
@@ -8315,6 +8460,15 @@ document.addEventListener("DOMContentLoaded", () => {
           if (this._hasImageInDataTransfer(e.dataTransfer)) e.preventDefault();
         });
         mdContainer.addEventListener("drop", (e) => this.handleImageDropCapture(e), true);
+        mdContainer.addEventListener("scroll", (e) => {
+          if (typeof tabManager !== "undefined" && tabManager.activeTabId) {
+            const curTab = tabManager.openTabs.find(t => t.id === tabManager.activeTabId);
+            if (curTab && curTab.isMarkdown) {
+              const scrollEl = mdContainer.querySelector(".milkdown-scroll-container") || mdContainer;
+              curTab.scrollTop = scrollEl.scrollTop;
+            }
+          }
+        }, true);
       }
     },
 
@@ -8368,7 +8522,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         clearFolderDocsCache();
         await loadFoldersAndDocuments();
-        openDocumentInSplitView(fakeId, cleanTitle, 1, []);
+        openDocumentInSplitView(fakeId, cleanTitle, 1, [], null, 0, null, null, true, filename);
         this.loadNote(fakeId, filename, cleanTitle, initialContent);
         return;
       }
@@ -8430,7 +8584,7 @@ document.addEventListener("DOMContentLoaded", () => {
         await loadFoldersAndDocuments();
 
         if (numDocId) {
-          openDocumentInSplitView(numDocId, cleanTitle, 1, []);
+          openDocumentInSplitView(numDocId, cleanTitle, 1, [], null, 0, null, null, true, finalFname);
           this.loadNote(numDocId, finalFname, cleanTitle, initialContent);
         }
       } catch (err) {
@@ -8467,12 +8621,36 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         clearFolderDocsCache();
         await loadFoldersAndDocuments();
-        openDocumentInSplitView(fakeId, cleanTitle, 1, []);
+        openDocumentInSplitView(fakeId, cleanTitle, 1, [], null, 0, null, null, true, filename);
         this.loadNote(fakeId, filename, cleanTitle, initialContent);
       }
     },
 
-    async loadNote(docId, filename, title, preloadedContent = null) {
+    async loadNote(docId, filename, title, preloadedContent = null, targetScrollTop = null) {
+      // Retour instantané 0ms si la note est DÉJÀ chargée dans l'éditeur (retour Accueil -> Note ou bascule entre onglets)
+      if (Number(this.currentDocId) === Number(docId) && this.editorInstance && !preloadedContent) {
+        this.currentTitle = title;
+        this.currentFilename = filename;
+        const titleInput = document.getElementById("markdownTitleInput");
+        if (titleInput) {
+          titleInput.value = title;
+        }
+        this.setStatus("saved", "Enregistré");
+        if (targetScrollTop !== null && targetScrollTop !== undefined) {
+          const mdContainer = document.getElementById("markdownEditorContainer");
+          const scrollContainer = mdContainer?.querySelector(".milkdown-scroll-container") || mdContainer;
+          if (scrollContainer) {
+            scrollContainer.scrollTop = targetScrollTop;
+          }
+        }
+        const activeSearchTerm = getActiveDocSearchTerm() || (document.getElementById("docSearchInput")?.value || "").trim();
+        if (activeSearchTerm) {
+          setTimeout(() => {
+            this.highlightSearch(activeSearchTerm, currentActiveOccurrenceIndex >= 0 ? currentActiveOccurrenceIndex : 0);
+          }, 60);
+        }
+        return;
+      }
       // Flush/récolte de la note sortante AVANT de changer de note.
       // Source de vérité : le contenu vivant de l'éditeur s'il diffère du contenu
       // chargé — milkdown notifie onChange avec ~200 ms de retard, donc le timer
@@ -8630,6 +8808,15 @@ document.addEventListener("DOMContentLoaded", () => {
           this._isLoadingNote = false;
         }
         this.setStatus("saved", "Enregistré");
+        if (targetScrollTop !== null && targetScrollTop !== undefined) {
+          setTimeout(() => {
+            const mdContainer = document.getElementById("markdownEditorContainer");
+            const scrollContainer = mdContainer?.querySelector(".milkdown-scroll-container") || mdContainer;
+            if (scrollContainer) {
+              scrollContainer.scrollTop = targetScrollTop;
+            }
+          }, 80);
+        }
         const activeSearchTerm = getActiveDocSearchTerm() || (document.getElementById("docSearchInput")?.value || "").trim();
         if (activeSearchTerm) {
           setTimeout(() => {

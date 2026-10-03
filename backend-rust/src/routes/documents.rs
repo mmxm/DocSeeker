@@ -139,7 +139,7 @@ pub async fn get_document_status(
     })?;
 
     let res = conn.query_row(
-        "SELECT id, filename, title, status, error_message, total_pages FROM documents WHERE id = ?1",
+        "SELECT id, filename, title, status, error_message, total_pages, COALESCE(doc_type, 'pdf') FROM documents WHERE id = ?1",
         params![doc_id],
         |r| {
             Ok(serde_json::json!({
@@ -149,6 +149,7 @@ pub async fn get_document_status(
                 "status": r.get::<_, Option<String>>(3)?.unwrap_or_else(|| "ready".to_string()),
                 "error_message": r.get::<_, Option<String>>(4)?,
                 "total_pages": r.get::<_, i64>(5)?,
+                "doc_type": r.get::<_, Option<String>>(6)?.unwrap_or_else(|| "pdf".to_string()),
             }))
         },
     );

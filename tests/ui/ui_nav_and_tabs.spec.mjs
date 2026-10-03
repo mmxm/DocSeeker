@@ -238,8 +238,8 @@ test.describe('Améliorations Navigation, Volet Accueil et Onglets', () => {
       const res = await fetch('/api/documents');
       const data = await res.json();
       const list = Array.isArray(data) ? data : (data.documents || []);
-      const pdfs = list.filter(d => d.total_pages > 0 && !d.filename?.endsWith('.md') && d.file_size > 0 && d.file_size < 2000000);
-      return pdfs[0] || list.find(d => d.total_pages > 0 && !d.filename?.endsWith('.md'));
+      const pdfs = list.filter(d => d.total_pages >= 5 && !d.filename?.endsWith('.md') && d.file_size > 0 && d.file_size < 5000000);
+      return pdfs[0] || list.find(d => d.total_pages >= 5 && !d.filename?.endsWith('.md'));
     });
     expect(targetDoc).not.toBeNull();
     const docId = targetDoc.id;
@@ -252,6 +252,8 @@ test.describe('Améliorations Navigation, Volet Accueil et Onglets', () => {
 
     await expect(page.locator('#workspace')).toHaveClass(/split-active/, { timeout: 10000 });
     await h.assertPdfViewerRendered();
+    // Laisser PDF.js finaliser son rendu et son cadrage initial (hash #page=1)
+    await page.waitForTimeout(800);
 
     // 3. Faire défiler le document (ex: scrollTop = 500)
     await page.evaluate(() => {
@@ -331,8 +333,8 @@ test.describe('Améliorations Navigation, Volet Accueil et Onglets', () => {
       const res = await fetch('/api/documents');
       const data = await res.json();
       const list = Array.isArray(data) ? data : (data.documents || []);
-      const pdfs = list.filter(d => d.total_pages > 0 && !d.filename?.endsWith('.md') && d.file_size > 0 && d.file_size < 2000000);
-      return pdfs.length >= 2 ? pdfs.slice(0, 2) : list.filter(d => d.total_pages > 0 && !d.filename?.endsWith('.md')).slice(0, 2);
+      const pdfs = list.filter(d => d.total_pages >= 5 && !d.filename?.endsWith('.md') && d.file_size > 0 && d.file_size < 5000000);
+      return pdfs.length >= 2 ? pdfs.slice(0, 2) : list.filter(d => d.total_pages >= 5 && !d.filename?.endsWith('.md')).slice(0, 2);
     });
     expect(testDocs.length).toBeGreaterThanOrEqual(2);
     const docA = testDocs[0];
@@ -347,6 +349,7 @@ test.describe('Améliorations Navigation, Volet Accueil et Onglets', () => {
 
     await expect(page.locator('#workspace')).toHaveClass(/split-active/, { timeout: 10000 });
     await h.assertPdfViewerRendered();
+    await page.waitForTimeout(800);
 
     // 3. L'utilisateur lit et scrolle plus bas dans Doc A (ex: scrollTop = 650)
     await page.evaluate(() => {
@@ -366,6 +369,7 @@ test.describe('Améliorations Navigation, Volet Accueil et Onglets', () => {
 
     await expect(page.locator('.reader-tab-item')).toHaveCount(2);
     await h.assertPdfViewerRendered();
+    await page.waitForTimeout(800);
 
     // Défiler également dans Doc B (scrollTop = 420)
     await page.evaluate(() => {
@@ -406,4 +410,90 @@ test.describe('Améliorations Navigation, Volet Accueil et Onglets', () => {
       });
     }, { timeout: 6000 }).toBeGreaterThanOrEqual(350);
   });
+
+  test('NAV-6 : Retour sur l\'onglet d\'une note Markdown sans erreur PDF invalide ou corrompu (MD -> Accueil -> MD et MD -> PDF -> MD)', async ({ page }) => {
+    // Collecter les erreurs et warnings de la console
+    const consoleErrors = [];
+    page.on('console', msg => {
+      if (msg.type() === 'error' || msg.text().includes('Invalid PDF structure') || msg.text().includes('Réouverture à chaud')) {
+        consoleErrors.push(msg.text());
+      }
+    });
+
+    // 1. Créer une note Markdown via l'API
+    const noteName = `note_tabs_test_${Date.now()}.md`;
+    const createRes = await page.request.post('/api/files', {
+      data: {
+        filename: noteName,
+        content: '# Ma super note markdown\n\nContenu de test pour la validation des onglets.'
+      }
+    });
+    expect(createRes.ok()).toBeTruthy();
+    const noteData = await createRes.json();
+    const noteDocId = noteData.doc_id;
+
+    // 2. Obtenir un petit PDF disponible
+    const pdfDoc = await page.evaluate(async () => {
+      const res = await fetch('/api/documents');
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : (data.documents || []);
+      const pdfs = list.filter(d => d.total_pages >= 5 && !d.filename?.endsWith('.md') && d.file_size > 0 && d.file_size < 5000000);
+      return pdfs[0] || list.find(d => d.total_pages >= 5 && !d.filename?.endsWith('.md'));
+    });
+    expect(pdfDoc).not.toBeNull();
+
+    // 3. Ouvrir la note Markdown dans un onglet
+    await page.evaluate(({ id, filename }) => {
+      const title = filename.replace(/\.md$/, '');
+      window.tabManager.openTab(id, title, 1, [], null, 0, null, null, true, filename);
+    }, { id: noteDocId, filename: noteName });
+
+    // Vérifier que le visualiseur est actif avec le conteneur Markdown visible et l'iframe PDF cachée
+    await expect(page.locator('#workspace')).toHaveClass(/split-active/);
+    await expect(page.locator('#markdownEditorContainer')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('#pdfFrame')).toBeHidden();
+
+    // 4. Basculer vers l'onglet Accueil via le bouton Accueil
+    const homeBtn = page.locator('#readerHomeBtn');
+    await homeBtn.click();
+    await expect(page.locator('body')).toHaveClass(/home-tab-active/);
+
+    // Simuler le changement de liste chargée (ex: navigation dossier / recherche)
+    await page.evaluate(() => {
+      window.currentLoadedDocs = [];
+    });
+
+    // 5. Revenir sur l'onglet de la note Markdown
+    const mdTab = page.locator('.reader-tab-item').first();
+    await mdTab.click();
+
+    // Vérifier que le conteneur Markdown réapparaît immédiatement SANS charger PDF.js
+    await expect(page.locator('#workspace')).toHaveClass(/split-active/);
+    await expect(page.locator('#markdownEditorContainer')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('#pdfFrame')).toBeHidden();
+
+    // 6. Ouvrir le document PDF dans un second onglet
+    await page.evaluate(({ id, title }) => {
+      window.tabManager.openTab(id, title, 1);
+    }, { id: pdfDoc.id, title: pdfDoc.title || pdfDoc.filename });
+
+    await expect(page.locator('.reader-tab-item')).toHaveCount(2);
+    await expect(page.locator('#pdfFrame')).toBeVisible({ timeout: 10000 });
+    await h.assertPdfViewerRendered();
+
+    // 7. Revenir de l'onglet PDF à l'onglet Markdown
+    await mdTab.click();
+
+    // Vérifier que la note Markdown est réaffichée sans erreur PDF
+    await expect(page.locator('#markdownEditorContainer')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('#pdfFrame')).toBeHidden();
+
+    // Vérifier qu'aucune erreur "Invalid PDF structure" n'a été émise
+    const invalidPdfErrors = consoleErrors.filter(e => e.includes('Invalid PDF structure') || e.includes('InvalidPDFException'));
+    expect(invalidPdfErrors).toHaveLength(0);
+
+    // Nettoyage de la note créée
+    await page.request.delete(`/api/files/${encodeURIComponent(noteName)}`).catch(() => {});
+  });
 });
+
