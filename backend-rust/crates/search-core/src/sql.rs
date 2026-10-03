@@ -172,8 +172,9 @@ pub fn build_search_query_sql(
                 bm25(pages_fts) as page_bm25
             FROM scoped_docs sd
             JOIN pages p ON p.doc_id = sd.doc_id
-            CROSS JOIN pages_fts ON pages_fts.rowid = p.id
+            JOIN pages_fts ON pages_fts.rowid = p.id
             WHERE pages_fts MATCH '{match_query}'
+            LIMIT 10000
         ),
         matching_docs AS (
             SELECT sd.*
@@ -260,6 +261,7 @@ pub fn build_search_query_sql(
             FROM pages_fts
             JOIN pages p ON p.id = pages_fts.rowid
             WHERE pages_fts MATCH '{match_query}'
+            LIMIT 10000
         ),
         matching_doc_ids AS (
             SELECT doc_id FROM raw_matches
