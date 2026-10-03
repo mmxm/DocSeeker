@@ -448,7 +448,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // pour la grille principale et le volet latéral
   // =========================================================================
   class DynamicCropManager {
-    constructor(rootMargin = "180px 0px", debounceMs = 60) {
+    constructor(rootMargin = "800px 0px", debounceMs = 10) {
       this.rootMargin = rootMargin;
       this.debounceMs = debounceMs;
       this.pendingDebounce = new Map(); // img element -> timerId
@@ -456,7 +456,7 @@ document.addEventListener("DOMContentLoaded", () => {
       this._blobUrls = new Set();       // blob: URLs créées (pour révocation à clear())
       // Batch crops : { docId -> { batchTimer, items: [{img, key, vEl, params}] } }
       this._batchQueues = new Map();
-      this._batchDelayMs = 80; // fenêtre d'accumulation avant envoi du batch
+      this._batchDelayMs = 15; // accumulation quasi-instantanée (15ms) pour grouper la rangée DOM sans latence perceptible
       this.observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
           const img = entry.target;
@@ -869,8 +869,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  const verticalCropManager = new DynamicCropManager("180px 0px");
-  const mainGridCropManager = new DynamicCropManager("200px 300px");
+  const verticalCropManager = new DynamicCropManager("800px 0px", 10);
+  const mainGridCropManager = new DynamicCropManager("800px 0px", 10);
 
   // Sélection multiple & Presse-papier
   let selectedDocIds = new Set();

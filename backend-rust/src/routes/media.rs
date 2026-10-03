@@ -604,64 +604,83 @@ pub async fn get_crops_batch(
         }
     }
 
-    // 3. Traiter les vignettes manquantes en parallèle selon les permis disponibles
-    let futures = missing_items.into_iter().map(|(key, cache_key, item)| {
+    // 3. Regrouper les vignettes par page pour mutualiser le rendu Pdfium et le parsing words_json
+    let mut page_groups: HashMap<(i64, i64), Vec<(String, String, usize, String)>> = HashMap::new();
+    for (key, cache_key, item) in missing_items {
+        let terms = item.terms.unwrap_or_default();
+        page_groups.entry((item.doc_id, item.page)).or_default().push((key, cache_key, item.occ_id, terms));
+    }
+
+    let futures = page_groups.into_iter().map(|((doc_id, page), group)| {
         let state = Arc::clone(&state);
-        let fname_opt = doc_filenames.get(&item.doc_id).cloned().flatten();
-        let words_json = page_words.get(&(item.doc_id, item.page)).cloned().unwrap_or_else(|| "[]".to_string());
+        let fname_opt = doc_filenames.get(&doc_id).cloned().flatten();
+        let words_json = page_words.get(&(doc_id, page)).cloned().unwrap_or_else(|| "[]".to_string());
 
         async move {
+            let mut group_results = Vec::with_capacity(group.len());
             let fname = match fname_opt {
                 Some(f) => f,
-                None => return (key, None),
+                None => {
+                    for (k, _, _, _) in group {
+                        group_results.push((k, None));
+                    }
+                    return group_results;
+                }
             };
 
-            let query_hash = item.h.clone().unwrap_or_default();
-            let terms_str = item.terms.clone().unwrap_or_default();
-            let occ_id = item.occ_id;
-            let page = item.page;
-            let doc_id = item.doc_id;
+            let occ_ids: Vec<usize> = group.iter().map(|(_, _, occ_id, _)| *occ_id).collect();
+            let terms_str = group.first().map(|(_, _, _, t)| t.as_str()).unwrap_or_default().to_string();
 
             let permit = match state.crop_semaphore.clone().acquire_owned().await {
                 Ok(p) => p,
-                Err(_) => return (key, None),
+                Err(_) => {
+                    for (k, _, _, _) in group {
+                        group_results.push((k, None));
+                    }
+                    return group_results;
+                }
             };
 
             let state_clone = Arc::clone(&state);
-            let crop_bytes = tokio::task::spawn_blocking(move || {
+            let rendered_crops = tokio::task::spawn_blocking(move || {
                 let _permit = permit;
-                generate_crops_for_page(
+                crate::pdf::crop::generate_crops_for_page_multi(
                     &state_clone.pdf_engine,
                     &state_clone.config,
                     doc_id,
                     page,
-                    occ_id,
-                    &query_hash,
+                    &occ_ids,
                     &terms_str,
                     &words_json,
                     &fname,
                 )
-            }).await.unwrap_or(None);
+            }).await.unwrap_or_default();
 
-            if let Some(ref bytes) = crop_bytes {
-                state.crop_cache.put(cache_key, bytes.clone());
+            use base64::Engine;
+            let crop_map: HashMap<usize, Vec<u8>> = rendered_crops.into_iter().collect();
+
+            for (key, cache_key, occ_id, _) in group {
+                if let Some(bytes) = crop_map.get(&occ_id) {
+                    state.crop_cache.put(cache_key, bytes.clone());
+                    let data_url = format!(
+                        "data:image/webp;base64,{}",
+                        base64::engine::general_purpose::STANDARD.encode(bytes)
+                    );
+                    group_results.push((key, Some(data_url)));
+                } else {
+                    group_results.push((key, None));
+                }
             }
 
-            let data_url = crop_bytes.map(|bytes| {
-                use base64::Engine;
-                format!(
-                    "data:image/webp;base64,{}",
-                    base64::engine::general_purpose::STANDARD.encode(&bytes)
-                )
-            });
-
-            (key, data_url)
+            group_results
         }
     });
 
-    let rendered_items = futures_util::future::join_all(futures).await;
-    for (key, data_url) in rendered_items {
-        results.insert(key, data_url);
+    let rendered_groups = futures_util::future::join_all(futures).await;
+    for group_res in rendered_groups {
+        for (key, data_url) in group_res {
+            results.insert(key, data_url);
+        }
     }
 
     Ok(Json(BatchCropResult { results }))

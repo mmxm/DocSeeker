@@ -80,3 +80,65 @@ pub fn generate_crops_for_page(
         }
     }
 }
+
+/// Génère simultanément plusieurs vignettes pour une même page d'un document.
+/// Évite le re-parsing de words_json et ne déclenche le rendu de page Pdfium qu'une seule fois.
+pub fn generate_crops_for_page_multi(
+    pdf_engine: &PdfEngine,
+    config: &Config,
+    doc_id: i64,
+    page_number: i64,
+    requested_occ_ids: &[usize],
+    terms_str: &str,
+    words_json: &str,
+    filename: &str,
+) -> Vec<(usize, Vec<u8>)> {
+    if requested_occ_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let pdf_path = match crate::pdf::indexer::resolve_pdf_path(&config.documents_dir, filename) {
+        Some(p) => p,
+        None => {
+            warn!("[Crop Multi] Fichier PDF introuvable : {}", filename);
+            return Vec::new();
+        }
+    };
+
+    let words_data: Vec<WordEntry> = serde_json::from_str(words_json).unwrap_or_default();
+    if words_data.is_empty() {
+        return Vec::new();
+    }
+
+    let terms: Vec<String> = terms_str
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let occs = find_occurrences_on_page(
+        &words_data,
+        &terms,
+        "",
+        doc_id,
+        page_number,
+        0.0,
+        "",
+        842.0,
+    );
+
+    if occs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut targets = Vec::with_capacity(requested_occ_ids.len());
+    for &occ_id in requested_occ_ids {
+        if let Some(target_occ) = occs.iter().find(|o| o.occ_id == occ_id).or_else(|| occs.first()) {
+            targets.push((occ_id, target_occ.rect, target_occ.highlight_rects.clone()));
+        }
+    }
+
+    pdf_engine
+        .render_crops_for_page_multi(&pdf_path, page_number, &targets)
+        .unwrap_or_default()
+}

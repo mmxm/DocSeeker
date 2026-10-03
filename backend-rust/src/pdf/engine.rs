@@ -273,32 +273,42 @@ impl PdfEngine {
         Ok((pw, ph, rendered))
     }
 
-    /// Génère une vignette cropée avec surbrillance jaune translucide autour de l'occurrence.
-    /// Rend la vignette d'extrait (crop) en mémoire et retourne les octets WebP.
-    /// Aucun cache disque : la vignette est recalculée à chaque requête depuis la page.
-    pub fn render_crop(
+    pub fn get_or_render_page(
         &self,
         file_path: &Path,
         page_number: i64,
+        render_scale: f64,
+    ) -> Result<Arc<(f64, f64, image::RgbaImage)>, String> {
+        let key = (file_path.to_path_buf(), page_number);
+
+        // 1. Consultation rapide sans maintenir le verrou pendant le rendu
+        {
+            let mut cache = self.page_cache.lock().map_err(|e| e.to_string())?;
+            if let Some(cached) = cache.get(&key) {
+                return Ok(Arc::clone(cached));
+            }
+        }
+
+        // 2. Rendu Pdfium en dehors du verrou page_cache (permet aux autres threads de lire le cache librement)
+        let (pw, ph, rendered) = self.render_page_internal(file_path, page_number, render_scale)?;
+        let entry = Arc::new((pw, ph, rendered));
+
+        // 3. Réinsertion sous verrou court
+        {
+            let mut cache = self.page_cache.lock().map_err(|e| e.to_string())?;
+            cache.put(key, Arc::clone(&entry));
+        }
+
+        Ok(entry)
+    }
+
+    /// Découpe et applique le surlignage sur une image de page déjà rendue en mémoire
+    pub fn crop_from_rendered_page(
+        page_data: &(f64, f64, image::RgbaImage),
+        render_scale: f64,
         rect: [f64; 4],
         highlight_rects: &[[f64; 4]],
     ) -> Result<Vec<u8>, String> {
-        let render_scale = 1.5;
-
-        // Récupération de la page rendue (depuis le cache LRU en RAM ou rendu Pdfium)
-        let page_data = {
-            let mut cache = self.page_cache.lock().map_err(|e| e.to_string())?;
-            let key = (file_path.to_path_buf(), page_number);
-            if let Some(cached) = cache.get(&key) {
-                Arc::clone(cached)
-            } else {
-                let (pw, ph, rendered) = self.render_page_internal(file_path, page_number, render_scale)?;
-                let entry = Arc::new((pw, ph, rendered));
-                cache.put(key, Arc::clone(&entry));
-                entry
-            }
-        };
-
         let page_width = page_data.0;
         let page_height = page_data.1;
         let raw_img = &page_data.2;
@@ -315,7 +325,6 @@ impl PdfEngine {
         let cw = (((crop_x1 - crop_x0) * render_scale).round() as u32).max(1);
         let ch = (((crop_y1 - crop_y0) * render_scale).round() as u32).max(1);
 
-        // Cloner uniquement le rectangle découpé (ex: 250x120 px au lieu de 1200x1600 px !)
         let mut cropped = image::imageops::crop_imm(raw_img, cx, cy, cw, ch).to_image();
 
         // Incrustation du surlignage jaune semi-transparent uniquement sur la zone découpée
@@ -332,7 +341,6 @@ impl PdfEngine {
             let hx1 = (hl[2] * render_scale).round() as i64;
             let hy1 = (hl[3] * render_scale).round() as i64;
 
-            // Coordonnées relatives à la vignette découpée
             let rx0 = (hx0 - cx as i64).clamp(0, cw as i64) as u32;
             let ry0 = (hy0 - cy as i64).clamp(0, ch as i64) as u32;
             let rx1 = (hx1 - cx as i64).clamp(0, cw as i64) as u32;
@@ -355,6 +363,37 @@ impl PdfEngine {
             .map_err(|e| e.to_string())?;
 
         Ok(buffer.into_inner())
+    }
+
+    /// Génère une vignette cropée avec surbrillance jaune translucide autour de l'occurrence.
+    pub fn render_crop(
+        &self,
+        file_path: &Path,
+        page_number: i64,
+        rect: [f64; 4],
+        highlight_rects: &[[f64; 4]],
+    ) -> Result<Vec<u8>, String> {
+        let render_scale = 1.5;
+        let page_data = self.get_or_render_page(file_path, page_number, render_scale)?;
+        Self::crop_from_rendered_page(&page_data, render_scale, rect, highlight_rects)
+    }
+
+    /// Génère plusieurs vignettes d'une même page en effectuant le rendu Pdfium une seule fois.
+    pub fn render_crops_for_page_multi(
+        &self,
+        file_path: &Path,
+        page_number: i64,
+        targets: &[(usize, [f64; 4], Vec<[f64; 4]>)],
+    ) -> Result<Vec<(usize, Vec<u8>)>, String> {
+        let render_scale = 1.5;
+        let page_data = self.get_or_render_page(file_path, page_number, render_scale)?;
+        let mut results = Vec::with_capacity(targets.len());
+        for (occ_id, rect, hl) in targets {
+            if let Ok(bytes) = Self::crop_from_rendered_page(&page_data, render_scale, *rect, hl) {
+                results.push((*occ_id, bytes));
+            }
+        }
+        Ok(results)
     }
 }
 
