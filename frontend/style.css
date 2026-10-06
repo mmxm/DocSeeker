@@ -5184,7 +5184,7 @@ body.dark-theme .in-doc-drawer-header {
 }
 
 .milkdown-wrapper {
-  max-width: 860px;
+  max-width: min(1280px, 92%);
   margin: 0 auto;
   min-height: 100%;
 }
@@ -5197,7 +5197,7 @@ body.dark-theme .in-doc-drawer-header {
 }
 
 .milkdown .ProseMirror {
-  padding: 40px 32px 140px;
+  padding: 40px 32px 140px !important;
   outline: none;
   min-height: calc(100vh - 220px);
   box-sizing: border-box;
@@ -5232,6 +5232,22 @@ body.dark-theme .in-doc-drawer-header {
 .milkdown .milkdown-code-block,
 .milkdown .milkdown-code-block * {
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace) !important;
+}
+
+/* Images dans l'éditeur : exploiter toute la largeur utile de la note */
+.milkdown .ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+
+.milkdown .milkdown-image-block > .image-wrapper {
+  max-width: 100% !important;
+}
+
+.milkdown .milkdown-image-block > .image-wrapper img {
+  max-width: 100% !important;
+  height: auto !important;
 }
 
 
