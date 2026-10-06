@@ -9524,8 +9524,31 @@ document.addEventListener("DOMContentLoaded", () => {
         const imageMd = `\n\n![${assetName}](${assetUrl})\n\n`;
         const updatedMd = currentMd.trimEnd() + imageMd;
 
+        // 1. Annuler tout timer ou pending save pré-existant pour éviter d'écraser updatedMd
+        if (this.saveTimer) {
+          clearTimeout(this.saveTimer);
+          this.saveTimer = null;
+        }
+        this._pendingSaveMarkdown = null;
+        this._pendingSaveFilename = null;
+        this._pendingSaveDocId = null;
+        this._pendingSaveTitle = null;
+
+        // 2. Mettre à jour l'état mémoire interne
+        this._loadedContent = updatedMd;
+
+        // 3. Mettre à jour Crepe / Milkdown sans rechargement destructeur
+        this.setMarkdown(updatedMd);
+
+        // 4. Mettre à jour le panneau Markdown brut si affiché
+        const rawTextarea = document.getElementById("markdownRawContent");
+        if (rawTextarea) {
+          rawTextarea.value = updatedMd;
+        }
+
+        // 5. Sauvegarder immédiatement sur le serveur et le cache local
         await this.saveNote(updatedMd);
-        this.loadNote(this.currentDocId, this.currentFilename, this.currentTitle, updatedMd);
+        showToast("Image insérée avec succès", "success");
       } catch (err) {
         console.error("[Markdown] Erreur upload image:", err);
         showToast(err.message || "Échec de l'upload de l'image", "error");
