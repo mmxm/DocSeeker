@@ -5189,13 +5189,51 @@ body.dark-theme .in-doc-drawer-header {
   min-height: 100%;
 }
 
-/* Zone éditable ProseMirror */
+/* Zone éditable ProseMirror & Typographie harmonisée */
+.milkdown {
+  --crepe-font-title: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  --crepe-font-default: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+}
+
 .milkdown .ProseMirror {
   padding: 40px 32px 140px;
   outline: none;
   min-height: calc(100vh - 220px);
   box-sizing: border-box;
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
 }
+
+/* Police identique pour tous les niveaux de titres et le corps de texte */
+.milkdown .ProseMirror h1,
+.milkdown .ProseMirror h2,
+.milkdown .ProseMirror h3,
+.milkdown .ProseMirror h4,
+.milkdown .ProseMirror h5,
+.milkdown .ProseMirror h6 {
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.02em;
+  color: var(--text-main, #0f172a);
+}
+
+.milkdown .ProseMirror p,
+.milkdown .ProseMirror li,
+.milkdown .ProseMirror blockquote,
+.milkdown .ProseMirror td,
+.milkdown .ProseMirror th {
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+}
+
+/* Conserver la police monospace pour le code */
+.milkdown .ProseMirror code,
+.milkdown .ProseMirror pre,
+.milkdown .ProseMirror pre *,
+.milkdown .milkdown-code-block,
+.milkdown .milkdown-code-block * {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace) !important;
+}
+
 
 /* Menu contextuel flottant Slash / Crepe Milkdown */
 .milkdown .milkdown-slash-menu[data-show='false'] {
@@ -5376,6 +5414,15 @@ body.dark-theme .milkdown {
   --crepe-color-hover: #1e293b;
   --crepe-color-selected: #334155;
   --crepe-color-inline-area: #1e293b;
+}
+
+body.dark-theme .milkdown .ProseMirror h1,
+body.dark-theme .milkdown .ProseMirror h2,
+body.dark-theme .milkdown .ProseMirror h3,
+body.dark-theme .milkdown .ProseMirror h4,
+body.dark-theme .milkdown .ProseMirror h5,
+body.dark-theme .milkdown .ProseMirror h6 {
+  color: #f8fafc !important;
 }
 
 body.dark-theme .trash-card {
