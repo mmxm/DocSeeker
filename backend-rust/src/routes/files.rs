@@ -1,6 +1,6 @@
 use axum::{
     body::Bytes,
-    extract::{Multipart, Path, State},
+    extract::{Multipart, Path, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Json, Response},
 };
@@ -110,7 +110,17 @@ pub fn generate_note_zip_response(documents_dir: &std::path::Path, clean_fname: 
         .to_string();
 
     let zip_bytes_res = if let Some(file_path) = resolve_file_path(documents_dir, clean_fname) {
-        let assets_dir = crate::document::trash::resolve_note_assets_dir(documents_dir, clean_fname);
+        let assets_dir = crate::document::trash::resolve_note_assets_dir(documents_dir, clean_fname)
+            .filter(|d| d.is_dir() && fs::read_dir(d).map(|mut it| it.next().is_some()).unwrap_or(false))
+            .or_else(|| {
+                // Fallback racine si les assets ont été stockés dans .assets/<note_stem>
+                let root_assets = documents_dir.join(".assets").join(&note_stem);
+                if root_assets.is_dir() {
+                    Some(root_assets)
+                } else {
+                    None
+                }
+            });
         crate::document::markdown::create_note_zip(&file_path, assets_dir.as_deref(), &note_stem)
     } else if let Some(ref dir) = crate::document::trash::resolve_note_dir(documents_dir, clean_fname) {
         let actual_stem = dir.file_name().and_then(|s| s.to_str()).unwrap_or(&note_stem);
@@ -619,50 +629,111 @@ pub async fn restore_payload_handler(
     }
 }
 
+#[derive(Deserialize, Default)]
+pub struct UploadAssetQuery {
+    pub doc_path: Option<String>,
+}
+
 /// POST /api/assets/:stem : Upload d'image/asset pour une note Markdown
 pub async fn upload_asset_handler(
     State(state): State<Arc<AppState>>,
     Path(stem): Path<String>,
+    Query(query): Query<UploadAssetQuery>,
     mut multipart: Multipart,
 ) -> Response {
     let clean_stem = stem.trim_start_matches('/').replace('/', "_");
-    let assets_dir = crate::document::trash::resolve_note_assets_dir(&state.config.documents_dir, &clean_stem)
-        .unwrap_or_else(|| state.config.documents_dir.join(".assets").join(&clean_stem));
+    
+    // Si un doc_path relatif explicite est fourni par le client, on résout directement par rapport à ce chemin
+    let assets_dir = if let Some(ref doc_path) = query.doc_path {
+        crate::document::trash::resolve_note_assets_dir(&state.config.documents_dir, doc_path)
+            .unwrap_or_else(|| {
+                crate::document::trash::resolve_note_assets_dir(&state.config.documents_dir, &clean_stem)
+                    .unwrap_or_else(|| state.config.documents_dir.join(".assets").join(&clean_stem))
+            })
+    } else {
+        crate::document::trash::resolve_note_assets_dir(&state.config.documents_dir, &clean_stem)
+            .unwrap_or_else(|| state.config.documents_dir.join(".assets").join(&clean_stem))
+    };
+
     if let Err(e) = fs::create_dir_all(&assets_dir) {
+        tracing::error!("[Upload Asset] Impossible de créer le dossier {:?} : {}", assets_dir, e);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Impossible de créer le dossier d'assets : {}", e)})),
+            Json(serde_json::json!({"error": format!("Impossible de créer le dossier d'assets sur le serveur : {}", e)})),
         )
             .into_response();
     }
 
     let mut saved_files = Vec::new();
+    let mut last_error: Option<String> = None;
 
     while let Ok(Some(field)) = multipart.next_field().await {
-        let name = field.file_name().unwrap_or("asset.png").to_string();
-        let safe_name = PathBuf::from(&name)
+        let name = field.file_name().unwrap_or("image.png").to_string();
+        let raw_safe_name = PathBuf::from(&name)
             .file_name()
             .and_then(|s| s.to_str())
-            .unwrap_or("asset.png")
+            .unwrap_or("image.png")
             .to_string();
 
-        let target = assets_dir.join(&safe_name);
-        if let Ok(data) = field.bytes().await {
-            if fs::write(&target, data).is_ok() {
-                // URL 100% encodée (pourcentage) : les refs Markdown `![..](..)`
-                // doivent rester des destinations CommonMark valides — des espaces
-                // bruts rendent la ligne non parsable (image invisible, texte brut).
-                let relative_url = format!(
-                    "/api/assets/{}/{}",
-                    encode_uri_component(&clean_stem),
-                    encode_uri_component(&safe_name),
-                );
-                saved_files.push(serde_json::json!({
-                    "name": safe_name,
-                    "url": relative_url,
-                }));
+        let safe_name = if raw_safe_name.trim().is_empty() {
+            "image.png".to_string()
+        } else {
+            raw_safe_name
+        };
+
+        // Si un fichier existe déjà avec ce nom, générer un nom unique incrémenté (ex: image_1.png)
+        let mut final_name = safe_name.clone();
+        let stem_part = std::path::Path::new(&safe_name).file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+        let ext_part = std::path::Path::new(&safe_name).extension().and_then(|s| s.to_str()).unwrap_or("png");
+        let mut counter = 1;
+        while assets_dir.join(&final_name).exists() {
+            final_name = format!("{}_{}.{}", stem_part, counter, ext_part);
+            counter += 1;
+        }
+
+        let target = assets_dir.join(&final_name);
+        match field.bytes().await {
+            Ok(data) => {
+                if data.is_empty() {
+                    last_error = Some("Fichier d'image vide".to_string());
+                    continue;
+                }
+                match fs::write(&target, &data) {
+                    Ok(_) => {
+                        tracing::info!("[Upload Asset] Asset sauvegardé avec succès dans {:?}", target);
+                        let relative_url = format!(
+                            "/api/assets/{}/{}",
+                            encode_uri_component(&clean_stem),
+                            encode_uri_component(&final_name),
+                        );
+                        saved_files.push(serde_json::json!({
+                            "name": final_name,
+                            "url": relative_url,
+                        }));
+                    }
+                    Err(e) => {
+                        tracing::error!("[Upload Asset] Erreur écriture fichier {:?} : {}", target, e);
+                        last_error = Some(format!("Erreur écriture disque sur le serveur : {}", e));
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("[Upload Asset] Erreur réception données multipart : {}", e);
+                last_error = Some(format!("Erreur réception multipart : {}", e));
             }
         }
+    }
+
+    if saved_files.is_empty() {
+        let err_msg = last_error.unwrap_or_else(|| "Aucun fichier d'image valide reçu ou échec d'écriture".to_string());
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": err_msg,
+                "assets": []
+            })),
+        )
+            .into_response();
     }
 
     (
@@ -730,8 +801,35 @@ pub async fn get_asset_handler(
         .to_string();
 
     let asset_path = match crate::document::trash::resolve_note_assets_dir(&state.config.documents_dir, &clean_stem) {
-        Some(dir) if dir.join(&safe_asset).is_file() => dir.join(&safe_asset),
-        _ => return (StatusCode::NOT_FOUND, "Asset non trouvé").into_response(),
+        Some(dir) => {
+            let direct = dir.join(&safe_asset);
+            if direct.is_file() {
+                Some(direct)
+            } else if let Some(found) = crate::pdf::indexer::resolve_pdf_path(&dir, &safe_asset) {
+                Some(found)
+            } else {
+                // Fallback racine pour les notes dont les assets ont été stockés à la racine
+                let root_fallback = state.config.documents_dir.join(".assets").join(&clean_stem).join(&safe_asset);
+                if root_fallback.is_file() {
+                    Some(root_fallback)
+                } else {
+                    crate::pdf::indexer::resolve_pdf_path(&state.config.documents_dir.join(".assets").join(&clean_stem), &safe_asset)
+                }
+            }
+        }
+        None => {
+            let root_fallback = state.config.documents_dir.join(".assets").join(&clean_stem).join(&safe_asset);
+            if root_fallback.is_file() {
+                Some(root_fallback)
+            } else {
+                crate::pdf::indexer::resolve_pdf_path(&state.config.documents_dir.join(".assets").join(&clean_stem), &safe_asset)
+            }
+        }
+    };
+
+    let asset_path = match asset_path {
+        Some(p) => p,
+        None => return (StatusCode::NOT_FOUND, "Asset non trouvé").into_response(),
     };
 
     let bytes = match fs::read(&asset_path) {
@@ -742,7 +840,10 @@ pub async fn get_asset_handler(
     let mime = mime_guess::from_path(&asset_path).first_or_octet_stream();
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, mime.as_ref())],
+        [
+            (header::CONTENT_TYPE, mime.as_ref()),
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+        ],
         bytes,
     )
         .into_response()

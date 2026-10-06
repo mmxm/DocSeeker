@@ -77,7 +77,7 @@ pub fn create_api_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/trash", get(files::list_trash_handler))
         .route("/trash/restore", post(files::restore_payload_handler))
         .route("/trash/*filename", delete(files::purge_trash_handler).post(files::restore_file_handler))
-        .route("/assets/:stem", post(files::upload_asset_handler))
+        .route("/assets/:stem", post(files::upload_asset_handler).layer(DefaultBodyLimit::max(100 * 1024 * 1024)))
         .route("/assets/:stem/:name", get(files::get_asset_handler))
         .route("/sync/manifest", post(files::sync_manifest_handler))
         .route("/rebuild-db", post(files::rebuild_db_handler))

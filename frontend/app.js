@@ -9509,7 +9509,6 @@ document.addEventListener("DOMContentLoaded", () => {
     /** Upload en assets/<stem>/ puis insertion de la référence finale dans la note. */
     async uploadAndInsertAsset(file) {
       if (!this.currentFilename) return;
-      const stem = this.currentFilename.replace(/\.[^/.]+$/, "");
 
       try {
         showToast("Téléversement de l'image...", "info");
@@ -9529,7 +9528,7 @@ document.addEventListener("DOMContentLoaded", () => {
         this.loadNote(this.currentDocId, this.currentFilename, this.currentTitle, updatedMd);
       } catch (err) {
         console.error("[Markdown] Erreur upload image:", err);
-        showToast("Échec de l'upload de l'image", "error");
+        showToast(err.message || "Échec de l'upload de l'image", "error");
       }
     },
 
@@ -9542,23 +9541,26 @@ document.addEventListener("DOMContentLoaded", () => {
       const formData = new FormData();
       formData.append("file", file, file.name || "image.png");
 
-      const res = await fetch(`/api/assets/${encodeURIComponent(stem)}`, {
+      const queryUrl = `/api/assets/${encodeURIComponent(stem)}?doc_path=${encodeURIComponent(this.currentFilename)}`;
+      const res = await fetch(queryUrl, {
         method: "POST",
         body: formData
       });
       if (!res.ok) {
-        throw new Error(`Échec de l'upload de l'image (HTTP ${res.status})`);
+        let errMsg = `Échec de l'upload de l'image (HTTP ${res.status})`;
+        try {
+          const errData = await res.json();
+          if (errData?.error) errMsg = errData.error;
+        } catch (_) {}
+        throw new Error(errMsg);
       }
       const data = await res.json();
       const asset = (data.assets && data.assets[0]) || null;
-      const assetName = asset?.name || file.name || "image.png";
-      // Le backend renvoie une URL déjà 100% encodée (destination CommonMark
-      // valide) : ne PAS ré-encoder (sinon %20 deviendrait %2520). Le fallback
-      // local encode le stem/nom lui-même, jamais l'URL du serveur.
-      const assetUrl = asset?.url
-        || `/api/assets/${encodeURIComponent(stem)}/${encodeURIComponent(assetName)}`;
+      if (!asset || !asset.url) {
+        throw new Error(data.error || "Le serveur n'a retourné aucun fichier enregistré");
+      }
       showToast("Image insérée avec succès", "success");
-      return assetUrl;
+      return asset.url;
     },
 
     setStatus(status, text) {

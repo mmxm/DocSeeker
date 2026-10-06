@@ -422,3 +422,101 @@ async fn test_rename_note_rewrites_asset_references() {
     let res_asset_new = router.clone().oneshot(req_asset_new).await.unwrap();
     assert_eq!(res_asset_new.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn test_multipart_upload_asset_and_zip_export() {
+    let (state, token, _tmp) = setup_test_app();
+    let router = create_api_router(Arc::clone(&state)).with_state(Arc::clone(&state));
+    let cookie = format!("docseeker_session={}", token);
+
+    // 1. Créer la note "Schéma système nerveux périphérique.md"
+    let note_filename = "Schéma système nerveux périphérique.md";
+    let req_create = Request::builder()
+        .method("POST")
+        .uri("/api/files")
+        .header(header::COOKIE, &cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::json!({
+            "filename": note_filename,
+            "content": "# Schéma système nerveux périphérique\n\nIntroduction"
+        }).to_string()))
+        .unwrap();
+
+    let res_create = router.clone().oneshot(req_create).await.unwrap();
+    assert_eq!(res_create.status(), StatusCode::CREATED);
+
+    // 2. Simuler un upload multipart vers /api/assets/Schéma système nerveux périphérique
+    let boundary = "------------------------boundary123456789";
+    let mut multipart_body = Vec::new();
+    multipart_body.extend_from_slice(format!(
+        "--{}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"image.png\"\r\nContent-Type: image/png\r\n\r\n",
+        boundary
+    ).as_bytes());
+    multipart_body.extend_from_slice(b"\x89PNG\r\n\x1a\nfakeimagecontent");
+    multipart_body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
+
+    let stem = "Schéma système nerveux périphérique";
+    let req_upload = Request::builder()
+        .method("POST")
+        .uri(format!("/api/assets/{}?doc_path={}", urlencoding::encode(stem), urlencoding::encode(note_filename)))
+        .header(header::COOKIE, &cookie)
+        .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={}", boundary))
+        .body(Body::from(multipart_body))
+        .unwrap();
+
+    let res_upload = router.clone().oneshot(req_upload).await.unwrap();
+    assert_eq!(res_upload.status(), StatusCode::OK);
+    let upload_body = to_bytes(res_upload.into_body(), usize::MAX).await.unwrap();
+    let upload_json: serde_json::Value = serde_json::from_slice(&upload_body).unwrap();
+    assert_eq!(upload_json["status"], "ok");
+    assert_eq!(upload_json["assets"][0]["name"], "image.png");
+    let asset_url = upload_json["assets"][0]["url"].as_str().unwrap();
+
+    // 3. Vérifier que GET de l'asset renvoie 200 OK avec le contenu exact
+    let req_get_asset = Request::builder()
+        .method("GET")
+        .uri(asset_url)
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap();
+
+    let res_get_asset = router.clone().oneshot(req_get_asset).await.unwrap();
+    assert_eq!(res_get_asset.status(), StatusCode::OK);
+    assert_eq!(res_get_asset.headers().get(header::CONTENT_TYPE).unwrap(), "image/png");
+    let asset_bytes = to_bytes(res_get_asset.into_body(), usize::MAX).await.unwrap();
+    assert!(asset_bytes.starts_with(b"\x89PNG"));
+
+    // 4. Mettre à jour la note avec la référence à l'image
+    let updated_md = format!("# Schéma système nerveux périphérique\n\n![image.png]({})", asset_url);
+    let req_put = Request::builder()
+        .method("PUT")
+        .uri(format!("/api/files/{}", urlencoding::encode(note_filename)))
+        .header(header::COOKIE, &cookie)
+        .header(header::CONTENT_TYPE, "text/markdown")
+        .body(Body::from(updated_md))
+        .unwrap();
+
+    let res_put = router.clone().oneshot(req_put).await.unwrap();
+    assert_eq!(res_put.status(), StatusCode::OK);
+
+    // 5. Exporter en zip et vérifier que le dossier assets/ contient image.png
+    let req_zip = Request::builder()
+        .method("GET")
+        .uri(format!("/api/files/export-zip/{}", urlencoding::encode(note_filename)))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap();
+
+    let res_zip = router.clone().oneshot(req_zip).await.unwrap();
+    assert_eq!(res_zip.status(), StatusCode::OK);
+    let zip_bytes = to_bytes(res_zip.into_body(), usize::MAX).await.unwrap();
+    let cursor = std::io::Cursor::new(zip_bytes);
+    let zip_archive = zip::ZipArchive::new(cursor).expect("Archive zip valide");
+    let entry_names: Vec<String> = zip_archive.file_names().map(|s| s.to_string()).collect();
+
+    assert!(
+        entry_names.iter().any(|n| n.contains("assets/image.png")),
+        "Le zip exporté doit contenir l'asset image.png dans assets/ : {:?}",
+        entry_names
+    );
+}

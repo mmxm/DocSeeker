@@ -52,12 +52,30 @@ pub fn resolve_note_assets_dir(base_dir: &Path, rel_path_or_stem: &str) -> Optio
     let path_obj = Path::new(clean);
     let stem = path_obj.file_stem().and_then(|s| s.to_str()).unwrap_or(clean);
     let stem_nfc: String = stem.nfc().collect();
+    let stem_nfd: String = stem.nfd().collect();
     let stem_lower = stem_nfc.to_lowercase();
+    let stem_lower_nfd = stem_nfd.to_lowercase();
 
-    // 1. Si on trouve le fichier .md correspondant
-    if let Some(md_file) = resolve_file_path(base_dir, clean) {
-        if let Some(parent) = md_file.parent() {
-            return Some(parent.join(".assets").join(stem));
+    // 1. Si on trouve le fichier .md correspondant (avec ou sans extension passée)
+    let candidates = [
+        clean.to_string(),
+        if clean.ends_with(".md") || clean.ends_with(".markdown") {
+            clean.to_string()
+        } else {
+            format!("{}.md", clean)
+        },
+        if clean.ends_with(".markdown") {
+            clean.to_string()
+        } else {
+            format!("{}.markdown", clean)
+        },
+    ];
+
+    for candidate in &candidates {
+        if let Some(md_file) = resolve_file_path(base_dir, candidate) {
+            if let Some(parent) = md_file.parent() {
+                return Some(parent.join(".assets").join(stem));
+            }
         }
     }
 
@@ -69,8 +87,8 @@ pub fn resolve_note_assets_dir(base_dir: &Path, rel_path_or_stem: &str) -> Optio
         }
     }
 
-    // 3. Chercher récursivement un dossier .assets/<stem> existant dans base_dir
-    fn find_assets_rec(dir: &Path, target_stem_lower: &str) -> Option<PathBuf> {
+    // 3. Chercher récursivement un dossier .assets/<stem> existant dans base_dir (tolérant NFC/NFD)
+    fn find_assets_rec(dir: &Path, target_nfc: &str, target_nfd: &str) -> Option<PathBuf> {
         let entries = fs::read_dir(dir).ok()?;
         for entry in entries.flatten() {
             let p = entry.path();
@@ -86,7 +104,10 @@ pub fn resolve_note_assets_dir(base_dir: &Path, rel_path_or_stem: &str) -> Optio
                             if ap.is_dir() {
                                 if let Some(a_name) = ap.file_name().and_then(|s| s.to_str()) {
                                     let a_name_nfc: String = a_name.nfc().collect();
-                                    if a_name_nfc.to_lowercase() == target_stem_lower {
+                                    let a_name_nfd: String = a_name.nfd().collect();
+                                    let an_low_nfc = a_name_nfc.to_lowercase();
+                                    let an_low_nfd = a_name_nfd.to_lowercase();
+                                    if an_low_nfc == target_nfc || an_low_nfd == target_nfd {
                                         return Some(ap);
                                     }
                                 }
@@ -94,7 +115,7 @@ pub fn resolve_note_assets_dir(base_dir: &Path, rel_path_or_stem: &str) -> Optio
                         }
                     }
                 } else if !name.starts_with('.') {
-                    if let Some(found) = find_assets_rec(&p, target_stem_lower) {
+                    if let Some(found) = find_assets_rec(&p, target_nfc, target_nfd) {
                         return Some(found);
                     }
                 }
@@ -103,7 +124,7 @@ pub fn resolve_note_assets_dir(base_dir: &Path, rel_path_or_stem: &str) -> Optio
         None
     }
 
-    if let Some(found) = find_assets_rec(base_dir, &stem_lower) {
+    if let Some(found) = find_assets_rec(base_dir, &stem_lower, &stem_lower_nfd) {
         return Some(found);
     }
 
