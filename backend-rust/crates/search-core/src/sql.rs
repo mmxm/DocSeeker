@@ -61,6 +61,17 @@ pub fn build_search_query_sql(
     limit: usize,
     offset: usize,
 ) -> SearchQuerySql {
+    build_search_query_sql_with_vocab(query, folder_ids, limit, offset, None)
+}
+
+/// Générateur de recherche SQL FTS5 étendu avec expansion de vocabulaire de sous-mots
+pub fn build_search_query_sql_with_vocab(
+    query: &str,
+    folder_ids: Option<&[i64]>,
+    limit: usize,
+    offset: usize,
+    vocab_map: Option<&std::collections::HashMap<String, Vec<String>>>,
+) -> SearchQuerySql {
     let tokens = crate::matching::parse_search_query(query);
     let terms = sanitize_fts_query(query);
     if terms.is_empty() {
@@ -72,7 +83,7 @@ pub fn build_search_query_sql(
     }
 
     let query_hash = crate::matching::get_query_hash(&terms);
-    let fts_and_query = crate::matching::build_fts5_match_clause(&tokens);
+    let fts_and_query = crate::matching::build_fts5_match_clause_with_vocab(&tokens, vocab_map);
     if fts_and_query.is_empty() {
         return SearchQuerySql {
             sql: String::new(),
@@ -456,6 +467,15 @@ pub fn build_title_search_sql(
 
 /// Requête SQL pour la recherche interne à un document (Split View)
 pub fn build_doc_search_sql(doc_id: i64, query: &str) -> (String, Vec<String>, String) {
+    build_doc_search_sql_with_vocab(doc_id, query, None)
+}
+
+/// Requête SQL pour la recherche interne à un document avec expansion de vocabulaire
+pub fn build_doc_search_sql_with_vocab(
+    doc_id: i64,
+    query: &str,
+    vocab_map: Option<&std::collections::HashMap<String, Vec<String>>>,
+) -> (String, Vec<String>, String) {
     let tokens = crate::matching::parse_search_query(query);
     let terms = sanitize_fts_query(query);
     if terms.is_empty() {
@@ -463,7 +483,7 @@ pub fn build_doc_search_sql(doc_id: i64, query: &str) -> (String, Vec<String>, S
     }
 
     let query_hash = crate::matching::get_query_hash(&terms);
-    let fts_and_query = crate::matching::build_fts5_match_clause(&tokens);
+    let fts_and_query = crate::matching::build_fts5_match_clause_with_vocab(&tokens, vocab_map);
     if fts_and_query.is_empty() {
         return (String::new(), Vec::new(), String::new());
     }

@@ -85,6 +85,13 @@ pub fn parse_search_query(query: &str) -> Vec<SearchToken> {
 }
 
 pub fn build_fts5_match_clause(tokens: &[SearchToken]) -> String {
+    build_fts5_match_clause_with_vocab(tokens, None)
+}
+
+pub fn build_fts5_match_clause_with_vocab(
+    tokens: &[SearchToken],
+    vocab_map: Option<&std::collections::HashMap<String, Vec<String>>>,
+) -> String {
     let clauses: Vec<String> = tokens
         .iter()
         .filter_map(|t| match t {
@@ -92,6 +99,26 @@ pub fn build_fts5_match_clause(tokens: &[SearchToken]) -> String {
                 let norm = normalize_text(w);
                 if norm.is_empty() {
                     None
+                } else if let Some(map) = vocab_map {
+                    if let Some(subwords) = map.get(&norm) {
+                        if !subwords.is_empty() {
+                            let mut all_terms = vec![format!("{}*", norm)];
+                            for sw in subwords {
+                                if sw != &norm && !sw.starts_with(&norm) {
+                                    all_terms.push(format!("{}*", sw));
+                                }
+                            }
+                            if all_terms.len() > 1 {
+                                Some(format!("({})", all_terms.join(" OR ")))
+                            } else {
+                                Some(format!("{}*", norm))
+                            }
+                        } else {
+                            Some(format!("{}*", norm))
+                        }
+                    } else {
+                        Some(format!("{}*", norm))
+                    }
                 } else {
                     Some(format!("{}*", norm))
                 }
@@ -630,6 +657,14 @@ mod tests {
         assert_eq!(
             build_fts5_match_clause(&mixed_tokens),
             "traitement* AND \"grossesse normale\""
+        );
+
+        let mut vocab = std::collections::HashMap::new();
+        vocab.insert("stigmine".to_string(), vec!["neostigmine".to_string(), "prostigmine".to_string()]);
+        let stig_tokens = parse_search_query("stigmine");
+        assert_eq!(
+            build_fts5_match_clause_with_vocab(&stig_tokens, Some(&vocab)),
+            "(stigmine* OR neostigmine* OR prostigmine*)"
         );
     }
 

@@ -59,6 +59,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
     prefix='2 3 4'
 );
 
+CREATE VIRTUAL TABLE IF NOT EXISTS pages_vocab USING fts5vocab(pages_fts, 'row');
+
 CREATE TRIGGER IF NOT EXISTS pages_ai AFTER INSERT ON pages BEGIN
     INSERT INTO pages_fts(rowid, text_content) VALUES (new.id, new.text_content);
 END;

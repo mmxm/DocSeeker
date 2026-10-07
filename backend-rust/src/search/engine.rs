@@ -184,6 +184,42 @@ pub fn search_titles(
     })
 }
 
+/// Recherche dans le vocabulaire FTS5 (pages_vocab) les termes contenant le sous-mot donné.
+/// Optimisé pour les radicaux/sous-mots de longueur >= 4 (ex: "stigmine" -> "neostigmine", "prostigmine", etc.)
+pub fn find_vocab_subword_matches(conn: &Connection, norm_term: &str, max_matches: usize) -> Vec<String> {
+    if norm_term.len() < 4 {
+        return Vec::new();
+    }
+    let pattern = format!("%{}%", norm_term);
+    let mut stmt = match conn.prepare("SELECT term FROM pages_vocab WHERE term LIKE ?1 LIMIT ?2") {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = match stmt.query_map(rusqlite::params![pattern, max_matches as i64], |r| r.get::<_, String>(0)) {
+        Ok(mapped) => mapped.flatten().collect(),
+        Err(_) => Vec::new(),
+    };
+    rows
+}
+
+/// Construit la carte d'expansion de sous-mots pour une requête donnée.
+pub fn build_vocab_map_for_query(conn: &Connection, query: &str) -> std::collections::HashMap<String, Vec<String>> {
+    let mut vocab_map = std::collections::HashMap::new();
+    let tokens = search_core::matching::parse_search_query(query);
+    for token in tokens {
+        if let search_core::matching::SearchToken::Word(w) = token {
+            let norm = search_core::text_norm::normalize_text(&w);
+            if norm.len() >= 4 && !vocab_map.contains_key(&norm) {
+                let matches = find_vocab_subword_matches(conn, &norm, 50);
+                if !matches.is_empty() {
+                    vocab_map.insert(norm, matches);
+                }
+            }
+        }
+    }
+    vocab_map
+}
+
 // Type unifié RawSqlSearchRow importé directement de search_core
 
 pub fn search_documents(
@@ -220,11 +256,15 @@ pub fn search_documents(
         get_folder_and_subfolder_ids(conn, fid)
     });
 
-    let search_sql_data = search_core::sql::build_search_query_sql(
+    let vocab_map = build_vocab_map_for_query(conn, query);
+    let vocab_ref = if vocab_map.is_empty() { None } else { Some(&vocab_map) };
+
+    let search_sql_data = search_core::sql::build_search_query_sql_with_vocab(
         query,
         allowed_folder_ids.as_deref(),
         page_size,
         current_offset,
+        vocab_ref,
     );
 
     if search_sql_data.sql.is_empty() {
@@ -333,7 +373,10 @@ pub fn search_within_document(
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<DocSearchResponse> {
-    let (sql, terms, query_hash) = search_core::sql::build_doc_search_sql(doc_id, query);
+    let vocab_map = build_vocab_map_for_query(conn, query);
+    let vocab_ref = if vocab_map.is_empty() { None } else { Some(&vocab_map) };
+
+    let (sql, terms, query_hash) = search_core::sql::build_doc_search_sql_with_vocab(doc_id, query, vocab_ref);
     if terms.is_empty() || sql.is_empty() {
         return Ok(DocSearchResponse {
             doc_id,
@@ -489,5 +532,36 @@ mod tests {
         let resp = search_titles(&conn, "dermatologie", None, None, None).unwrap();
         assert_eq!(resp.total_documents, 0);
         assert!(resp.results.is_empty());
+    }
+
+    #[test]
+    fn test_search_documents_subword_stigmine_finds_neostigmine() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&search_core::schema::get_full_schema_sql())
+            .unwrap();
+
+        // Insère un document avec pages contenant "néostigmine"
+        conn.execute(
+            "INSERT INTO documents (id, filename, title, status, total_pages, created_at, updated_at) VALUES (1, 'myasthenie.pdf', 'Myasthénie et traitements', 'ready', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO pages (id, doc_id, page_number, text_content, words_json) VALUES (1, 1, 1, 'Le traitement symptomatique repose sur les anticholinestérasiques comme la néostigmine et la pyridostigmine.', '[]')",
+            [],
+        ).unwrap();
+
+        // 1. Recherche avec le mot complet "néostigmine"
+        let resp_full = search_documents(&conn, "néostigmine", false, None, None, None).unwrap();
+        assert_eq!(resp_full.total_documents, 1);
+        assert_eq!(resp_full.results[0].id, 1);
+
+        // 2. Recherche avec le sous-mot "stigmine" (doit trouver le document grâce à l'expansion vocabulaire FTS5)
+        let resp_sub = search_documents(&conn, "stigmine", false, None, None, None).unwrap();
+        assert_eq!(resp_sub.total_documents, 1, "La recherche 'stigmine' doit trouver le document contenant 'néostigmine'");
+        assert_eq!(resp_sub.results[0].id, 1);
+
+        // 3. Recherche au sein du document (search_within_document)
+        let resp_within = search_within_document(&conn, 1, "stigmine", None, None).unwrap();
+        assert!(resp_within.total_occurrences > 0, "Doit trouver les occurrences de néostigmine/pyridostigmine");
     }
 }
