@@ -3299,17 +3299,40 @@ document.addEventListener("DOMContentLoaded", () => {
       const isMarkdownDoc = (matchedDoc && matchedDoc.doc_type === 'markdown') ||
                             (matchedDoc && matchedDoc.filename && (matchedDoc.filename.endsWith('.md') || matchedDoc.filename.endsWith('.markdown'))) ||
                             (currentActiveDocTitle && (currentActiveDocTitle.endsWith('.md') || currentActiveDocTitle.endsWith('.markdown')));
-      const isDocCached = window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(currentActiveDocId);
+      const isDocIndexedLocally = Boolean(window.downloadQueueManager && 
+        window.downloadQueueManager.isDocumentIndexedLocally && 
+        window.downloadQueueManager.isDocumentIndexedLocally(currentActiveDocId));
       const isOfflineMode = !navigator.onLine || (filterOfflineOnly && filterOfflineOnly.checked);
 
-      if ((isDocCached && !isMarkdownDoc) || isOfflineMode) {
+      if ((isDocIndexedLocally && !isMarkdownDoc) || isOfflineMode) {
         console.log(`[DocSearch] Recherche locale SQLite-Wasm pour le document ${currentActiveDocId}`);
         if (window.downloadQueueManager) {
-          const res = await window.downloadQueueManager.sendToWorker('DOC_SEARCH', {
-            docId: currentActiveDocId,
-            query: query
-          });
-          occs = res ? (res.occurrences || []) : [];
+          try {
+            const res = await window.downloadQueueManager.sendToWorker('DOC_SEARCH', {
+              docId: currentActiveDocId,
+              query: query
+            });
+            occs = res ? (res.occurrences || []) : [];
+          } catch (localErr) {
+            console.warn('[DocSearch] Erreur recherche locale SQLite-Wasm:', localErr);
+            occs = [];
+          }
+        }
+        // Repli automatique serveur : si la recherche locale est vide (ex: index partiel ou non synchronisé)
+        // et qu'on est connecté au serveur (hors-ligne non forcé), interroger le backend
+        if (occs.length === 0 && !isOfflineMode && navigator.onLine) {
+          console.log(`[DocSearch] Repli en ligne backend pour le document ${currentActiveDocId}`);
+          try {
+            const res = await fetch(`/api/doc-search?doc_id=${currentActiveDocId}&q=${encodeURIComponent(query)}`);
+            if (res.ok) {
+              const data = await res.json();
+              if (Array.isArray(data.occurrences) && data.occurrences.length > 0) {
+                occs = data.occurrences;
+              }
+            }
+          } catch (netErr) {
+            console.warn('[DocSearch] Échec repli en ligne:', netErr);
+          }
         }
       } else {
         console.log(`[DocSearch] Recherche en ligne backend pour le document ${currentActiveDocId}`);
@@ -4713,11 +4736,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
           try {
             let data = null;
-            const isDocCached = Boolean(window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(doc.id));
+            const isDocIndexedLocally = Boolean(window.downloadQueueManager && 
+              window.downloadQueueManager.isDocumentIndexedLocally && 
+              window.downloadQueueManager.isDocumentIndexedLocally(doc.id));
             const isOfflineFilter = document.getElementById("filterOfflineOnly")?.checked || false;
-            const isOfflineMode = !navigator.onLine || isOfflineFilter || isDocCached;
+            const isStrictOffline = !navigator.onLine || isOfflineFilter;
 
-            if (isOfflineMode && window.downloadQueueManager) {
+            if ((isDocIndexedLocally || isStrictOffline) && window.downloadQueueManager) {
               try {
                 data = await window.downloadQueueManager.sendToWorker('DOC_SEARCH', {
                   docId: doc.id,
@@ -4730,11 +4755,16 @@ document.addEventListener("DOMContentLoaded", () => {
               }
             }
 
-            if (!data) {
-              const fetchUrl = `/api/doc-search?doc_id=${doc.id}&q=${encodeURIComponent(currentSearchQuery || '')}&offset=${loadedCount}&limit=${CHUNK_SIZE}`;
-              const res = await fetch(fetchUrl);
-              if (!res.ok) throw new Error(`HTTP ${res.status}`);
-              data = await res.json();
+            if ((!data || !data.occurrences || data.occurrences.length === 0) && !isStrictOffline && navigator.onLine) {
+              try {
+                const fetchUrl = `/api/doc-search?doc_id=${doc.id}&q=${encodeURIComponent(currentSearchQuery || '')}&offset=${loadedCount}&limit=${CHUNK_SIZE}`;
+                const res = await fetch(fetchUrl);
+                if (res.ok) {
+                  data = await res.json();
+                }
+              } catch (netErr) {
+                console.warn('[DocSeeker] Échec repli serveur dans loadMoreVignettes:', netErr);
+              }
             }
 
             const newOccs = data?.occurrences || [];
@@ -6460,10 +6490,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Indexation locale dans SQLite-Wasm différée (1500ms) pour ne pas saturer SQLite et la bande passante lors du premier rendu
-    if (window.downloadQueueManager) {
+    if (window.downloadQueueManager && !window.downloadQueueManager.isDocumentIndexedLocally(numericDocId)) {
       setTimeout(() => {
-        if (Number(currentActiveDocId) === numericDocId && window.downloadQueueManager) {
-          window.downloadQueueManager.ensureDocumentIndexedLocally(numericDocId);
+        if (window.downloadQueueManager) {
+          window.downloadQueueManager.ensureDocumentIndexedLocally(numericDocId).catch(() => {});
         }
       }, 1500);
     }
@@ -6563,22 +6593,36 @@ document.addEventListener("DOMContentLoaded", () => {
     // Si ouvert depuis une recherche globale, charger en tâche de fond l'intégralité des occurrences du document
     // pour un parcours séquentiel complet (stepper et tiroir) sans bloquer l'affichage immédiat
     if (effectiveSearchQuery && (!occurrences || occurrences.length >= 25)) {
-      const activeQuery = effectiveSearchQuery;
-      const isDocCached = window.downloadQueueManager && window.downloadQueueManager.isDocumentCached(numericDocId);
+      const isDocIndexedLocally = Boolean(window.downloadQueueManager && 
+        window.downloadQueueManager.isDocumentIndexedLocally && 
+        window.downloadQueueManager.isDocumentIndexedLocally(numericDocId));
       const isOfflineMode = !navigator.onLine || (filterOfflineOnly && filterOfflineOnly.checked);
 
       const fetchFullDocOccs = async () => {
-        if (isDocCached || isOfflineMode) {
+        let localData = null;
+        if ((isDocIndexedLocally && !isOfflineMode) || isOfflineMode) {
           if (window.downloadQueueManager) {
-            return await window.downloadQueueManager.sendToWorker('DOC_SEARCH', {
-              docId: numericDocId,
-              query: activeQuery
-            });
+            try {
+              localData = await window.downloadQueueManager.sendToWorker('DOC_SEARCH', {
+                docId: numericDocId,
+                query: activeQuery
+              });
+              if (localData && Array.isArray(localData.occurrences) && localData.occurrences.length > 0) {
+                return localData;
+              }
+            } catch (_) {}
           }
         }
-        const res = await fetch(`/api/doc-search?doc_id=${numericDocId}&q=${encodeURIComponent(activeQuery)}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await res.json();
+        // Si pas de données locales et en ligne, toujours interroger le serveur
+        if (!isOfflineMode && navigator.onLine) {
+          try {
+            const res = await fetch(`/api/doc-search?doc_id=${numericDocId}&q=${encodeURIComponent(activeQuery)}`);
+            if (res.ok) {
+              return await res.json();
+            }
+          } catch (_) {}
+        }
+        return localData || { occurrences: [] };
       };
 
       fetchFullDocOccs()
@@ -6890,6 +6934,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (window.pdfCacheManager) {
           await window.pdfCacheManager.saveFullDocument(id, bytes);
+        }
+
+        if (window.downloadQueueManager && !window.downloadQueueManager.isDocumentIndexedLocally(id)) {
+          window.downloadQueueManager.ensureDocumentIndexedLocally(id).catch(() => {});
         }
 
         // Si une tâche de téléchargement explicite est active ou en attente pour ce document, la compléter immédiatement

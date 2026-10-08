@@ -466,6 +466,12 @@ class DownloadQueueManager {
     return true;
   }
 
+  isDocumentIndexedLocally(docId) {
+    if (!docId) return false;
+    const id = Number(docId);
+    return Boolean(this._indexedDocIds && this._indexedDocIds.has(id));
+  }
+
   async ensureDocumentIndexedLocally(docId) {
     const id = Number(docId);
     if (!id || this._indexedDocIds.has(id) || this._indexingDocIds.has(id)) return;
