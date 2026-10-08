@@ -773,7 +773,7 @@ function getAllKnownDocuments() {
 
 
 // Exécution de la recherche locale : la requête SQL est générée par Rust !
-async function executeSearch(queryStr, titlesOnly = false, folderId = null, limit = 15, offset = 0) {
+async function executeSearch(queryStr, titlesOnly = false, folderId = null, limit = 15, offset = 0, cachedDocIds = null) {
   if (!db) {
     return {
       query: queryStr,
@@ -825,9 +825,22 @@ function getFolderAndSubfolderIds(folderId) {
       };
     }
 
+    let sql = titleSqlData.sql;
+    if (Array.isArray(cachedDocIds) && cachedDocIds.length > 0) {
+      const validIds = cachedDocIds.map(Number).filter(n => Number.isFinite(n) && n > 0);
+      if (validIds.length > 0) {
+        sql = sql.replace(
+          "AND COALESCE(status, 'ready') = 'ready'",
+          `AND (COALESCE(status, 'ready') = 'ready' OR id IN (${validIds.join(',')}))`
+        );
+      }
+    } else {
+      sql = sql.replace("AND COALESCE(status, 'ready') = 'ready'", "");
+    }
+
     const docs = [];
     await runReadWithRepair(() => db.exec({
-      sql: titleSqlData.sql,
+      sql,
       callback: (r) => {
         docs.push({
           id: r[0],
@@ -837,6 +850,7 @@ function getFolderAndSubfolderIds(folderId) {
           total_pages: r[4],
           created_at: r[5],
           updated_at: r[6],
+          doc_type: r[7] || 'pdf',
           cover_url: `/api/cover/${r[0]}`,
           vignettes: [],
           occurrences_by_page: [],
@@ -876,7 +890,16 @@ function getFolderAndSubfolderIds(folderId) {
     };
   }
 
-  const { sql, terms, query_hash: queryHash } = searchSqlData;
+  let { sql, terms, query_hash: queryHash } = searchSqlData;
+  if (Array.isArray(cachedDocIds) && cachedDocIds.length > 0) {
+    const validIds = cachedDocIds.map(Number).filter(n => Number.isFinite(n) && n > 0);
+    if (validIds.length > 0) {
+      sql = sql.replaceAll(
+        "COALESCE(d.status, 'ready') = 'ready'",
+        `(COALESCE(d.status, 'ready') = 'ready' OR d.id IN (${validIds.join(',')}))`
+      );
+    }
+  }
   const termsJson = JSON.stringify(terms);
 
   let totalDocs = 0;
@@ -1164,7 +1187,8 @@ self.onmessage = async (e) => {
           payload.titlesOnly,
           payload.folderId,
           payload.limit,
-          payload.offset
+          payload.offset,
+          payload.cachedDocIds
         );
         self.postMessage({ id, success: true, data: result });
         break;

@@ -12,7 +12,8 @@ class DownloadQueueManager {
     this.queue = []; // Array of docIds in queue
     this.activeTasks = new Map(); // docId -> { docId, status, progress, controller, pdfTask }
     this.pausedTasks = new Set(); // Set of docIds currently paused (pause manuelle utilisateur)
-    this.cachedDocIds = new Set(); // Set of docIds indexed locally in SQLite-Wasm
+    this.cachedDocIds = new Set(); // Set of docIds ayant leur binaire PDF complet dans le cache local
+    this._indexedDocIds = new Set(); // Set of docIds complètement indexés dans SQLite-Wasm local
     this.maxConcurrent = 2;
     this.isPaused = false;
     this.listeners = new Set();
@@ -207,6 +208,14 @@ class DownloadQueueManager {
             this.getAllCachedFolders().catch(() => [])
           ]).then(() => {
             this._notify();
+            // Rattrapage d'indexation locale en tâche de fond si en ligne
+            if (typeof navigator !== 'undefined' && navigator.onLine) {
+              for (const id of this.cachedDocIds) {
+                if (!this._indexedDocIds.has(id)) {
+                  this.ensureDocumentIndexedLocally(id).catch(() => {});
+                }
+              }
+            }
           }),
           new Promise(resolve => setTimeout(resolve, 2000))
         ]).catch(err => console.warn('[DownloadQueueManager] Initialisation cached docs/folders:', err));
@@ -459,7 +468,7 @@ class DownloadQueueManager {
 
   async ensureDocumentIndexedLocally(docId) {
     const id = Number(docId);
-    if (!id || this.cachedDocIds.has(id) || this._indexingDocIds.has(id)) return;
+    if (!id || this._indexedDocIds.has(id) || this._indexingDocIds.has(id)) return;
     this._indexingDocIds.add(id);
     try {
       let url = `/api/documents/${id}/offline-bundle`;
@@ -471,6 +480,7 @@ class DownloadQueueManager {
       if (bundleRes.ok) {
         const bundle = await bundleRes.json();
         await this.sendToWorker('INSERT_BUNDLE', { bundle }, 120000);
+        this._indexedDocIds.add(id);
         const isComplete = window.pdfCacheManager ? await window.pdfCacheManager.isComplete(id) : false;
         if (isComplete) {
           this.cachedDocIds.add(id);
@@ -506,6 +516,7 @@ class DownloadQueueManager {
         }
       }
       this._cachedDocsList = verifiedDocs;
+      this._indexedDocIds = new Set(docs.map(d => Number(d.id)));
       this.cachedDocIds = new Set(verifiedDocs.map(d => Number(d.id)));
       if (typeof window !== "undefined" && window.pdfCacheManager && window.pdfCacheManager.cachedIds) {
         for (const cid of window.pdfCacheManager.cachedIds) {
@@ -518,7 +529,16 @@ class DownloadQueueManager {
   }
 
   async reconcileCacheIntegrity() {
-    return await this.getAllCachedDocs();
+    const verifiedDocs = await this.getAllCachedDocs();
+    // Rattrapage automatique : si des documents ont leur PDF en cache mais ne sont pas encore indexés localement dans SQLite
+    if (typeof navigator !== 'undefined' && navigator.onLine) {
+      for (const id of this.cachedDocIds) {
+        if (!this._indexedDocIds.has(id)) {
+          this.ensureDocumentIndexedLocally(id).catch(() => {});
+        }
+      }
+    }
+    return verifiedDocs;
   }
 
   // Le nombre de pages réel remonté par PDF.js (source de vérité) est persisté

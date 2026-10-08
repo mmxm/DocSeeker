@@ -4865,12 +4865,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const isOffline = !navigator.onLine || (filterOfflineOnly && filterOfflineOnly.checked);
     if (isOffline) {
       if (window.downloadQueueManager) {
+        const cachedDocIds = window.downloadQueueManager.cachedDocIds ? Array.from(window.downloadQueueManager.cachedDocIds) : [];
         const searchResult = await window.downloadQueueManager.sendToWorker('SEARCH', {
           query,
           titlesOnly: isTitlesOnly,
           folderId: isFolderOnly ? folderId : null,
           limit,
           offset,
+          cachedDocIds,
         });
         if (searchResult && Array.isArray(searchResult.results)) {
           searchResult.results = searchResult.results.filter(d => {
@@ -4902,12 +4904,14 @@ document.addEventListener("DOMContentLoaded", () => {
         if (filterOfflineChip) filterOfflineChip.classList.add("active");
       }
       if (window.downloadQueueManager) {
+        const cachedDocIds = window.downloadQueueManager.cachedDocIds ? Array.from(window.downloadQueueManager.cachedDocIds) : [];
         const searchResult = await window.downloadQueueManager.sendToWorker('SEARCH', {
           query,
           titlesOnly: isTitlesOnly,
           folderId: isFolderOnly ? folderId : null,
           limit,
           offset,
+          cachedDocIds,
         });
         if (searchResult && Array.isArray(searchResult.results)) {
           searchResult.results = searchResult.results.filter(d => {
