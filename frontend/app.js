@@ -73,6 +73,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let debounceTimer = null;
   let docSearchDebounceTimer = null;
   let currentSearchQuery = "";
+  let currentSearchIsTitlesOnly = false;
   let currentActiveDocId = null;
   let currentActiveDocTitle = "";
   let currentViewerUpdateCacheUI = null;
@@ -2494,6 +2495,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // Si le champ est entièrement vidé, réinitialiser immédiatement
     if (!val) {
       currentSearchQuery = "";
+      currentSearchIsTitlesOnly = false;
       isSearchActive = false;
       lastSearchResultsData = null;
       document.querySelectorAll(".doc-card").forEach(card => card.style.opacity = "1");
@@ -2506,6 +2508,7 @@ document.addEventListener("DOMContentLoaded", () => {
       searchInput.value = "";
       clearSearchBtn.style.display = "none";
       currentSearchQuery = "";
+      currentSearchIsTitlesOnly = false;
       isSearchActive = false;
       lastSearchResultsData = null;
       loadFoldersAndDocuments();
@@ -2524,6 +2527,7 @@ document.addEventListener("DOMContentLoaded", () => {
     searchInput.value = "";
     clearSearchBtn.style.display = "none";
     currentSearchQuery = "";
+    currentSearchIsTitlesOnly = false;
     isSearchActive = false;
     lastSearchResultsData = null;
     loadFoldersAndDocuments();
@@ -2562,6 +2566,7 @@ document.addEventListener("DOMContentLoaded", () => {
     searchInput.value = "";
     clearSearchBtn.style.display = "none";
     currentSearchQuery = "";
+    currentSearchIsTitlesOnly = false;
     isSearchActive = false;
     lastSearchResultsData = null;
     currentFolderId = null;
@@ -3433,6 +3438,7 @@ document.addEventListener("DOMContentLoaded", () => {
             searchInput.value = "";
             clearSearchBtn.style.display = "none";
             currentSearchQuery = "";
+            currentSearchIsTitlesOnly = false;
             isSearchActive = false;
             lastSearchResultsData = null;
           }
@@ -4679,7 +4685,10 @@ document.addEventListener("DOMContentLoaded", () => {
       ribbon.addEventListener("click", (e) => {
         if (hasDragged) return;
         const vEl = e.target.closest(".vignette-item");
-        if (!vEl) return;
+        if (!vEl) {
+          openDocAction(e);
+          return;
+        }
         const dPage = parseInt(vEl.getAttribute("data-page"), 10);
         const yRatio = parseFloat(vEl.getAttribute("data-yratio") || 0);
         const occId = vEl.getAttribute("data-occ");
@@ -4803,13 +4812,21 @@ document.addEventListener("DOMContentLoaded", () => {
         handleReindexDocument(doc.id, doc.title, null);
         return;
       }
-      const firstOcc = (doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0] : null;
+      const isTitlesOnlySearch = Boolean(isSearch && (currentSearchIsTitlesOnly || (filterTitlesOnly && filterTitlesOnly.checked)));
+      const firstOcc = (!isTitlesOnlySearch && doc.occurrences_by_page && doc.occurrences_by_page.length > 0) ? doc.occurrences_by_page[0] : null;
       const firstPage = firstOcc ? firstOcc.page_number : 1;
       const firstRect = firstOcc ? ((firstOcc.highlight_rects && firstOcc.highlight_rects.length > 0) ? firstOcc.highlight_rects[0] : firstOcc.rect) : null;
       const yRatio = firstOcc ? firstOcc.y_ratio : 0;
       const firstOccId = firstOcc ? firstOcc.occ_id : null;
-      // Héritage EXPLICITE de la recherche globale au moment du clic (couverture/titre de résultat)
-      openDocumentInSplitView(doc.id, doc.title, firstPage, doc.occurrences_by_page || doc.vignettes || [], firstRect, yRatio, firstOccId, currentSearchQuery || null, isMd, doc.filename || null);
+
+      // Héritage de la recherche globale au moment du clic :
+      // Si recherche sur titre uniquement (et seulement dans cette situation),
+      // le panneau latéral de recherche intra-doc ne s'ouvre pas systématiquement (openDrawer = false, pas de searchQuery forcé)
+      const inheritedSearchQuery = isTitlesOnlySearch ? null : (currentSearchQuery || null);
+      const inheritedOccurrences = isTitlesOnlySearch ? [] : (doc.occurrences_by_page || doc.vignettes || []);
+      const openDrawer = isTitlesOnlySearch ? false : null;
+
+      openDocumentInSplitView(doc.id, doc.title, firstPage, inheritedOccurrences, firstRect, yRatio, firstOccId, inheritedSearchQuery, isMd, doc.filename || null, openDrawer);
     };
 
     if (!isSearch) {
@@ -4920,6 +4937,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const signal = _searchAbortController.signal;
 
     currentSearchQuery = query;
+    const isTitlesOnly = Boolean(filterTitlesOnly && filterTitlesOnly.checked);
+    currentSearchIsTitlesOnly = isTitlesOnly;
     isSearchActive = true;
     currentLoadedDocs = [];
     savedGeneralResultsScrollTop = 0;
@@ -4931,7 +4950,6 @@ document.addEventListener("DOMContentLoaded", () => {
       closeSplitViewer();
     }
 
-    const isTitlesOnly = filterTitlesOnly.checked;
     const isFolderOnly = filterCurrentFolderOnly.checked && currentFolderId !== null;
 
     let searchScopeLabel = "";
@@ -5138,6 +5156,7 @@ document.addEventListener("DOMContentLoaded", () => {
       searchInput.value = "";
       clearSearchBtn.style.display = "none";
       currentSearchQuery = "";
+      currentSearchIsTitlesOnly = false;
       isSearchActive = false;
       lastSearchResultsData = null;
       loadFoldersAndDocuments();
@@ -5677,7 +5696,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     },
 
-    openTab(docId, docTitle, targetPage = 1, occurrences = [], targetRect = null, targetYRatio = 0, targetOccId = null, searchQuery = null, isMarkdown = null, filename = null) {
+    openTab(docId, docTitle, targetPage = 1, occurrences = [], targetRect = null, targetYRatio = 0, targetOccId = null, searchQuery = null, isMarkdown = null, filename = null, openDrawer = null) {
       const numericDocId = Number(docId);
       this.saveCurrentTabState();
       // Quitter le mode accueil
@@ -5731,20 +5750,32 @@ document.addEventListener("DOMContentLoaded", () => {
         existingTab.yRatio = targetYRatio;
         existingTab.occId = targetOccId;
         existingTab.scrollTop = null; // nouvelle navigation demandée
+        if (openDrawer === false) {
+          existingTab.drawerOpen = false;
+        }
         if (searchQuery) {
           existingTab.searchQuery = searchQuery;
           existingTab.occurrences = (occurrences && occurrences.length > 0) ? occurrences : existingTab.occurrences;
           existingTab.searchActive = true;
-          existingTab.drawerOpen = true;
+          if (openDrawer !== false) {
+            existingTab.drawerOpen = true;
+          }
         } else {
           // CANAL 2 : une ouverture sans recherche explicite ne réactive pas une
           // ancienne recherche (ni celle d'un autre document).
           existingTab.searchQuery = "";
           existingTab.searchActive = false;
+          if (openDrawer === false) {
+            existingTab.drawerOpen = false;
+          }
         }
       } else {
         const hasInitialResults = Boolean((occurrences && occurrences.length > 0) || (searchQuery && searchQuery.trim()));
         const isCurrentDrawerOpen = Boolean(inDocSearchDrawer && inDocSearchDrawer.style.display === "flex");
+        let initialDrawerOpen = (openDrawer !== null && openDrawer !== undefined)
+          ? Boolean(openDrawer)
+          : (hasInitialResults || isCurrentDrawerOpen);
+
         const newTab = {
           id: `tab_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
           docId: numericDocId,
@@ -5761,7 +5792,7 @@ document.addEventListener("DOMContentLoaded", () => {
           occurrences: occurrences || [],
           activeOccurrenceIndex: 0,
           scrollTop: null,
-          drawerOpen: hasInitialResults || isCurrentDrawerOpen
+          drawerOpen: initialDrawerOpen
         };
         this.openTabs.push(newTab);
         this.activeTabId = newTab.id;
@@ -6287,8 +6318,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0, targetOccId = null, searchQuery = null, isMarkdown = null, filename = null) {
-    tabManager.openTab(docId, docTitle, targetPage, occurrences, targetRect, targetYRatio, targetOccId, searchQuery, isMarkdown, filename);
+  function openDocumentInSplitView(docId, docTitle, targetPage, occurrences, targetRect = null, targetYRatio = 0, targetOccId = null, searchQuery = null, isMarkdown = null, filename = null, openDrawer = null) {
+    tabManager.openTab(docId, docTitle, targetPage, occurrences, targetRect, targetYRatio, targetOccId, searchQuery, isMarkdown, filename, openDrawer);
   }
   tabManager.renderTabs = tabManager.renderTabsUI.bind(tabManager);
   window.tabManager = tabManager;
